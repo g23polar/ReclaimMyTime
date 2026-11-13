@@ -49,7 +49,7 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 ## M2 — Persistence & API core
 
 **T2.1 — Migrations + models + write paths** · owner: `backend-developer` · deps: T1.1 (SolverOutput), T0.1
-- In: ARCH §3 complete (DDL verbatim — it is already validated against Postgres 18), §3 Semantics.
+- In: ARCH §3 complete (DDL verbatim — it is already validated against Postgres 18, plus the `staged` project_status added 2026-11-13), §3 Semantics incl. the "Staged writes" bullet; `contracts/NOTES.md` Decisions D1–D22 (ratified).
 - Out: Alembic initial migration = §3 DDL; SQLAlchemy models; `db/write_paths.py`: `persist_plan(tx, SolverOutput)` (sole creator of blocks) and `apply_mutation(tx, ...)` (sole state mutator, writes the trace row in-transaction); changeset confirm/reject transaction with `pg_advisory_xact_lock`, supersede-before-promote.
 - Accept: migration applies to scratch Postgres; the 7 invariant smoke tests from the spec sessions re-expressed as pytest; concurrent confirm test (two tasks, one week) serializes correctly.
 

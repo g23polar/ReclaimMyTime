@@ -154,7 +154,7 @@ None in v1. Lists (`/projects`, `/exceptions`, `/pins`) return everything in a w
 
 Block ids are uuid5 of `(plan version, lineage)`, which gives new rows per version. The same lineage keeps its `gcal_event_id` across versions.
 
-## Decisions (need main-session ratification before freeze)
+## Decisions (ratified by main session 2026-11-13 — contracts/ is FROZEN; changes need a main-session decision)
 - **D1 tstzrange → `{start, end}`**, half-open, server emits UTC `Z`. *Alternatives:* a Postgres literal string `"[a,b)"`, or an ISO 8601 interval `"a/b"`. Both need custom parsing on iOS.
 - **D2 Every scheduling-input write is staged (202 + Changeset), including plain CRUD.** *Alternative:* apply CRUD directly (201/200) and propose a re-solve separately. I rejected that: if the user rejects the proposal, constraints are applied while the live plan violates them (e.g. laptop blocks inside an applied exception). *Cost:* `POST /projects` returns a Changeset, not a Project, and a rename still goes through confirm. *Softer option:* apply fields that don't affect scheduling (only `name`) directly.
 - **D3 Staged writes return `202 Accepted`**, not 200/201: the request is accepted but not applied.
@@ -199,7 +199,7 @@ Block ids are uuid5 of `(plan version, lineage)`, which gives new rows per versi
 - **D22 `GET /plans/current` returns 404 `no_live_plan`** when there is no plan, rather than 200 with `null`.
 
 ## Open questions (spec gaps found while writing the contract; not decided here)
-- **O1 DDL FK vs staged projects.** A proposed plan for a staged `project_created` holds blocks whose `project_id` has no `projects` row yet. That violates `blocks (project_id, user_id) → projects`, and `block_pins` has the same problem. T2.1 must choose an option and record it in ARCH:
+- **O1 DDL FK vs staged projects — RESOLVED 2026-11-13:** option 1 chosen; `project_status` gains `'staged'`, the row is inserted at staging, confirm → `active`, reject/expire → deleted (ARCH §3 DDL + Semantics updated). Original text kept for context:** A proposed plan for a staged `project_created` holds blocks whose `project_id` has no `projects` row yet. That violates `blocks (project_id, user_id) → projects`, and `block_pins` has the same problem. T2.1 must choose an option and record it in ARCH:
   - insert the project row at staging under a non-scheduling status,
   - defer the FK,
   - or don't persist blocks for proposals that touch new projects.
