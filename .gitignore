@@ -3,3 +3,11 @@ CLAUDE.md
 ARCHITECTURE.md
 PRD.md
 reviews/
+.venv/
+__pycache__/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+xcuserdata/
+DerivedData/
+*.xcuserstate
