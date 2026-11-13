@@ -1,0 +1,28 @@
+{
+  "operation": "patchBlock",
+  "method": "PATCH",
+  "path": "/blocks/{block_id}",
+  "case": "skip_not_started",
+  "description": "complete/skip only apply to started blocks.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "path_params": {
+      "block_id": "a9c76d1b-6767-50f6-9f5c-5eaa1206368b"
+    },
+    "body": {
+      "action": "skip"
+    }
+  },
+  "response": {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "block_not_started",
+        "message": "Only blocks that have started can be completed or skipped."
+      }
+    }
+  }
+}

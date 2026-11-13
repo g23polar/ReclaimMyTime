@@ -1,0 +1,22 @@
+{
+  "operation": "getCurrentPlan",
+  "method": "GET",
+  "path": "/plans/current",
+  "case": "no_live_plan",
+  "description": "No live plan covers now (e.g. mid-onboarding).",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    }
+  },
+  "response": {
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "no_live_plan",
+        "message": "No live plan covers the current time."
+      }
+    }
+  }
+}

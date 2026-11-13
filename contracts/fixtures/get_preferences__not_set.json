@@ -1,0 +1,22 @@
+{
+  "operation": "getPreferences",
+  "method": "GET",
+  "path": "/preferences",
+  "case": "not_set",
+  "description": "Before onboarding finishes.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    }
+  },
+  "response": {
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "preferences_not_set",
+        "message": "Preferences have not been set yet."
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "operation": "signInWithApple",
+  "method": "POST",
+  "path": "/auth/apple",
+  "case": "invalid_token",
+  "description": "Identity token nonce claim does not match SHA-256(nonce).",
+  "request": {
+    "body": {
+      "identity_token": "eyJraWQiOiJXNldjT0tCIiwiYWxnIjoiUlMyNTYifQ.eyJub25jZSI6InN0YWxlIn0.c2lnbmF0dXJl",
+      "authorization_code": "c1f0e5a2b7d84c6f9e3a1b2c4d5e6f70.0.rqwz.Hk3vX9pL2mQ8nR4t",
+      "nonce": "differentNonceValue0001"
+    }
+  },
+  "response": {
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "apple_token_invalid",
+        "message": "Apple identity token failed verification.",
+        "details": {
+          "reason": "nonce_mismatch"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "operation": "getProject",
+  "method": "GET",
+  "path": "/projects/{project_id}",
+  "case": "not_found",
+  "description": "Unknown or another user's project.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "path_params": {
+      "project_id": "00000000-0000-4000-8000-00000000dead"
+    }
+  },
+  "response": {
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "not_found",
+        "message": "Project not found.",
+        "details": {
+          "resource": "project",
+          "id": "00000000-0000-4000-8000-00000000dead"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "operation": "getMe",
+  "method": "GET",
+  "path": "/me",
+  "case": "missing_timezone",
+  "description": "X-Timezone header absent.",
+  "request_valid": false,
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs"
+    }
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "timezone_invalid",
+        "message": "X-Timezone header is required and must be an IANA timezone name."
+      }
+    }
+  }
+}

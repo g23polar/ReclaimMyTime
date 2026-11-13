@@ -1,0 +1,31 @@
+{
+  "operation": "listPins",
+  "method": "GET",
+  "path": "/pins",
+  "case": "ok",
+  "description": "The forbid created by deleting Sunday's Reading block.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "pins": [
+        {
+          "id": "d3b8f6a1-9c2e-4a7d-b5f0-6e1c8a2d4b02",
+          "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b03",
+          "span": {
+            "start": "2026-11-22T23:00:00Z",
+            "end": "2026-11-23T00:00:00Z"
+          },
+          "kind": "forbid",
+          "created_from_block_id": "7aeff3ac-9ed4-5613-bcf2-08d9060fb725",
+          "created_at": "2026-11-17T20:20:30Z"
+        }
+      ]
+    }
+  }
+}

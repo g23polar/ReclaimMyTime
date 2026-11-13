@@ -1,0 +1,19 @@
+{
+  "operation": "getGcalConnectUrl",
+  "method": "GET",
+  "path": "/gcal/connect",
+  "case": "ok",
+  "description": "OAuth URL with PKCE + signed state.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth?client_id=1234567890-abc.apps.googleusercontent.com&redirect_uri=https%3A%2F%2Fapi.reclaimmytime.example%2Fgcal%2Fcallback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcalendar.freebusy%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcalendar.app.created&access_type=offline&prompt=consent&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&state=eyJ1IjoiMGI2ZTJmMWEiLCJuIjoiN2YzYSJ9.Qm9ndXNTaWduYXR1cmVGb3JGaXh0dXJlcw"
+    }
+  }
+}

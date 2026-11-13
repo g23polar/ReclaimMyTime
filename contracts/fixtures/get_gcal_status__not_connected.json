@@ -1,0 +1,19 @@
+{
+  "operation": "getGcalStatus",
+  "method": "GET",
+  "path": "/gcal/status",
+  "case": "not_connected",
+  "description": "Never connected.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "connection": null
+    }
+  }
+}

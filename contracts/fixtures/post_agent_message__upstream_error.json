@@ -1,0 +1,42 @@
+{
+  "operation": "postAgentMessage",
+  "method": "POST",
+  "path": "/agent/message",
+  "case": "upstream_error",
+  "description": "LLM failure after the stream started: terminal error event; nothing staged.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "I don't have my laptop today or tomorrow."
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "text/event-stream",
+    "body": [
+      {
+        "event": "delta",
+        "data": {
+          "text": "Got it: no laptop"
+        }
+      },
+      {
+        "event": "error",
+        "data": {
+          "error": {
+            "code": "agent_unavailable",
+            "message": "The assistant is temporarily unavailable. Nothing was changed; try again."
+          }
+        }
+      }
+    ]
+  }
+}

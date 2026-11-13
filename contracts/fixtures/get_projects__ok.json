@@ -1,0 +1,94 @@
+{
+  "operation": "listProjects",
+  "method": "GET",
+  "path": "/projects",
+  "case": "ok",
+  "description": "Active projects (one deadline, two perennial).",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "projects": [
+        {
+          "id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01",
+          "name": "Portfolio site",
+          "kind": "deadline",
+          "target_date": "2026-12-04",
+          "estimated_total_hours": 18.0,
+          "weekly_target_hours": null,
+          "max_block_minutes": 120,
+          "min_block_minutes": 30,
+          "preferred_windows": null,
+          "preferred_strict": false,
+          "requirements": [
+            "laptop"
+          ],
+          "status": "active",
+          "created_at": "2026-11-15T02:48:12Z"
+        },
+        {
+          "id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b02",
+          "name": "Workout",
+          "kind": "perennial",
+          "target_date": null,
+          "estimated_total_hours": null,
+          "weekly_target_hours": 4.0,
+          "max_block_minutes": 60,
+          "min_block_minutes": 30,
+          "preferred_windows": {
+            "mon": [
+              [
+                "06:30",
+                "09:00"
+              ]
+            ],
+            "wed": [
+              [
+                "06:30",
+                "09:00"
+              ]
+            ],
+            "fri": [
+              [
+                "06:30",
+                "09:00"
+              ]
+            ],
+            "sat": [
+              [
+                "08:00",
+                "11:00"
+              ]
+            ]
+          },
+          "preferred_strict": false,
+          "requirements": [
+            "gym"
+          ],
+          "status": "active",
+          "created_at": "2026-11-15T02:56:40Z"
+        },
+        {
+          "id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b03",
+          "name": "Reading",
+          "kind": "perennial",
+          "target_date": null,
+          "estimated_total_hours": null,
+          "weekly_target_hours": 2.0,
+          "max_block_minutes": 60,
+          "min_block_minutes": 25,
+          "preferred_windows": null,
+          "preferred_strict": false,
+          "requirements": [],
+          "status": "active",
+          "created_at": "2026-11-15T03:05:40Z"
+        }
+      ]
+    }
+  }
+}

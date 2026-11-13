@@ -1,0 +1,20 @@
+{
+  "operation": "gcalCallback",
+  "method": "GET",
+  "path": "/gcal/callback",
+  "case": "connected",
+  "description": "Google redirects the browser here; server stores the refresh token and bounces into the app.",
+  "request": {
+    "query": {
+      "state": "eyJ1IjoiMGI2ZTJmMWEiLCJuIjoiN2YzYSJ9.Qm9ndXNTaWduYXR1cmVGb3JGaXh0dXJlcw",
+      "code": "4/0AeanS0aExampleAuthCode",
+      "scope": "https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/calendar.app.created"
+    }
+  },
+  "response": {
+    "status": 302,
+    "headers": {
+      "Location": "reclaimmytime://gcal/callback?result=connected"
+    }
+  }
+}

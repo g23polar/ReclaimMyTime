@@ -1,0 +1,19 @@
+{
+  "operation": "gcalCallback",
+  "method": "GET",
+  "path": "/gcal/callback",
+  "case": "denied",
+  "description": "User declined consent.",
+  "request": {
+    "query": {
+      "state": "eyJ1IjoiMGI2ZTJmMWEiLCJuIjoiN2YzYSJ9.Qm9ndXNTaWduYXR1cmVGb3JGaXh0dXJlcw",
+      "error": "access_denied"
+    }
+  },
+  "response": {
+    "status": 302,
+    "headers": {
+      "Location": "reclaimmytime://gcal/callback?result=error&code=gcal_access_denied"
+    }
+  }
+}

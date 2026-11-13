@@ -1,0 +1,43 @@
+{
+  "operation": "postAgentMessage",
+  "method": "POST",
+  "path": "/agent/message",
+  "case": "last_not_user",
+  "description": "Schema-valid but semantically invalid: last message must be role=user. Pre-stream JSON error.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "I don't have my laptop today or tomorrow."
+        },
+        {
+          "role": "assistant",
+          "content": "Got it: no laptop from now through Wednesday night. I moved tonight's Portfolio session to Thursday 7–9 PM and pulled Reading forward to tonight at 7. Wednesday's Portfolio session had nowhere to go this week, so I added Saturday 1–3 PM to stay on pace. OK?",
+          "changeset_id": "c4a7e1f2-8b3d-4f6a-9e05-1d2c3b4a5e01"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 422,
+    "body": {
+      "error": {
+        "code": "validation_failed",
+        "message": "The last transcript message must have role 'user'.",
+        "details": {
+          "fields": [
+            {
+              "path": "messages[1].role",
+              "message": "expected 'user'"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

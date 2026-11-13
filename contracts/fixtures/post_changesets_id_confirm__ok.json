@@ -1,0 +1,309 @@
+{
+  "operation": "confirmChangeset",
+  "method": "POST",
+  "path": "/changesets/{changeset_id}/confirm",
+  "case": "ok",
+  "description": "Confirm the laptop changeset: plan v2 becomes live. Replaying this request returns the same body.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "path_params": {
+      "changeset_id": "c4a7e1f2-8b3d-4f6a-9e05-1d2c3b4a5e01"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "c4a7e1f2-8b3d-4f6a-9e05-1d2c3b4a5e01",
+      "status": "confirmed",
+      "plan_id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a02",
+      "staged": [
+        {
+          "kind": "exception_added",
+          "source": "agent",
+          "interpretation": "No laptop from now (Tue Nov 17, 10:30 AM) through the end of Wed Nov 18.",
+          "payload": {
+            "exception_id": "e7c2a9d4-3f1b-4e6a-8d20-5b9c1a7e3f01",
+            "span": {
+              "start": "2026-11-17T18:30:00Z",
+              "end": "2026-11-19T08:00:00Z"
+            },
+            "blocks_all": false,
+            "blocks_tags": [
+              "laptop"
+            ],
+            "reason": "No laptop today or tomorrow"
+          }
+        }
+      ],
+      "created_at": "2026-11-17T18:31:04Z",
+      "resolved_at": "2026-11-17T18:31:40Z",
+      "plan": {
+        "id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a02",
+        "horizon": {
+          "start": "2026-11-16T08:00:00Z",
+          "end": "2026-11-23T08:00:00Z"
+        },
+        "week_start": "2026-11-16",
+        "timezone": "America/Los_Angeles",
+        "version": 2,
+        "status": "live",
+        "infeasibility": null,
+        "created_at": "2026-11-17T18:31:04Z",
+        "superseded_at": null,
+        "blocks": [
+          {
+            "id": "f6f499d5-2ed3-587d-8049-4a2a52df4ec7",
+            "plan_id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a02",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b02",
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000001",
+            "span": {
+              "start": "2026-11-16T15:00:00Z",
+              "end": "2026-11-16T16:00:00Z"
+            },
+            "state": "completed",
+            "gcal_status": "synced",
+            "gcal_event_id": "rmt7k2m9q401s0a"
+          },
+          {
+            "id": "85c3de79-6e39-58ed-b717-c1372c1c07a2",
+            "plan_id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a02",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01",
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000002",
+            "span": {
+              "start": "2026-11-17T03:00:00Z",
+              "end": "2026-11-17T05:00:00Z"
+            },
+            "state": "completed",
+            "gcal_status": "synced",
+            "gcal_event_id": "rmt7k2m9q402s0a"
+          },
+          {
+            "id": "61bb9e1b-df46-58b6-9ce6-c04636668a39",
+            "plan_id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a02",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b03",
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000006",
+            "span": {
+              "start": "2026-11-18T03:00:00Z",
+              "end": "2026-11-18T04:00:00Z"
+            },
+            "state": "planned",
+            "gcal_status": "pending",
+            "gcal_event_id": "rmt7k2m9q406s0a"
+          },
+          {
+            "id": "a9c76d1b-6767-50f6-9f5c-5eaa1206368b",
+            "plan_id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a02",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b02",
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000004",
+            "span": {
+              "start": "2026-11-18T15:00:00Z",
+              "end": "2026-11-18T16:00:00Z"
+            },
+            "state": "planned",
+            "gcal_status": "synced",
+            "gcal_event_id": "rmt7k2m9q404s0a"
+          },
+          {
+            "id": "077d0c94-4b9f-53e9-8a56-3bf6e5ef377a",
+            "plan_id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a02",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01",
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000003",
+            "span": {
+              "start": "2026-11-20T03:00:00Z",
+              "end": "2026-11-20T05:00:00Z"
+            },
+            "state": "planned",
+            "gcal_status": "pending",
+            "gcal_event_id": "rmt7k2m9q403s0a"
+          },
+          {
+            "id": "f0cec860-3d50-5df0-8aae-f89b92922536",
+            "plan_id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a02",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b02",
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000007",
+            "span": {
+              "start": "2026-11-20T15:00:00Z",
+              "end": "2026-11-20T16:00:00Z"
+            },
+            "state": "planned",
+            "gcal_status": "synced",
+            "gcal_event_id": "rmt7k2m9q407s0a"
+          },
+          {
+            "id": "14847a9d-e70a-5d5e-8cf0-a67e87855383",
+            "plan_id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a02",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b02",
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000008",
+            "span": {
+              "start": "2026-11-21T17:00:00Z",
+              "end": "2026-11-21T18:00:00Z"
+            },
+            "state": "planned",
+            "gcal_status": "synced",
+            "gcal_event_id": "rmt7k2m9q408s0a"
+          },
+          {
+            "id": "220578b1-d14e-53be-bd49-911253a307cd",
+            "plan_id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a02",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01",
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000010",
+            "span": {
+              "start": "2026-11-21T21:00:00Z",
+              "end": "2026-11-21T23:00:00Z"
+            },
+            "state": "planned",
+            "gcal_status": "pending",
+            "gcal_event_id": null
+          },
+          {
+            "id": "7aeff3ac-9ed4-5613-bcf2-08d9060fb725",
+            "plan_id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a02",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b03",
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000009",
+            "span": {
+              "start": "2026-11-22T23:00:00Z",
+              "end": "2026-11-23T00:00:00Z"
+            },
+            "state": "planned",
+            "gcal_status": "synced",
+            "gcal_event_id": "rmt7k2m9q409s0a"
+          }
+        ]
+      },
+      "diff": {
+        "plan_id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a02",
+        "against_plan_id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a01",
+        "entries": [
+          {
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000001",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b02",
+            "before": {
+              "start": "2026-11-16T15:00:00Z",
+              "end": "2026-11-16T16:00:00Z"
+            },
+            "after": {
+              "start": "2026-11-16T15:00:00Z",
+              "end": "2026-11-16T16:00:00Z"
+            },
+            "change": "unchanged"
+          },
+          {
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000002",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01",
+            "before": {
+              "start": "2026-11-17T03:00:00Z",
+              "end": "2026-11-17T05:00:00Z"
+            },
+            "after": {
+              "start": "2026-11-17T03:00:00Z",
+              "end": "2026-11-17T05:00:00Z"
+            },
+            "change": "unchanged"
+          },
+          {
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000006",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b03",
+            "before": {
+              "start": "2026-11-20T04:00:00Z",
+              "end": "2026-11-20T05:00:00Z"
+            },
+            "after": {
+              "start": "2026-11-18T03:00:00Z",
+              "end": "2026-11-18T04:00:00Z"
+            },
+            "change": "moved"
+          },
+          {
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000004",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b02",
+            "before": {
+              "start": "2026-11-18T15:00:00Z",
+              "end": "2026-11-18T16:00:00Z"
+            },
+            "after": {
+              "start": "2026-11-18T15:00:00Z",
+              "end": "2026-11-18T16:00:00Z"
+            },
+            "change": "unchanged"
+          },
+          {
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000005",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01",
+            "before": {
+              "start": "2026-11-19T03:00:00Z",
+              "end": "2026-11-19T05:00:00Z"
+            },
+            "after": null,
+            "change": "removed"
+          },
+          {
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000003",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01",
+            "before": {
+              "start": "2026-11-18T03:00:00Z",
+              "end": "2026-11-18T05:00:00Z"
+            },
+            "after": {
+              "start": "2026-11-20T03:00:00Z",
+              "end": "2026-11-20T05:00:00Z"
+            },
+            "change": "moved"
+          },
+          {
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000007",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b02",
+            "before": {
+              "start": "2026-11-20T15:00:00Z",
+              "end": "2026-11-20T16:00:00Z"
+            },
+            "after": {
+              "start": "2026-11-20T15:00:00Z",
+              "end": "2026-11-20T16:00:00Z"
+            },
+            "change": "unchanged"
+          },
+          {
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000008",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b02",
+            "before": {
+              "start": "2026-11-21T17:00:00Z",
+              "end": "2026-11-21T18:00:00Z"
+            },
+            "after": {
+              "start": "2026-11-21T17:00:00Z",
+              "end": "2026-11-21T18:00:00Z"
+            },
+            "change": "unchanged"
+          },
+          {
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000010",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01",
+            "before": null,
+            "after": {
+              "start": "2026-11-21T21:00:00Z",
+              "end": "2026-11-21T23:00:00Z"
+            },
+            "change": "added"
+          },
+          {
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000009",
+            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b03",
+            "before": {
+              "start": "2026-11-22T23:00:00Z",
+              "end": "2026-11-23T00:00:00Z"
+            },
+            "after": {
+              "start": "2026-11-22T23:00:00Z",
+              "end": "2026-11-23T00:00:00Z"
+            },
+            "change": "unchanged"
+          }
+        ]
+      },
+      "narration": null
+    }
+  }
+}

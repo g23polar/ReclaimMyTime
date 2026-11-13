@@ -1,0 +1,35 @@
+{
+  "operation": "patchBlock",
+  "method": "PATCH",
+  "path": "/blocks/{block_id}",
+  "case": "skip",
+  "description": "Monday's workout didn't happen: completed → skipped. Applied directly, no re-solve.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "path_params": {
+      "block_id": "f6f499d5-2ed3-587d-8049-4a2a52df4ec7"
+    },
+    "body": {
+      "action": "skip"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "f6f499d5-2ed3-587d-8049-4a2a52df4ec7",
+      "plan_id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a02",
+      "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b02",
+      "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000001",
+      "span": {
+        "start": "2026-11-16T15:00:00Z",
+        "end": "2026-11-16T16:00:00Z"
+      },
+      "state": "skipped",
+      "gcal_status": "synced",
+      "gcal_event_id": "rmt7k2m9q401s0a"
+    }
+  }
+}

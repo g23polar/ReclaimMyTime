@@ -1,0 +1,1541 @@
+openapi: 3.1.0
+info:
+  title: ReclaimMyTime API
+  version: 0.1.0
+  summary: Contract for the ReclaimMyTime iOS client and FastAPI backend (TECH_SPEC T0.1).
+  description: |
+    Source of truth for field names/types is the DDL in ARCHITECTURE.md §3. Conventions
+    (auth, X-Timezone, error envelope, SSE framing, tstzrange mapping, decisions) are in
+    contracts/NOTES.md. Fixtures in contracts/fixtures/ validate against this document via
+    contracts/validate_fixtures.py.
+
+    Every write that changes scheduling inputs (projects, preferences, exceptions, block
+    edit/delete) is *staged*: it returns `202` with a pending Changeset (staged mutations +
+    proposed plan + diff). Nothing is applied until `POST /changesets/{id}/confirm`.
+jsonSchemaDialect: https://spec.openapis.org/oas/3.1/dialect/base
+servers:
+  - url: '{baseUrl}'
+    variables:
+      baseUrl:
+        default: http://localhost:8000
+security:
+  - bearerAuth: []
+tags:
+  - name: auth
+  - name: projects
+  - name: preferences
+  - name: exceptions
+  - name: plans
+  - name: blocks
+  - name: pins
+  - name: agent
+  - name: changesets
+  - name: gcal
+
+paths:
+  # ------------------------------------------------------------------ auth
+  /auth/apple:
+    post:
+      operationId: signInWithApple
+      tags: [auth]
+      summary: Exchange a Sign in with Apple credential for an opaque session token.
+      description: |
+        Server verifies the identity token against Apple's JWKS (signature, exp,
+        iss=https://appleid.apple.com, aud=bundle id) and checks that the token's `nonce`
+        claim equals SHA-256(`nonce`). The authorization code is exchanged for Apple's
+        refresh token (stored encrypted; used to revoke on DELETE /me).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AppleSignInRequest'}
+      responses:
+        '200':
+          description: Signed in (existing or newly created user; see `is_new_user`).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AuthSession'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      parameters: [{$ref: '#/components/parameters/XTimezone'}]
+      responses:
+        '200':
+          description: The authenticated user.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/User'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        default: {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: deleteMe
+      tags: [auth]
+      summary: Delete the account (App Store requirement).
+      description: Revokes the Apple refresh token, revokes Google if connected, then cascades the user row. Irreversible.
+      parameters: [{$ref: '#/components/parameters/XTimezone'}]
+      responses:
+        '204': {description: Account deleted; all sessions are invalid.}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /sessions:
+    delete:
+      operationId: revokeAllSessions
+      tags: [auth]
+      summary: Revoke every session for the user, including the current one.
+      parameters: [{$ref: '#/components/parameters/XTimezone'}]
+      responses:
+        '204': {description: All sessions revoked.}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /sessions/current:
+    delete:
+      operationId: revokeCurrentSession
+      tags: [auth]
+      summary: Sign out (revoke the presented session only).
+      parameters: [{$ref: '#/components/parameters/XTimezone'}]
+      responses:
+        '204': {description: Session revoked.}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  # ------------------------------------------------------------------ projects
+  /projects:
+    get:
+      operationId: listProjects
+      tags: [projects]
+      parameters:
+        - {$ref: '#/components/parameters/XTimezone'}
+        - name: include_archived
+          in: query
+          required: false
+          schema: {type: boolean, default: false}
+      responses:
+        '200':
+          description: All projects (no pagination in v1), ordered by created_at ascending.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProjectList'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        default: {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: createProject
+      tags: [projects]
+      summary: Stage a new project (project_created) and propose a re-solve.
+      parameters: [{$ref: '#/components/parameters/XTimezone'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProjectDraft'}
+      responses:
+        '202': {$ref: '#/components/responses/ChangesetStaged'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /projects/{project_id}:
+    parameters:
+      - {$ref: '#/components/parameters/ProjectId'}
+      - {$ref: '#/components/parameters/XTimezone'}
+    get:
+      operationId: getProject
+      tags: [projects]
+      responses:
+        '200':
+          description: The project (archived projects are still readable).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Project'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/InternalError'}
+    patch:
+      operationId: updateProject
+      tags: [projects]
+      summary: Stage a partial update (project_updated) and propose a re-solve.
+      description: |
+        `kind` is immutable. The deadline/perennial field XOR is validated against the merged
+        result (422 `validation_failed`). Archiving is DELETE, not `status: archived`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProjectPatch'}
+      responses:
+        '202': {$ref: '#/components/responses/ChangesetStaged'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        default: {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: archiveProject
+      tags: [projects]
+      summary: Stage archival (project_archived; status → archived) and propose a re-solve. Rows are never hard-deleted.
+      responses:
+        '202': {$ref: '#/components/responses/ChangesetStaged'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  # ------------------------------------------------------------------ preferences
+  /preferences:
+    parameters: [{$ref: '#/components/parameters/XTimezone'}]
+    get:
+      operationId: getPreferences
+      tags: [preferences]
+      responses:
+        '200':
+          description: Current preferences.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UserPreferences'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putPreferences
+      tags: [preferences]
+      summary: Stage a full replacement of preferences (preferences_updated) and propose a re-solve.
+      description: |
+        Full replacement (all fields required). Also the path for accepting a timezone change
+        (PRD §10): send the new IANA `timezone`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UserPreferences'}
+      responses:
+        '202': {$ref: '#/components/responses/ChangesetStaged'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  # ------------------------------------------------------------------ exceptions
+  /exceptions:
+    parameters: [{$ref: '#/components/parameters/XTimezone'}]
+    get:
+      operationId: listExceptions
+      tags: [exceptions]
+      parameters:
+        - name: include_past
+          in: query
+          required: false
+          description: Include exceptions whose span ended before now.
+          schema: {type: boolean, default: false}
+      responses:
+        '200':
+          description: Exceptions ordered by span start ascending (no pagination in v1).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AvailabilityExceptionList'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        default: {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: createException
+      tags: [exceptions]
+      summary: Stage an availability exception (exception_added) and propose a re-solve.
+      description: Local date/time fields are resolved to an absolute span using the request's X-Timezone.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ExceptionDraft'}
+      responses:
+        '202': {$ref: '#/components/responses/ChangesetStaged'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /exceptions/{exception_id}:
+    parameters:
+      - {$ref: '#/components/parameters/ExceptionId'}
+      - {$ref: '#/components/parameters/XTimezone'}
+    get:
+      operationId: getException
+      tags: [exceptions]
+      responses:
+        '200':
+          description: The exception.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AvailabilityException'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: deleteException
+      tags: [exceptions]
+      summary: Stage removal (exception_removed) and propose a re-solve.
+      responses:
+        '202': {$ref: '#/components/responses/ChangesetStaged'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  # ------------------------------------------------------------------ plans
+  /plans/current:
+    get:
+      operationId: getCurrentPlan
+      tags: [plans]
+      summary: The live plan whose horizon contains now.
+      description: The lazy sweep runs on read, so past `planned` blocks come back as `completed`.
+      parameters: [{$ref: '#/components/parameters/XTimezone'}]
+      responses:
+        '200':
+          description: Live plan with blocks (and infeasibility if the live plan was confirmed as a partial plan).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WeekPlan'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /plans/{plan_id}/diff:
+    get:
+      operationId: getPlanDiff
+      tags: [plans]
+      summary: Per-lineage diff of plan `plan_id` (after) against plan `against` (before).
+      parameters:
+        - {$ref: '#/components/parameters/PlanId'}
+        - {$ref: '#/components/parameters/XTimezone'}
+        - name: against
+          in: query
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: The diff, one entry per lineage present in either plan.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PlanDiff'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  # ------------------------------------------------------------------ blocks
+  /blocks/{block_id}:
+    patch:
+      operationId: patchBlock
+      tags: [blocks]
+      summary: Act on a block of the live plan.
+      description: |
+        - `complete` / `skip`: flip `state` on a started (past or in-progress) block. Applied
+          immediately, no re-solve. Returns 200 + Block. Idempotent.
+        - `edit`: user drag/resize. Stages `pin_added` (kind=pin, this block's project, the new
+          absolute span) and proposes a re-solve. Returns 202 + Changeset.
+        - `delete`: stages `pin_added` (kind=forbid, this block's project, the block's span) and
+          proposes a re-solve. Returns 202 + Changeset.
+        Blocks are never edited in place; only confirm promotes solver output.
+      parameters:
+        - {$ref: '#/components/parameters/BlockId'}
+        - {$ref: '#/components/parameters/XTimezone'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/BlockAction'}
+      responses:
+        '200':
+          description: complete/skip applied.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Block'}
+        '202': {$ref: '#/components/responses/ChangesetStaged'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  # ------------------------------------------------------------------ pins
+  /pins:
+    get:
+      operationId: listPins
+      tags: [pins]
+      summary: List the user's block_pins (pins and forbids). Addition beyond ARCH §7 (TECH_SPEC T2.3).
+      description: No POST — pins are created only by PATCH /blocks (edit → pin, delete → forbid) or the agent's stage_pin tool.
+      parameters:
+        - {$ref: '#/components/parameters/XTimezone'}
+        - name: include_past
+          in: query
+          required: false
+          description: Include pins whose span ended before now.
+          schema: {type: boolean, default: false}
+      responses:
+        '200':
+          description: Pins ordered by span start ascending (no pagination in v1).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PinList'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /pins/{pin_id}:
+    delete:
+      operationId: deletePin
+      tags: [pins]
+      summary: Stage removal (pin_removed) and propose a re-solve. Addition beyond ARCH §7 (TECH_SPEC T2.3).
+      parameters:
+        - {$ref: '#/components/parameters/PinId'}
+        - {$ref: '#/components/parameters/XTimezone'}
+      responses:
+        '202': {$ref: '#/components/responses/ChangesetStaged'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  # ------------------------------------------------------------------ agent
+  /agent/message:
+    post:
+      operationId: postAgentMessage
+      tags: [agent]
+      summary: One agent turn. Client sends the full transcript; response is an SSE stream.
+      description: |
+        Stateless: the server holds no chat. Pre-stream failures (auth, validation) are normal
+        JSON error responses. Once `200` is sent, failures arrive as an `error` event. Exactly
+        one terminal event (`done` or `error`) ends every stream. See NOTES.md "SSE".
+      parameters: [{$ref: '#/components/parameters/XTimezone'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AgentMessageRequest'}
+      responses:
+        '200':
+          description: SSE stream of AgentStreamEvent frames (`event:` name + JSON `data:`).
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: 'Each frame is `event: <name>` + `data: <json>` + blank line. Parsed frames conform to AgentStreamEvent.'
+              x-sse-event-schema: {$ref: '#/components/schemas/AgentStreamEvent'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  # ------------------------------------------------------------------ changesets
+  /changesets/{changeset_id}/confirm:
+    post:
+      operationId: confirmChangeset
+      tags: [changesets]
+      summary: Apply staged mutations and promote the proposed plan to live (one transaction).
+      description: |
+        Idempotent: confirming an already-`confirmed` changeset returns 200 with the same body.
+        A `rejected` or `expired` changeset returns 409 `changeset_not_pending`.
+      parameters:
+        - {$ref: '#/components/parameters/ChangesetId'}
+        - {$ref: '#/components/parameters/XTimezone'}
+      responses:
+        '200':
+          description: Confirmed. `plan` (if any) now has status `live`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Changeset'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /changesets/{changeset_id}/reject:
+    post:
+      operationId: rejectChangeset
+      tags: [changesets]
+      summary: Discard the changeset; constraint state untouched; proposed plan → rejected.
+      description: |
+        Idempotent: rejecting an already-`rejected` changeset returns 200 with the same body.
+        A `confirmed` or `expired` changeset returns 409 `changeset_not_pending`.
+      parameters:
+        - {$ref: '#/components/parameters/ChangesetId'}
+        - {$ref: '#/components/parameters/XTimezone'}
+      responses:
+        '200':
+          description: Rejected.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Changeset'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  # ------------------------------------------------------------------ gcal
+  /gcal/connect:
+    get:
+      operationId: getGcalConnectUrl
+      tags: [gcal]
+      summary: Build the Google OAuth URL (PKCE + signed state bound to the session's user).
+      description: Returns JSON rather than a 302 because ASWebAuthenticationSession cannot attach the bearer header.
+      parameters: [{$ref: '#/components/parameters/XTimezone'}]
+      responses:
+        '200':
+          description: Open `authorization_url` in ASWebAuthenticationSession.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GcalConnectUrl'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /gcal/callback:
+    get:
+      operationId: gcalCallback
+      tags: [gcal]
+      summary: Google OAuth redirect target (hit by the browser, not the app's API client).
+      description: |
+        Unauthenticated; the user is identified by the signed `state`. Always answers with a
+        302 to the app callback URL, carrying `result=connected` or `result=error&code=<code>`.
+      security: []
+      parameters:
+        - {name: state, in: query, required: true, schema: {type: string, minLength: 1}}
+        - {name: code, in: query, required: false, schema: {type: string, minLength: 1}}
+        - {name: error, in: query, required: false, description: Set by Google on denial (e.g. access_denied)., schema: {type: string}}
+        - {name: scope, in: query, required: false, schema: {type: string}}
+      responses:
+        '302':
+          description: Redirect back into the app.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+                pattern: '^reclaimmytime://gcal/callback\?result=(connected|error&code=[a-z_]+)$'
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /gcal/status:
+    get:
+      operationId: getGcalStatus
+      tags: [gcal]
+      summary: Google connection state (addition beyond ARCH §7; see NOTES.md).
+      parameters: [{$ref: '#/components/parameters/XTimezone'}]
+      responses:
+        '200':
+          description: '`connection` is null when never connected or after disconnect.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GcalStatus'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /gcal:
+    delete:
+      operationId: disconnectGcal
+      tags: [gcal]
+      summary: Revoke the Google grant and delete the connection row (addition beyond ARCH §7).
+      parameters: [{$ref: '#/components/parameters/XTimezone'}]
+      responses:
+        '204': {description: Disconnected.}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: 'Opaque 256-bit session token from POST /auth/apple (`Authorization: Bearer <token>`). Not a JWT.'
+
+  parameters:
+    XTimezone:
+      name: X-Timezone
+      in: header
+      required: true
+      description: Device IANA timezone, sent on every authenticated request (ARCH §3 Semantics).
+      schema: {$ref: '#/components/schemas/IanaTimezone'}
+    ProjectId:
+      {name: project_id, in: path, required: true, schema: {type: string, format: uuid}}
+    ExceptionId:
+      {name: exception_id, in: path, required: true, schema: {type: string, format: uuid}}
+    PlanId:
+      {name: plan_id, in: path, required: true, schema: {type: string, format: uuid}}
+    BlockId:
+      {name: block_id, in: path, required: true, schema: {type: string, format: uuid}}
+    PinId:
+      {name: pin_id, in: path, required: true, schema: {type: string, format: uuid}}
+    ChangesetId:
+      {name: changeset_id, in: path, required: true, schema: {type: string, format: uuid}}
+
+  responses:
+    ChangesetStaged:
+      description: Staged. Nothing applied until POST /changesets/{id}/confirm.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Changeset'}
+    BadRequest:
+      description: Malformed request (e.g. missing/invalid X-Timezone).
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unauthorized:
+      description: Missing/invalid/expired session, or invalid Apple credential.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    NotFound:
+      description: Resource does not exist or belongs to another user.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Conflict:
+      description: Request conflicts with current state (see code).
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    ValidationFailed:
+      description: Body failed schema or semantic validation.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    ServiceUnavailable:
+      description: Upstream dependency (LLM, Google) unavailable before the stream started.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    InternalError:
+      description: Unexpected error.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+
+  schemas:
+    # ---------------------------------------------------------------- primitives
+    Uuid: {type: string, format: uuid}
+    IanaTimezone:
+      type: string
+      description: IANA tz database name, e.g. America/Los_Angeles. Validated server-side against tzdata.
+      pattern: '^[A-Za-z][A-Za-z0-9_+\-]*(/[A-Za-z0-9_+\-]+)*$'
+      maxLength: 64
+    LocalTime:
+      type: string
+      description: Local wall-clock time HH:MM (24h). "24:00" is allowed only as a window end.
+      pattern: '^(([01][0-9]|2[0-3]):[0-5][0-9]|24:00)$'
+    Tag:
+      type: string
+      description: A requirement tag from the user's controlled vocabulary (user_tags.tag).
+      minLength: 1
+      maxLength: 40
+    TagList:
+      type: array
+      items: {$ref: '#/components/schemas/Tag'}
+      uniqueItems: true
+    Span:
+      type: object
+      description: |
+        tstzrange mapping. Half-open [start, end), start < end, both RFC 3339 with offset.
+        Server emits UTC ("Z"). Used for blocks.span, availability_exceptions.span,
+        block_pins.span, week_plans.horizon.
+      required: [start, end]
+      additionalProperties: false
+      properties:
+        start: {type: string, format: date-time}
+        end: {type: string, format: date-time}
+    TimeWindow:
+      type: array
+      description: '[start, end) local times on one day; start < end; no midnight crossing.'
+      prefixItems:
+        - {$ref: '#/components/schemas/LocalTime'}
+        - {$ref: '#/components/schemas/LocalTime'}
+      items: false
+      minItems: 2
+      maxItems: 2
+    DayWindows:
+      type: array
+      description: Sorted, non-overlapping windows for one weekday.
+      items: {$ref: '#/components/schemas/TimeWindow'}
+    WeekWindows:
+      type: object
+      description: |
+        jsonb weekly windows, local wall-clock, keyed mon..sun. An absent key is equivalent to []
+        (no window that day).
+      additionalProperties: false
+      properties:
+        mon: {$ref: '#/components/schemas/DayWindows'}
+        tue: {$ref: '#/components/schemas/DayWindows'}
+        wed: {$ref: '#/components/schemas/DayWindows'}
+        thu: {$ref: '#/components/schemas/DayWindows'}
+        fri: {$ref: '#/components/schemas/DayWindows'}
+        sat: {$ref: '#/components/schemas/DayWindows'}
+        sun: {$ref: '#/components/schemas/DayWindows'}
+
+    # ---------------------------------------------------------------- enums (verbatim DDL)
+    ConnectionStatus: {type: string, enum: [active, revoked]}
+    ProjectKind: {type: string, enum: [deadline, perennial]}
+    ProjectStatus: {type: string, enum: [active, paused, done, archived]}
+    DayDiversity: {type: string, enum: [focused, mixed]}
+    PinKind: {type: string, enum: [pin, forbid]}
+    PlanStatus: {type: string, enum: [proposed, live, superseded, rejected]}
+    ChangesetStatus: {type: string, enum: [pending, confirmed, rejected, expired]}
+    BlockState: {type: string, enum: [planned, completed, skipped]}
+    GcalSync: {type: string, enum: [pending, synced, failed]}
+    MutationSource: {type: string, enum: [agent, manual, system]}
+    MutationKind:
+      type: string
+      enum: [project_created, project_updated, project_archived, preferences_updated,
+             exception_added, exception_removed, pin_added, pin_removed,
+             plan_proposed, plan_confirmed, plan_rejected]
+
+    # ---------------------------------------------------------------- errors
+    Error:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error: {$ref: '#/components/schemas/ErrorBody'}
+    ErrorBody:
+      type: object
+      required: [code, message]
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          description: Stable machine code; full list in NOTES.md. Clients must tolerate unknown codes.
+          pattern: '^[a-z][a-z0-9_]*$'
+        message: {type: string, description: Human-readable; not for display logic.}
+        details:
+          type: object
+          description: Code-specific structured data (e.g. `fields` for validation_failed).
+          additionalProperties: true
+
+    # ---------------------------------------------------------------- auth
+    AppleSignInRequest:
+      type: object
+      required: [identity_token, authorization_code, nonce]
+      additionalProperties: false
+      properties:
+        identity_token: {type: string, minLength: 1, description: Apple identity token (JWT) from ASAuthorizationAppleIDCredential.}
+        authorization_code: {type: string, minLength: 1, description: One-time code; exchanged server-side for Apple's refresh token.}
+        nonce: {type: string, minLength: 16, description: The raw nonce; the token's nonce claim must equal its SHA-256 hex digest.}
+    User:
+      type: object
+      required: [id, email, created_at]
+      additionalProperties: false
+      properties:
+        id: {type: string, format: uuid}
+        email:
+          type: [string, 'null']
+          format: email
+          description: Null unless Apple reported a verified, non-private-relay address.
+        created_at: {type: string, format: date-time}
+    Session:
+      type: object
+      required: [id, created_at, expires_at]
+      additionalProperties: false
+      properties:
+        id: {type: string, format: uuid}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time, description: Sliding (30d), capped at 180d from created_at.}
+    AuthSession:
+      type: object
+      required: [token, session, user, is_new_user]
+      additionalProperties: false
+      properties:
+        token: {type: string, minLength: 32, description: Opaque bearer token. Shown once; store in Keychain.}
+        session: {$ref: '#/components/schemas/Session'}
+        user: {$ref: '#/components/schemas/User'}
+        is_new_user: {type: boolean}
+
+    # ---------------------------------------------------------------- projects
+    Project:
+      description: projects row (user_id omitted). Discriminated on kind; the other kind's fields are present and null.
+      oneOf:
+        - {$ref: '#/components/schemas/DeadlineProject'}
+        - {$ref: '#/components/schemas/PerennialProject'}
+      discriminator:
+        propertyName: kind
+        mapping:
+          deadline: '#/components/schemas/DeadlineProject'
+          perennial: '#/components/schemas/PerennialProject'
+    DeadlineProject:
+      type: object
+      required: [id, name, kind, target_date, estimated_total_hours, weekly_target_hours,
+                 max_block_minutes, min_block_minutes, preferred_windows, preferred_strict,
+                 requirements, status, created_at]
+      additionalProperties: false
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string, minLength: 1, maxLength: 200}
+        kind: {const: deadline}
+        target_date: {type: string, format: date, description: Local date; deadline is the end of that local day.}
+        estimated_total_hours: {$ref: '#/components/schemas/EstimatedTotalHours'}
+        weekly_target_hours: {type: 'null'}
+        max_block_minutes: {type: integer, minimum: 1}
+        min_block_minutes: {type: integer, minimum: 1}
+        preferred_windows:
+          oneOf: [{$ref: '#/components/schemas/WeekWindows'}, {type: 'null'}]
+        preferred_strict: {type: boolean}
+        requirements: {$ref: '#/components/schemas/TagList'}
+        status: {$ref: '#/components/schemas/ProjectStatus'}
+        created_at: {type: string, format: date-time}
+    PerennialProject:
+      type: object
+      required: [id, name, kind, target_date, estimated_total_hours, weekly_target_hours,
+                 max_block_minutes, min_block_minutes, preferred_windows, preferred_strict,
+                 requirements, status, created_at]
+      additionalProperties: false
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string, minLength: 1, maxLength: 200}
+        kind: {const: perennial}
+        target_date: {type: 'null'}
+        estimated_total_hours: {type: 'null'}
+        weekly_target_hours: {$ref: '#/components/schemas/WeeklyTargetHours'}
+        max_block_minutes: {type: integer, minimum: 1}
+        min_block_minutes: {type: integer, minimum: 1}
+        preferred_windows:
+          oneOf: [{$ref: '#/components/schemas/WeekWindows'}, {type: 'null'}]
+        preferred_strict: {type: boolean}
+        requirements: {$ref: '#/components/schemas/TagList'}
+        status: {$ref: '#/components/schemas/ProjectStatus'}
+        created_at: {type: string, format: date-time}
+    EstimatedTotalHours:
+      type: number
+      description: numeric(6,1). One decimal place; server rounds half-even to 0.1.
+      exclusiveMinimum: 0
+      maximum: 99999.9
+    WeeklyTargetHours:
+      type: number
+      description: numeric(5,1). One decimal place; server rounds half-even to 0.1.
+      exclusiveMinimum: 0
+      maximum: 168
+    ProjectList:
+      type: object
+      required: [projects]
+      additionalProperties: false
+      properties:
+        projects:
+          type: array
+          items: {$ref: '#/components/schemas/Project'}
+
+    ProjectDraft:
+      description: |
+        ARCH §5 ProjectDraft — request body for POST /projects and the agent's stage_project tool.
+        Local dates only. Deadline/perennial XOR encoded as oneOf on kind (mirrors the DB CHECK).
+        min_block_minutes defaults to min(25, max_block_minutes); must be <= max_block_minutes.
+      oneOf:
+        - {$ref: '#/components/schemas/DeadlineProjectDraft'}
+        - {$ref: '#/components/schemas/PerennialProjectDraft'}
+      discriminator:
+        propertyName: kind
+        mapping:
+          deadline: '#/components/schemas/DeadlineProjectDraft'
+          perennial: '#/components/schemas/PerennialProjectDraft'
+    DeadlineProjectDraft:
+      type: object
+      required: [name, kind, target_date, estimated_total_hours, max_block_minutes]
+      additionalProperties: false
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        kind: {const: deadline}
+        target_date: {type: string, format: date}
+        estimated_total_hours: {$ref: '#/components/schemas/EstimatedTotalHours'}
+        max_block_minutes: {type: integer, minimum: 1}
+        min_block_minutes: {type: integer, minimum: 1}
+        preferred_windows:
+          oneOf: [{$ref: '#/components/schemas/WeekWindows'}, {type: 'null'}]
+        preferred_strict: {type: boolean, default: false}
+        requirements: {$ref: '#/components/schemas/TagList'}
+    PerennialProjectDraft:
+      type: object
+      required: [name, kind, weekly_target_hours, max_block_minutes]
+      additionalProperties: false
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        kind: {const: perennial}
+        weekly_target_hours: {$ref: '#/components/schemas/WeeklyTargetHours'}
+        max_block_minutes: {type: integer, minimum: 1}
+        min_block_minutes: {type: integer, minimum: 1}
+        preferred_windows:
+          oneOf: [{$ref: '#/components/schemas/WeekWindows'}, {type: 'null'}]
+        preferred_strict: {type: boolean, default: false}
+        requirements: {$ref: '#/components/schemas/TagList'}
+    ProjectPatch:
+      type: object
+      description: |
+        Partial update. `kind` is immutable. Sending a field of the other kind (e.g.
+        weekly_target_hours on a deadline project) is 422. `preferred_windows: null` clears.
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        target_date: {type: string, format: date}
+        estimated_total_hours: {$ref: '#/components/schemas/EstimatedTotalHours'}
+        weekly_target_hours: {$ref: '#/components/schemas/WeeklyTargetHours'}
+        max_block_minutes: {type: integer, minimum: 1}
+        min_block_minutes: {type: integer, minimum: 1}
+        preferred_windows:
+          oneOf: [{$ref: '#/components/schemas/WeekWindows'}, {type: 'null'}]
+        preferred_strict: {type: boolean}
+        requirements: {$ref: '#/components/schemas/TagList'}
+        status: {type: string, enum: [active, paused, done], description: archived is set only via DELETE.}
+
+    # ---------------------------------------------------------------- preferences
+    UserPreferences:
+      type: object
+      description: user_preferences row (user_id omitted). Also the full-replacement PUT body (ARCH §5 PreferencesDraft).
+      required: [timezone, schedulable_windows, day_diversity, buffer_minutes, week_start]
+      additionalProperties: false
+      properties:
+        timezone: {$ref: '#/components/schemas/IanaTimezone'}
+        schedulable_windows: {$ref: '#/components/schemas/WeekWindows'}
+        day_diversity: {$ref: '#/components/schemas/DayDiversity'}
+        buffer_minutes: {type: integer, minimum: 0, maximum: 240}
+        week_start: {type: integer, minimum: 1, maximum: 7, description: ISO-8601 weekday, 1 = Monday … 7 = Sunday.}
+
+    # ---------------------------------------------------------------- exceptions
+    AvailabilityException:
+      type: object
+      description: availability_exceptions row (user_id omitted). span is absolute.
+      required: [id, span, blocks_all, blocks_tags, reason, created_at]
+      additionalProperties: false
+      properties:
+        id: {type: string, format: uuid}
+        span: {$ref: '#/components/schemas/Span'}
+        blocks_all: {type: boolean}
+        blocks_tags: {$ref: '#/components/schemas/TagList'}
+        reason: {type: [string, 'null'], maxLength: 500}
+        created_at: {type: string, format: date-time}
+      anyOf:
+        - {properties: {blocks_all: {const: true}}}
+        - {properties: {blocks_tags: {minItems: 1}}}
+    AvailabilityExceptionList:
+      type: object
+      required: [exceptions]
+      additionalProperties: false
+      properties:
+        exceptions:
+          type: array
+          items: {$ref: '#/components/schemas/AvailabilityException'}
+    ExceptionDraft:
+      type: object
+      description: |
+        ARCH §5 ExceptionDraft — local dates/times only, resolved with X-Timezone.
+        Omitted start_time = 00:00 of start_date; omitted end_time = end of end_date (next day 00:00).
+        Requires blocks_all=true or ≥1 blocks_tags (DB CHECK).
+      required: [start_date, end_date]
+      additionalProperties: false
+      properties:
+        start_date: {type: string, format: date}
+        start_time: {$ref: '#/components/schemas/LocalTime'}
+        end_date: {type: string, format: date}
+        end_time: {$ref: '#/components/schemas/LocalTime'}
+        blocks_all: {type: boolean, default: false}
+        blocks_tags: {$ref: '#/components/schemas/TagList'}
+        reason: {type: [string, 'null'], maxLength: 500}
+      anyOf:
+        - {required: [blocks_all], properties: {blocks_all: {const: true}}}
+        - {required: [blocks_tags], properties: {blocks_tags: {minItems: 1}}}
+
+    # ---------------------------------------------------------------- plans & blocks
+    Block:
+      type: object
+      description: blocks row (user_id, gcal_etag omitted).
+      required: [id, plan_id, project_id, lineage_id, span, state, gcal_status, gcal_event_id]
+      additionalProperties: false
+      properties:
+        id: {type: string, format: uuid}
+        plan_id: {type: string, format: uuid}
+        project_id: {type: string, format: uuid}
+        lineage_id: {type: string, format: uuid, description: Stable across plan versions; the diff key.}
+        span: {$ref: '#/components/schemas/Span'}
+        state: {$ref: '#/components/schemas/BlockState'}
+        gcal_status: {$ref: '#/components/schemas/GcalSync'}
+        gcal_event_id: {type: [string, 'null']}
+    WeekPlan:
+      type: object
+      description: week_plans row (user_id, solver_input omitted) + its blocks ordered by span.start.
+      required: [id, horizon, week_start, timezone, version, status, infeasibility, created_at, superseded_at, blocks]
+      additionalProperties: false
+      properties:
+        id: {type: string, format: uuid}
+        horizon: {$ref: '#/components/schemas/Span'}
+        week_start: {type: string, format: date}
+        timezone: {$ref: '#/components/schemas/IanaTimezone'}
+        version: {type: integer, minimum: 1}
+        status: {$ref: '#/components/schemas/PlanStatus'}
+        infeasibility:
+          oneOf: [{$ref: '#/components/schemas/Infeasibility'}, {type: 'null'}]
+        created_at: {type: string, format: date-time}
+        superseded_at: {type: [string, 'null'], format: date-time}
+        blocks:
+          type: array
+          items: {$ref: '#/components/schemas/Block'}
+
+    Infeasibility:
+      type: object
+      description: |
+        ARCH §4 SolverOutput.infeasibility. The plan carrying it is the best partial plan.
+        Relaxations are candidates for the user to pick (PRD Principle 2); picking one is a new
+        staged write (e.g. PATCH /projects), never automatic.
+      required: [violations, relaxations]
+      additionalProperties: false
+      properties:
+        violations:
+          type: array
+          minItems: 1
+          items: {$ref: '#/components/schemas/Violation'}
+        relaxations:
+          type: array
+          items: {$ref: '#/components/schemas/Relaxation'}
+    Violation:
+      oneOf:
+        - {$ref: '#/components/schemas/DemandShortfall'}
+        - {$ref: '#/components/schemas/PinInvalidated'}
+      discriminator:
+        propertyName: kind
+        mapping:
+          demand_shortfall: '#/components/schemas/DemandShortfall'
+          pin_invalidated: '#/components/schemas/PinInvalidated'
+    DemandShortfall:
+      type: object
+      description: A project's required minutes in this horizon could not all be placed.
+      required: [kind, project_id, required_minutes, scheduled_minutes, shortfall_minutes]
+      additionalProperties: false
+      properties:
+        kind: {const: demand_shortfall}
+        project_id: {type: string, format: uuid}
+        required_minutes: {type: integer, minimum: 0}
+        scheduled_minutes: {type: integer, minimum: 0}
+        shortfall_minutes: {type: integer, minimum: 1}
+    PinInvalidated:
+      type: object
+      description: A pin/forbid lost to a higher-priority constraint (calendar > exceptions > pins). Reported, never dropped.
+      required: [kind, pin_id, pin_kind, project_id, span, conflicts_with, exception_id]
+      additionalProperties: false
+      properties:
+        kind: {const: pin_invalidated}
+        pin_id: {type: string, format: uuid}
+        pin_kind: {$ref: '#/components/schemas/PinKind'}
+        project_id: {type: [string, 'null'], format: uuid}
+        span: {$ref: '#/components/schemas/Span'}
+        conflicts_with: {type: string, enum: [busy, exception]}
+        exception_id: {type: [string, 'null'], format: uuid, description: Set when conflicts_with = exception.}
+    Relaxation:
+      oneOf:
+        - {$ref: '#/components/schemas/RelaxExtendDeadline'}
+        - {$ref: '#/components/schemas/RelaxReduceEstimate'}
+        - {$ref: '#/components/schemas/RelaxReduceWeeklyTarget'}
+        - {$ref: '#/components/schemas/RelaxRaiseMaxBlock'}
+        - {$ref: '#/components/schemas/RelaxPauseProject'}
+        - {$ref: '#/components/schemas/RelaxRemovePin'}
+        - {$ref: '#/components/schemas/RelaxRemoveException'}
+      discriminator:
+        propertyName: kind
+        mapping:
+          extend_deadline: '#/components/schemas/RelaxExtendDeadline'
+          reduce_estimate: '#/components/schemas/RelaxReduceEstimate'
+          reduce_weekly_target: '#/components/schemas/RelaxReduceWeeklyTarget'
+          raise_max_block_minutes: '#/components/schemas/RelaxRaiseMaxBlock'
+          pause_project: '#/components/schemas/RelaxPauseProject'
+          remove_pin: '#/components/schemas/RelaxRemovePin'
+          remove_exception: '#/components/schemas/RelaxRemoveException'
+    RelaxExtendDeadline:
+      type: object
+      required: [kind, recovers_minutes, project_id, target_date]
+      additionalProperties: false
+      properties:
+        kind: {const: extend_deadline}
+        recovers_minutes: {type: integer, minimum: 1, description: Shortfall minutes this relaxation would eliminate.}
+        project_id: {type: string, format: uuid}
+        target_date: {type: string, format: date, description: Proposed new target_date.}
+    RelaxReduceEstimate:
+      type: object
+      required: [kind, recovers_minutes, project_id, estimated_total_hours]
+      additionalProperties: false
+      properties:
+        kind: {const: reduce_estimate}
+        recovers_minutes: {type: integer, minimum: 1}
+        project_id: {type: string, format: uuid}
+        estimated_total_hours: {$ref: '#/components/schemas/EstimatedTotalHours'}
+    RelaxReduceWeeklyTarget:
+      type: object
+      required: [kind, recovers_minutes, project_id, weekly_target_hours]
+      additionalProperties: false
+      properties:
+        kind: {const: reduce_weekly_target}
+        recovers_minutes: {type: integer, minimum: 1}
+        project_id: {type: string, format: uuid}
+        weekly_target_hours: {$ref: '#/components/schemas/WeeklyTargetHours'}
+    RelaxRaiseMaxBlock:
+      type: object
+      required: [kind, recovers_minutes, project_id, max_block_minutes]
+      additionalProperties: false
+      properties:
+        kind: {const: raise_max_block_minutes}
+        recovers_minutes: {type: integer, minimum: 1}
+        project_id: {type: string, format: uuid}
+        max_block_minutes: {type: integer, minimum: 1}
+    RelaxPauseProject:
+      type: object
+      required: [kind, recovers_minutes, project_id]
+      additionalProperties: false
+      properties:
+        kind: {const: pause_project}
+        recovers_minutes: {type: integer, minimum: 1}
+        project_id: {type: string, format: uuid}
+    RelaxRemovePin:
+      type: object
+      required: [kind, recovers_minutes, pin_id]
+      additionalProperties: false
+      properties:
+        kind: {const: remove_pin}
+        recovers_minutes: {type: integer, minimum: 1}
+        pin_id: {type: string, format: uuid}
+    RelaxRemoveException:
+      type: object
+      required: [kind, recovers_minutes, exception_id]
+      additionalProperties: false
+      properties:
+        kind: {const: remove_exception}
+        recovers_minutes: {type: integer, minimum: 1}
+        exception_id: {type: string, format: uuid}
+
+    PlanDiff:
+      type: object
+      description: |
+        One entry per lineage_id present in either plan, ordered by
+        (coalesce(after.start, before.start), lineage_id). against_plan_id is null when there
+        was no live plan to diff against (first week: every entry is `added`).
+      required: [plan_id, against_plan_id, entries]
+      additionalProperties: false
+      properties:
+        plan_id: {type: string, format: uuid}
+        against_plan_id: {type: [string, 'null'], format: uuid}
+        entries:
+          type: array
+          items: {$ref: '#/components/schemas/DiffEntry'}
+    DiffEntry:
+      description: 'moved = span changed (start and/or end; includes resize).'
+      oneOf:
+        - type: object
+          required: [lineage_id, project_id, before, after, change]
+          additionalProperties: false
+          properties:
+            lineage_id: {type: string, format: uuid}
+            project_id: {type: string, format: uuid}
+            before: {type: 'null'}
+            after: {$ref: '#/components/schemas/Span'}
+            change: {const: added}
+        - type: object
+          required: [lineage_id, project_id, before, after, change]
+          additionalProperties: false
+          properties:
+            lineage_id: {type: string, format: uuid}
+            project_id: {type: string, format: uuid}
+            before: {$ref: '#/components/schemas/Span'}
+            after: {type: 'null'}
+            change: {const: removed}
+        - type: object
+          required: [lineage_id, project_id, before, after, change]
+          additionalProperties: false
+          properties:
+            lineage_id: {type: string, format: uuid}
+            project_id: {type: string, format: uuid}
+            before: {$ref: '#/components/schemas/Span'}
+            after: {$ref: '#/components/schemas/Span'}
+            change: {enum: [moved, unchanged]}
+
+    BlockAction:
+      oneOf:
+        - {$ref: '#/components/schemas/BlockComplete'}
+        - {$ref: '#/components/schemas/BlockSkip'}
+        - {$ref: '#/components/schemas/BlockEdit'}
+        - {$ref: '#/components/schemas/BlockDelete'}
+      discriminator:
+        propertyName: action
+        mapping:
+          complete: '#/components/schemas/BlockComplete'
+          skip: '#/components/schemas/BlockSkip'
+          edit: '#/components/schemas/BlockEdit'
+          delete: '#/components/schemas/BlockDelete'
+    BlockComplete:
+      type: object
+      required: [action]
+      additionalProperties: false
+      properties:
+        action: {const: complete}
+    BlockSkip:
+      type: object
+      required: [action]
+      additionalProperties: false
+      properties:
+        action: {const: skip}
+    BlockEdit:
+      type: object
+      description: Manual drag/resize. Absolute span (the one place a client sends absolute times). Must start after now and lie within the plan horizon.
+      required: [action, span]
+      additionalProperties: false
+      properties:
+        action: {const: edit}
+        span: {$ref: '#/components/schemas/Span'}
+    BlockDelete:
+      type: object
+      required: [action]
+      additionalProperties: false
+      properties:
+        action: {const: delete}
+
+    BlockPin:
+      type: object
+      description: block_pins row (user_id omitted). project_id null only for a blanket forbid.
+      required: [id, project_id, span, kind, created_from_block_id, created_at]
+      additionalProperties: false
+      properties:
+        id: {type: string, format: uuid}
+        project_id: {type: [string, 'null'], format: uuid}
+        span: {$ref: '#/components/schemas/Span'}
+        kind: {$ref: '#/components/schemas/PinKind'}
+        created_from_block_id: {type: [string, 'null'], format: uuid, description: Provenance only; block rows churn with plan versions.}
+        created_at: {type: string, format: date-time}
+    PinList:
+      type: object
+      required: [pins]
+      additionalProperties: false
+      properties:
+        pins:
+          type: array
+          items: {$ref: '#/components/schemas/BlockPin'}
+
+    # ---------------------------------------------------------------- changesets
+    Changeset:
+      type: object
+      description: |
+        changesets row (user_id omitted) + the proposed plan and its diff against the live plan
+        at proposal time. plan_id/plan/diff are null when no solve was possible yet (onboarding,
+        before preferences exist). `narration` is deterministic template text for manual/system
+        proposals; null for agent proposals (the agent's reply narrates).
+      required: [id, status, plan_id, staged, created_at, resolved_at, plan, diff, narration]
+      additionalProperties: false
+      properties:
+        id: {type: string, format: uuid}
+        status: {$ref: '#/components/schemas/ChangesetStatus'}
+        plan_id: {type: [string, 'null'], format: uuid}
+        staged:
+          type: array
+          minItems: 1
+          items: {$ref: '#/components/schemas/StagedMutation'}
+        created_at: {type: string, format: date-time}
+        resolved_at: {type: [string, 'null'], format: date-time}
+        plan:
+          oneOf: [{$ref: '#/components/schemas/WeekPlan'}, {type: 'null'}]
+        diff:
+          oneOf: [{$ref: '#/components/schemas/PlanDiff'}, {type: 'null'}]
+        narration: {type: [string, 'null']}
+
+    StagedMutation:
+      description: |
+        One element of changesets.staged. `kind` is a mutation_kind value (only the
+        constraint-changing subset; plan_* kinds are trace rows written by the server, never staged).
+        Payloads are server-resolved: ids pre-assigned, spans absolute.
+      oneOf:
+        - {$ref: '#/components/schemas/StagedProjectCreated'}
+        - {$ref: '#/components/schemas/StagedProjectUpdated'}
+        - {$ref: '#/components/schemas/StagedProjectArchived'}
+        - {$ref: '#/components/schemas/StagedPreferencesUpdated'}
+        - {$ref: '#/components/schemas/StagedExceptionAdded'}
+        - {$ref: '#/components/schemas/StagedExceptionRemoved'}
+        - {$ref: '#/components/schemas/StagedPinAdded'}
+        - {$ref: '#/components/schemas/StagedPinRemoved'}
+      discriminator:
+        propertyName: kind
+        mapping:
+          project_created: '#/components/schemas/StagedProjectCreated'
+          project_updated: '#/components/schemas/StagedProjectUpdated'
+          project_archived: '#/components/schemas/StagedProjectArchived'
+          preferences_updated: '#/components/schemas/StagedPreferencesUpdated'
+          exception_added: '#/components/schemas/StagedExceptionAdded'
+          exception_removed: '#/components/schemas/StagedExceptionRemoved'
+          pin_added: '#/components/schemas/StagedPinAdded'
+          pin_removed: '#/components/schemas/StagedPinRemoved'
+    StagedProjectCreated:
+      type: object
+      required: [kind, source, interpretation, payload]
+      additionalProperties: false
+      properties:
+        kind: {const: project_created}
+        source: {$ref: '#/components/schemas/MutationSource'}
+        interpretation: {type: [string, 'null']}
+        payload:
+          type: object
+          required: [project_id, project]
+          additionalProperties: false
+          properties:
+            project_id: {type: string, format: uuid, description: Pre-assigned; becomes projects.id on confirm.}
+            project: {$ref: '#/components/schemas/ProjectDraft'}
+    StagedProjectUpdated:
+      type: object
+      required: [kind, source, interpretation, payload]
+      additionalProperties: false
+      properties:
+        kind: {const: project_updated}
+        source: {$ref: '#/components/schemas/MutationSource'}
+        interpretation: {type: [string, 'null']}
+        payload:
+          type: object
+          required: [project_id, changes]
+          additionalProperties: false
+          properties:
+            project_id: {type: string, format: uuid}
+            changes: {$ref: '#/components/schemas/ProjectPatch'}
+    StagedProjectArchived:
+      type: object
+      required: [kind, source, interpretation, payload]
+      additionalProperties: false
+      properties:
+        kind: {const: project_archived}
+        source: {$ref: '#/components/schemas/MutationSource'}
+        interpretation: {type: [string, 'null']}
+        payload:
+          type: object
+          required: [project_id]
+          additionalProperties: false
+          properties:
+            project_id: {type: string, format: uuid}
+    StagedPreferencesUpdated:
+      type: object
+      required: [kind, source, interpretation, payload]
+      additionalProperties: false
+      properties:
+        kind: {const: preferences_updated}
+        source: {$ref: '#/components/schemas/MutationSource'}
+        interpretation: {type: [string, 'null']}
+        payload:
+          type: object
+          required: [preferences]
+          additionalProperties: false
+          properties:
+            preferences: {$ref: '#/components/schemas/UserPreferences'}
+    StagedExceptionAdded:
+      type: object
+      required: [kind, source, interpretation, payload]
+      additionalProperties: false
+      properties:
+        kind: {const: exception_added}
+        source: {$ref: '#/components/schemas/MutationSource'}
+        interpretation: {type: [string, 'null']}
+        payload:
+          type: object
+          required: [exception_id, span, blocks_all, blocks_tags, reason]
+          additionalProperties: false
+          properties:
+            exception_id: {type: string, format: uuid, description: Pre-assigned; becomes availability_exceptions.id on confirm.}
+            span: {$ref: '#/components/schemas/Span'}
+            blocks_all: {type: boolean}
+            blocks_tags: {$ref: '#/components/schemas/TagList'}
+            reason: {type: [string, 'null']}
+          anyOf:
+            - {properties: {blocks_all: {const: true}}}
+            - {properties: {blocks_tags: {minItems: 1}}}
+    StagedExceptionRemoved:
+      type: object
+      required: [kind, source, interpretation, payload]
+      additionalProperties: false
+      properties:
+        kind: {const: exception_removed}
+        source: {$ref: '#/components/schemas/MutationSource'}
+        interpretation: {type: [string, 'null']}
+        payload:
+          type: object
+          required: [exception_id]
+          additionalProperties: false
+          properties:
+            exception_id: {type: string, format: uuid}
+    StagedPinAdded:
+      type: object
+      required: [kind, source, interpretation, payload]
+      additionalProperties: false
+      properties:
+        kind: {const: pin_added}
+        source: {$ref: '#/components/schemas/MutationSource'}
+        interpretation: {type: [string, 'null']}
+        payload:
+          type: object
+          description: block_pins row to insert. project_id null only for a blanket forbid.
+          required: [pin_id, project_id, span, kind, created_from_block_id]
+          additionalProperties: false
+          properties:
+            pin_id: {type: string, format: uuid}
+            project_id: {type: [string, 'null'], format: uuid}
+            span: {$ref: '#/components/schemas/Span'}
+            kind: {$ref: '#/components/schemas/PinKind'}
+            created_from_block_id: {type: [string, 'null'], format: uuid}
+    StagedPinRemoved:
+      type: object
+      required: [kind, source, interpretation, payload]
+      additionalProperties: false
+      properties:
+        kind: {const: pin_removed}
+        source: {$ref: '#/components/schemas/MutationSource'}
+        interpretation: {type: [string, 'null']}
+        payload:
+          type: object
+          required: [pin_id]
+          additionalProperties: false
+          properties:
+            pin_id: {type: string, format: uuid}
+
+    # ---------------------------------------------------------------- agent
+    AgentMessageRequest:
+      type: object
+      description: Full client-held transcript; the last message must have role `user` (else 422).
+      required: [messages]
+      additionalProperties: false
+      properties:
+        messages:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: {$ref: '#/components/schemas/TranscriptMessage'}
+    TranscriptMessage:
+      type: object
+      required: [role, content]
+      additionalProperties: false
+      properties:
+        role: {type: string, enum: [user, assistant]}
+        content: {type: string, minLength: 1, maxLength: 8000, description: Plain text. For assistant turns, the `done.reply` text verbatim.}
+        changeset_id:
+          type: [string, 'null']
+          format: uuid
+          description: On assistant turns, the changeset that turn produced (from `done`), so the agent can reference it.
+
+    AgentStreamEvent:
+      description: One parsed SSE frame — `event` is the SSE event name, `data` the JSON payload.
+      oneOf:
+        - {$ref: '#/components/schemas/AgentStatusEvent'}
+        - {$ref: '#/components/schemas/AgentDeltaEvent'}
+        - {$ref: '#/components/schemas/AgentDoneEvent'}
+        - {$ref: '#/components/schemas/AgentErrorEvent'}
+      discriminator:
+        propertyName: event
+        mapping:
+          status: '#/components/schemas/AgentStatusEvent'
+          delta: '#/components/schemas/AgentDeltaEvent'
+          done: '#/components/schemas/AgentDoneEvent'
+          error: '#/components/schemas/AgentErrorEvent'
+    AgentStatusEvent:
+      type: object
+      required: [event, data]
+      additionalProperties: false
+      properties:
+        event: {const: status}
+        data:
+          type: object
+          required: [phase]
+          additionalProperties: false
+          properties:
+            phase:
+              type: string
+              enum: [staging, solving]
+              description: staging = a stage_* tool is running; solving = propose_schedule is running the solver.
+    AgentDeltaEvent:
+      type: object
+      required: [event, data]
+      additionalProperties: false
+      properties:
+        event: {const: delta}
+        data:
+          type: object
+          required: [text]
+          additionalProperties: false
+          properties:
+            text: {type: string, minLength: 1}
+    AgentDoneEvent:
+      type: object
+      description: Terminal. `reply` is authoritative — clients replace streamed delta text with it.
+      required: [event, data]
+      additionalProperties: false
+      properties:
+        event: {const: done}
+        data:
+          oneOf:
+            - type: object
+              required: [outcome, reply, changeset]
+              additionalProperties: false
+              properties:
+                outcome: {const: completed}
+                reply: {type: string, minLength: 1}
+                changeset:
+                  oneOf: [{$ref: '#/components/schemas/Changeset'}, {type: 'null'}]
+            - type: object
+              description: Model refusal (stop_reason=refusal). Polite decline; zero state change.
+              required: [outcome, reply, changeset]
+              additionalProperties: false
+              properties:
+                outcome: {const: refused}
+                reply: {type: string, minLength: 1}
+                changeset: {type: 'null'}
+    AgentErrorEvent:
+      type: object
+      description: Terminal. Nothing from this turn was staged; discard streamed text.
+      required: [event, data]
+      additionalProperties: false
+      properties:
+        event: {const: error}
+        data:
+          type: object
+          required: [error]
+          additionalProperties: false
+          properties:
+            error: {$ref: '#/components/schemas/ErrorBody'}
+
+    # ---------------------------------------------------------------- gcal
+    GcalConnectUrl:
+      type: object
+      required: [authorization_url]
+      additionalProperties: false
+      properties:
+        authorization_url: {type: string, format: uri}
+    GoogleConnection:
+      type: object
+      description: google_connections row minus secrets (user_id, refresh_token_enc, key_id omitted).
+      required: [google_email, scopes, app_calendar_id, status, revoked_at, created_at]
+      additionalProperties: false
+      properties:
+        google_email: {type: string, format: email}
+        scopes: {type: array, items: {type: string}}
+        app_calendar_id: {type: [string, 'null']}
+        status: {$ref: '#/components/schemas/ConnectionStatus'}
+        revoked_at: {type: [string, 'null'], format: date-time}
+        created_at: {type: string, format: date-time}
+    GcalStatus:
+      type: object
+      required: [connection]
+      additionalProperties: false
+      properties:
+        connection:
+          oneOf: [{$ref: '#/components/schemas/GoogleConnection'}, {type: 'null'}]

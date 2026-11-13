@@ -1,0 +1,22 @@
+{
+  "operation": "getMe",
+  "method": "GET",
+  "path": "/me",
+  "case": "unauthenticated",
+  "description": "No Authorization header.",
+  "request_valid": false,
+  "request": {
+    "headers": {
+      "X-Timezone": "America/Los_Angeles"
+    }
+  },
+  "response": {
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "unauthenticated",
+        "message": "Missing or invalid session token."
+      }
+    }
+  }
+}

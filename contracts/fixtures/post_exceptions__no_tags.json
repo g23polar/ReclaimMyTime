@@ -1,0 +1,36 @@
+{
+  "operation": "createException",
+  "method": "POST",
+  "path": "/exceptions",
+  "case": "no_tags",
+  "description": "Neither blocks_all nor any tag: rejected (a forgotten tag list is an error, not a blackout).",
+  "request_valid": false,
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "start_date": "2026-11-20",
+      "end_date": "2026-11-20",
+      "reason": "Traveling Friday"
+    }
+  },
+  "response": {
+    "status": 422,
+    "body": {
+      "error": {
+        "code": "validation_failed",
+        "message": "Set blocks_all or at least one blocks_tags value.",
+        "details": {
+          "fields": [
+            {
+              "path": "blocks_tags",
+              "message": "must be non-empty unless blocks_all is true"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

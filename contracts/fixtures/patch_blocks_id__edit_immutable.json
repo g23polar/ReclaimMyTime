@@ -1,0 +1,32 @@
+{
+  "operation": "patchBlock",
+  "method": "PATCH",
+  "path": "/blocks/{block_id}",
+  "case": "edit_immutable",
+  "description": "Past/in-progress blocks are immutable (Principle 4).",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "path_params": {
+      "block_id": "85c3de79-6e39-58ed-b717-c1372c1c07a2"
+    },
+    "body": {
+      "action": "edit",
+      "span": {
+        "start": "2026-11-17T02:00:00Z",
+        "end": "2026-11-17T04:00:00Z"
+      }
+    }
+  },
+  "response": {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "block_immutable",
+        "message": "Past and in-progress blocks cannot be edited or deleted."
+      }
+    }
+  }
+}

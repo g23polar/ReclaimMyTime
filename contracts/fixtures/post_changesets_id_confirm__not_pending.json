@@ -1,0 +1,28 @@
+{
+  "operation": "confirmChangeset",
+  "method": "POST",
+  "path": "/changesets/{changeset_id}/confirm",
+  "case": "not_pending",
+  "description": "Confirming the rejected edit changeset.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "path_params": {
+      "changeset_id": "c4a7e1f2-8b3d-4f6a-9e05-1d2c3b4a5e02"
+    }
+  },
+  "response": {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "changeset_not_pending",
+        "message": "This changeset was already rejected.",
+        "details": {
+          "status": "rejected"
+        }
+      }
+    }
+  }
+}

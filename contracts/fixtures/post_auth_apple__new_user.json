@@ -1,0 +1,31 @@
+{
+  "operation": "signInWithApple",
+  "method": "POST",
+  "path": "/auth/apple",
+  "case": "new_user",
+  "description": "First Sign in with Apple; private-relay email so users.email is null.",
+  "request": {
+    "body": {
+      "identity_token": "eyJraWQiOiJXNldjT0tCIiwiYWxnIjoiUlMyNTYifQ.eyJpc3MiOiJodHRwczovL2FwcGxlaWQuYXBwbGUuY29tIn0.c2lnbmF0dXJl",
+      "authorization_code": "c1f0e5a2b7d84c6f9e3a1b2c4d5e6f70.0.rqwz.Hk3vX9pL2mQ8nR4t",
+      "nonce": "8tYq2Lw0VbN5xZr7Kc3Mf1Hd"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "token": "k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "session": {
+        "id": "2d9e7c4b-1a3f-4b6e-8c5d-7f0a9b8c6d21",
+        "created_at": "2026-11-15T02:40:03Z",
+        "expires_at": "2026-12-15T02:40:03Z"
+      },
+      "user": {
+        "id": "0b6e2f1a-5c3d-4e8f-9a01-2b3c4d5e6f70",
+        "email": null,
+        "created_at": "2026-11-15T02:40:03Z"
+      },
+      "is_new_user": true
+    }
+  }
+}
