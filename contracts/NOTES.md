@@ -57,7 +57,7 @@ Every non-2xx/3xx JSON response uses this shape:
 | 400 | `timezone_invalid` | X-Timezone missing or not an IANA name |
 | 400 | `bad_request` | malformed JSON or wrong content type |
 | 401 | `unauthenticated` | missing, invalid, expired, or revoked session |
-| 401 | `apple_token_invalid` | `details.reason`: `signature`\|`expired`\|`issuer`\|`audience`\|`nonce_mismatch` |
+| 401 | `apple_token_invalid` | `details.reason`: `signature`\|`expired`\|`issuer`\|`audience`\|`nonce_mismatch`\|`authorization_code` (code rejected by Apple, or its id_token's `sub` ≠ the identity token's `sub` — added 2026-11-14, T2.2) |
 | 404 | `not_found` | unknown id or another user's resource; `details.resource`, `details.id` |
 | 404 | `preferences_not_set` | `GET /preferences` before onboarding sets them |
 | 404 | `no_live_plan` | `GET /plans/current` when no live plan covers now |
@@ -70,6 +70,8 @@ Every non-2xx/3xx JSON response uses this shape:
 | 422 | `validation_failed` | schema or semantic failure; `details.fields: [{path, message}]` |
 | 500 | `internal_error` | unexpected |
 | 503 | `agent_unavailable` | LLM upstream down, before the stream starts (otherwise sent as an SSE `error` event) |
+| 503 | `apple_unavailable` | Apple JWKS or token endpoint unreachable and no cached keys usable (T2.2, 2026-11-14) |
+| 503 | `apple_revocation_failed` | `DELETE /me` could not revoke the stored Apple credential; nothing is deleted. `details.reason`: `undecryptable_credential` (with `details.key_id`) \| `apple_error` (T2.2, 2026-11-14) |
 
 Codes in the `GET /gcal/callback` redirect (`reclaimmytime://gcal/callback?result=error&code=…`):
 - `gcal_access_denied`
@@ -211,4 +213,5 @@ Block ids are uuid5 of `(plan version, lineage)`, which gives new rows per versi
 - **O6 Pin length limits — RESOLVED 2026-11-14 (M0 gate):** a manual pin is a user override. `verify()` skips `block_length` for pinned blocks; every other check (busy, exception, forbid, overlap, buffer, window, horizon) still applies to them and a failure is surfaced as `pin_invalidated` in `infeasibility` (D17 extended to those kinds), never dropped. D7 stands.
 - **O7 Plan history.** No route lists earlier plan versions, so "why did my week change?" across versions has no way to discover the `against` id beyond the changeset diff.
 - **O8 Stale pending proposals (M0 gate 2026-11-14; owner T2.1, blocks M2 not M1).** A pending proposal can outlive the start of a block it moves, and `complete`/`skip` mutate live blocks without expiring it. Confirm must define reconciliation. Recommended: confirm re-runs the solver on current state (`now`, frozen blocks, fresh state flags) under the advisory lock and promotes the re-solve; if the re-solve differs from the stored proposal beyond frozen-block copy-forward, return 409 `changeset_stale` with the fresh Changeset for re-review.
+- **O10 Nonce replay store is per-process (T2.2, 2026-11-14; accepted for v1).** Apple identity-token nonces are tracked in process memory, so a replay could land on another Fly machine. Mitigations in place: the authorization code is single-use at Apple and is now bound to the identity token's `sub` (reason `authorization_code`), and nonces are retained for the full acceptance window. Trigger to revisit: running more than one machine, or a sign-in replay observed in logs → add a `used_nonces(nonce_hash, expires_at)` table.
 - **O9 Relaxation PATCH on a staged project (M0 gate 2026-11-14; owner T2.1/T2.3, blocks M2 not M1).** `PATCH /projects/{id}` to pick a relaxation for a project whose `project_created` is still pending would, under D4 + O1, expire the changeset that owns the creation and delete the staged row. Recommended: a write that targets a staged project of the pending changeset carries the pending `staged` list forward into the replacement changeset (same self-contained semantics agent turns already have), so creation + relaxation are confirmed together; the staged row is re-pointed, not deleted.
