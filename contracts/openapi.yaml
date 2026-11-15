@@ -1037,8 +1037,8 @@ components:
         shortfall_minutes: {type: integer, minimum: 1}
     PinInvalidated:
       type: object
-      description: A pin/forbid lost to a higher-priority constraint (calendar > exceptions > pins). Reported, never dropped.
-      required: [kind, pin_id, pin_kind, project_id, span, conflicts_with, exception_id]
+      description: A pin/forbid that verify() rejects (calendar > exceptions > pins; plus structural checks — O6). Reported, never dropped. Pinned blocks are exempt from block_length only.
+      required: [kind, pin_id, pin_kind, project_id, span, conflicts_with, exception_id, related_lineage_ids]
       additionalProperties: false
       properties:
         kind: {const: pin_invalidated}
@@ -1046,8 +1046,9 @@ components:
         pin_kind: {$ref: '#/components/schemas/PinKind'}
         project_id: {type: [string, 'null'], format: uuid}
         span: {$ref: '#/components/schemas/Span'}
-        conflicts_with: {type: string, enum: [busy, exception]}
+        conflicts_with: {type: string, enum: [busy, exception, window, buffer, overlap, forbid, horizon]}
         exception_id: {type: [string, 'null'], format: uuid, description: Set when conflicts_with = exception.}
+        related_lineage_ids: {type: array, items: {type: string, format: uuid}, description: The other block(s) involved when conflicts_with is overlap or buffer; empty otherwise.}
     Relaxation:
       oneOf:
         - {$ref: '#/components/schemas/RelaxExtendDeadline'}

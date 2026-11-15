@@ -185,7 +185,7 @@ Block ids are uuid5 of `(plan version, lineage)`, which gives new rows per versi
   - `GET /pins` and `DELETE /pins/{pin_id}`: from TECH_SPEC T2.3, coordinator-directed. There is deliberately no `POST /pins`; pins come only from block edit/delete or the agent's `stage_pin`.
   - The list filters `include_archived` and `include_past`.
 - **D17 Infeasibility shape (a proposal for T1.2 to confirm):**
-  - `violations` is `demand_shortfall {project_id, required/scheduled/shortfall_minutes}` or `pin_invalidated {pin_id, pin_kind, project_id, span, conflicts_with: busy|exception, exception_id}`.
+  - `violations` is `demand_shortfall {project_id, required/scheduled/shortfall_minutes}` or `pin_invalidated {pin_id, pin_kind, project_id, span, conflicts_with: busy|exception|window|buffer|overlap|forbid|horizon, exception_id, related_lineage_ids}` (widened 2026-11-14 with O6: every verify() failure on a pinned block except block_length is reported here).
   - `relaxations` is one of `extend_deadline`, `reduce_estimate`, `reduce_weekly_target`, `raise_max_block_minutes`, `pause_project`, `remove_pin`, `remove_exception`. Each has typed parameters plus `recovers_minutes`.
   - Units: the minute-valued fields are integer minutes, per ARCH §4. These are `required_minutes`, `scheduled_minutes`, `shortfall_minutes`, `recovers_minutes` and `max_block_minutes`.
   - The proposed project values in a relaxation use the project's own units and types, so a picked relaxation maps 1:1 onto a `PATCH /projects` body. `estimated_total_hours` and `weekly_target_hours` are numbers in hours with one decimal (e.g. 6.7), and `target_date` is a local date.
