@@ -129,13 +129,13 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 - [x] T1.1 Solver models + `verify()` — `03dc641`
 - [x] T1.2 Packing heuristic — `28ea65a`
 - [x] T1.3 Determinism + golden harness — `216c474` (2 minors logged)
-- [ ] M1 architect gate
+- [x] M1 architect gate — pass with conditions (`reviews/m1-m2-gate-2026-11-15.md`, local); fixes `fccffbf`
 
 **M2 — Persistence & API core**
 - [x] T2.1 Migrations + models + write paths — `a9c22e2`
 - [x] T2.2 Auth (Sign in with Apple, sessions) — `c8e9501` (2 minors logged)
 - [x] T2.3 CRUD + plan endpoints — `3089a3a`
-- [ ] M2 architect gate
+- [x] M2 architect gate — combined with M1; fixes `fccffbf`
 
 **M3 — LLM agent layer** (main session only)
 - [ ] M3 tasks
