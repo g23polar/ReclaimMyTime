@@ -82,4 +82,6 @@ jobs:
           enable-cache: true
           cache-dependency-glob: server/uv.lock
       - run: uv sync --locked
-      - run: uv run pytest -q -m slow
+      - name: Slow property tests
+        # exit 5 = no tests collected (no slow-marked tests on this ref); treat as pass
+        run: uv run pytest -q -m slow || [ $? -eq 5 ]
