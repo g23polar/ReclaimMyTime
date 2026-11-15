@@ -150,7 +150,7 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 - [x] T5.1 Skeleton + API client + mock — `a301a16`
 - [x] T5.2 Onboarding journey (sign-in, consent, chat intake, summary cards, preferences) — `265fba3`
 - [x] T5.3 Timetable + editing + diff + trade-off sheet — `8cd9aaa`
-- [ ] T5.4 Notifications + background
+- [x] T5.4 Notifications + background — `f208bcb` (drift detection stubbed until T4.3)
 - [ ] Intent-narrative panels (product owner)
 
 **M6 — Integration & hardening**
