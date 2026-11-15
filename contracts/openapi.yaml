@@ -1215,6 +1215,8 @@ components:
       description: block_pins row (user_id omitted). project_id null only for a blanket forbid.
       required: [id, project_id, span, kind, created_from_block_id, created_at]
       additionalProperties: false
+      if: {properties: {kind: {const: pin}}}
+      then: {properties: {project_id: {type: string, format: uuid}}}
       properties:
         id: {type: string, format: uuid}
         project_id: {type: [string, 'null'], format: uuid}
@@ -1388,6 +1390,8 @@ components:
           description: block_pins row to insert. project_id null only for a blanket forbid.
           required: [pin_id, project_id, span, kind, created_from_block_id]
           additionalProperties: false
+          if: {properties: {kind: {const: pin}}}
+          then: {properties: {project_id: {type: string, format: uuid}}}
           properties:
             pin_id: {type: string, format: uuid}
             project_id: {type: [string, 'null'], format: uuid}

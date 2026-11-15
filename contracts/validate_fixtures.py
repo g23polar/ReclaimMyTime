@@ -134,6 +134,8 @@ def check_plan(plan: dict, where: str, errs: list[str]) -> None:
             errs.append(f"{w}: duplicate lineage_id in one plan")
         lineages.add(b["lineage_id"])
         prev_end = e
+    if plan.get("infeasibility") is not None:
+        walk_semantics(plan["infeasibility"], f"{where}.infeasibility", errs)
 
 
 def check_diff(diff: dict, where: str, errs: list[str], plan: dict | None = None) -> None:
@@ -150,10 +152,10 @@ def check_diff(diff: dict, where: str, errs: list[str], plan: dict | None = None
         if d["change"] == "moved" and d["before"] == d["after"]:
             errs.append(f"{where}.entries[{i}]: moved but spans equal")
     if plan is not None:
-        after = {d["lineage_id"]: d["after"] for d in diff["entries"] if d["after"]}
-        blocks = {b["lineage_id"]: b["span"] for b in plan["blocks"]}
+        after = {d["lineage_id"]: (d["project_id"], d["after"]) for d in diff["entries"] if d["after"]}
+        blocks = {b["lineage_id"]: (b["project_id"], b["span"]) for b in plan["blocks"]}
         if after != blocks:
-            errs.append(f"{where}: diff 'after' side does not match the plan's blocks")
+            errs.append(f"{where}: diff 'after' side (project_id, span) does not match the plan's blocks")
 
 
 def check_changeset(cs: dict, where: str, errs: list[str]) -> None:
@@ -196,6 +198,9 @@ def walk_semantics(node, where: str, errs: list[str]) -> None:
         if {"start", "end"} == keys:
             check_span(node, where, errs)
             return
+        if "kind" in keys and "project_id" in keys and "span" in keys and node.get("kind") in ("pin", "forbid"):
+            if node["kind"] == "pin" and node["project_id"] is None:
+                errs.append(f"{where}: kind=pin requires a project_id (null is reserved for blanket forbids)")
         for k, v in node.items():
             walk_semantics(v, f"{where}.{k}", errs)
     elif isinstance(node, list):
