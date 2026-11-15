@@ -43,6 +43,7 @@ DECLINE = (
     "or moving blocks."
 )
 FALLBACK = "Sorry, I didn't catch that. Could you say it another way?"
+UPDATED = "Here's the proposal:"
 UNAVAILABLE = "The assistant is temporarily unavailable. Nothing was changed; try again."
 INTERNAL = "Something went wrong on our side. Nothing was changed; try again."
 STALE = (
@@ -65,25 +66,31 @@ class StaleBase(Exception):
 
 
 @dataclass(frozen=True)
-class Committed:
+class DryRun:
+    text: str  # the model's tool result
+    fingerprint: str  # identifies the solve (see Solve.fingerprint)
+
+
+@dataclass(frozen=True)
+class Solve:
     changeset: dict[str, Any] | None
-    narration: str | None  # template text for the persisted solve
-    matches_dry_run: bool  # the persisted solve is the one the model last saw and narrated
+    narration: str | None  # template text for this solve
+    fingerprint: str | None  # what the user is shown, minus ids; None when no changeset
 
 
 class Proposer(Protocol):
-    async def dry_run(self, staged: Sequence[StagedMutation]) -> str:
-        """Solve on a rolled-back transaction; text for the model's tool result.
-        Raises ToolError when the staged list cannot be proposed."""
+    async def dry_run(self, staged: Sequence[StagedMutation]) -> DryRun:
+        """Solve on a rolled-back transaction. Raises ToolError when the staged list cannot
+        be proposed."""
 
-    async def commit(self, staged: Sequence[StagedMutation]) -> Committed:
+    async def commit(self, staged: Sequence[StagedMutation]) -> Solve:
         """Persist the proposal (or, for an emptied list, retire the pending changeset).
         Raises StaleBase if the pending base changed during the turn."""
 
-    async def reshow(self, staged: Sequence[StagedMutation]) -> dict[str, Any] | None:
-        """The still-pending changeset this turn built on, unchanged. If its stored solve
-        differs from the last dry run (time passed, state moved), the dry-run solve is
-        committed instead so the card matches the narration. Raises StaleBase like commit."""
+    async def reshow(self, staged: Sequence[StagedMutation], expected: str | None) -> Solve:
+        """The still-pending changeset this turn built on, unchanged — unless its stored
+        solve differs from `expected` (the latest dry run), in which case that solve is
+        committed instead. Raises StaleBase like commit."""
 
 
 class AgentTurn:
@@ -170,9 +177,11 @@ class AgentTurn:
     async def _run(self) -> AsyncIterator[Event]:
         staging = self._staging
         text: list[str] = []
-        proposed = False  # propose_schedule ran (successfully) at least once
+        latest: str | None = None  # fingerprint of the latest successful dry run
+        narrated: str | None = None  # …of the latest dry run a later model call received
         finished = False
         for call in range(self._settings.max_model_calls):
+            narrated = latest  # this call sees every tool result returned so far
             if call == 0:
                 assert self._first is not None, "open() first"
                 stream = self._first
@@ -210,9 +219,9 @@ class AgentTurn:
                 if block.name == "propose_schedule":
                     yield "status", {"phase": "solving"}
                     try:
-                        content = await self._proposer.dry_run(staging.mutations)
-                        proposed = True
-                        results.append(_result(block.id, content))
+                        dry = await self._proposer.dry_run(staging.mutations)
+                        latest = dry.fingerprint
+                        results.append(_result(block.id, dry.text))
                     except ToolError as exc:
                         results.append(_result(block.id, str(exc), error=True))
                     continue
@@ -232,23 +241,21 @@ class AgentTurn:
                 yield _error("agent_unavailable", UNAVAILABLE)
                 return
 
-        changeset = narration = None
+        solve: Solve | None = None
         if staging.changed:
-            committed = await self._proposer.commit(staging.mutations)
-            changeset = committed.changeset
-            if not committed.matches_dry_run:
-                # The model never saw this solve (it staged without proposing — decision
-                # 2026-11-15 — or state moved since its dry run): the template explains it.
-                narration = committed.narration
-        elif proposed:
-            # Re-showing the unchanged pending proposal: its card, re-proposed only if the
-            # stored solve differs from the one the model just narrated.
-            changeset = await self._proposer.reshow(staging.mutations)
+            solve = await self._proposer.commit(staging.mutations)
+        elif latest is not None:
+            # Re-showing the unchanged pending proposal (re-committed only if it drifted).
+            solve = await self._proposer.reshow(staging.mutations, latest)
         reply = "".join(text).strip()
-        if narration:
-            sep = "\n\n" if reply else ""
-            yield "delta", {"text": sep + narration}
-            reply = f"{reply}{sep}{narration}"
+        if solve is not None and solve.changeset is not None and solve.fingerprint != narrated:
+            # The model never explained the persisted solve: it staged without proposing,
+            # its last call ended on the propose, or state moved after its dry run. Its text
+            # may describe another schedule, so the template replaces it (M3 gate, user
+            # decision 2026-11-15: done.reply must describe done.changeset). Clients replace
+            # streamed deltas with done.reply.
+            reply = f"{UPDATED} {solve.narration}"
+        changeset = None if solve is None else solve.changeset
         yield "done", {"outcome": "completed", "reply": reply or FALLBACK, "changeset": changeset}
 
 

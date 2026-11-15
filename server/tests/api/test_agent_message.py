@@ -158,13 +158,13 @@ async def test_snapshot_lists_labels_and_local_now(agent_app, client, fake):
     assert "Live schedule from now on:" in text
 
 
-async def test_auto_propose_appends_template_narration(agent_app, client, fake):
+async def test_auto_propose_replies_with_template_narration(agent_app, client, fake):
     fake.script = [
         Call([Tool("stage_exception_add", LAPTOP)], "tool_use"),
         Call([Text("Noted.")]),
     ]
     done = (await turn(client, ("user", "No laptop until Thursday.")))[-1]["data"]
-    assert done["reply"].startswith("Noted.\n\nNo laptop is blocked: ")
+    assert done["reply"].startswith("Here's the proposal: No laptop is blocked: ")
     assert done["changeset"]["status"] == "pending"
 
 

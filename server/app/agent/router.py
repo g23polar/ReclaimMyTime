@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.context import load_turn
-from app.agent.loop import AgentTurn, Committed, Event, StaleBase
+from app.agent.loop import AgentTurn, DryRun, Event, Solve, StaleBase
 from app.agent.narration import narrate, project_names
 from app.agent.prompt import render_snapshot
 from app.agent.settings import AgentSettings
@@ -184,9 +184,8 @@ class DbProposer:
         self._device_tz = device_tz
         self._names = committed_names
         self._pending_id = pending_id
-        self._last_dry_run: str | None = None  # fingerprint of the solve the model last saw
 
-    async def dry_run(self, staged: Sequence[StagedMutation]) -> str:
+    async def dry_run(self, staged: Sequence[StagedMutation]) -> DryRun:
         if not staged:
             raise ToolError("nothing is staged, so there is nothing to propose")
         async with self._maker() as session:
@@ -197,11 +196,11 @@ class DbProposer:
                 raise ToolError(f"cannot propose: {exc}") from None
             finally:
                 await tx.rollback()  # hypothetical: the real write is commit()
-        self._last_dry_run = _fingerprint(staged, view)
         status = "does not fully fit" if (view.get("plan") or {}).get("infeasibility") else "fits"
-        return f"Proposed schedule ({status}; shown to the user for confirmation): {narration}"
+        text = f"Proposed schedule ({status}; shown to the user for confirmation): {narration}"
+        return DryRun(text, _fingerprint(staged, view))
 
-    async def commit(self, staged: Sequence[StagedMutation]) -> Committed:
+    async def commit(self, staged: Sequence[StagedMutation]) -> Solve:
         async with transaction(self._maker) as tx:
             await lock_user(tx, self._user_id)
             if await _pending_id(tx, self._user_id) != self._pending_id:
@@ -210,23 +209,22 @@ class DbProposer:
                 # Everything pending was discarded: retire the pending changeset.
                 if self._pending_id is not None:
                     await reject_changeset(tx, self._user_id, self._pending_id, now=self._now)
-                return Committed(None, None, matches_dry_run=True)
+                return Solve(None, None, None)
             view, narration = await self._propose(tx, staged)
-        return Committed(
-            view, narration, matches_dry_run=_fingerprint(staged, view) == self._last_dry_run
-        )
+        return Solve(view, narration, _fingerprint(staged, view))
 
-    async def reshow(self, staged: Sequence[StagedMutation]) -> dict[str, Any] | None:
+    async def reshow(self, staged: Sequence[StagedMutation], expected: str | None) -> Solve:
         if self._pending_id is None:
-            return None
+            return Solve(None, None, None)
         async with transaction(self._maker) as tx:
             await lock_user(tx, self._user_id)
             if await _pending_id(tx, self._user_id) != self._pending_id:
                 raise StaleBase()
             view = await changeset_view(tx, self._user_id, self._pending_id)
-        if _fingerprint(staged, view) == self._last_dry_run:
-            return view
-        return (await self.commit(staged)).changeset
+            fingerprint = _fingerprint(staged, view)
+            if fingerprint == expected:
+                return Solve(view, self._narrate(staged, view), fingerprint)
+        return await self.commit(staged)
 
     async def _propose(
         self, tx: AsyncSession, staged: Sequence[StagedMutation]
@@ -234,15 +232,17 @@ class DbProposer:
         # TODO(T4.2): pass freeBusy intervals; agent solves run with busy=[] until then.
         changeset_id = await propose_changeset(tx, self._user_id, staged, now=self._now)
         view = await changeset_view(tx, self._user_id, changeset_id)
+        return view, self._narrate(staged, view)
+
+    def _narrate(self, staged: Sequence[StagedMutation], view: dict[str, Any]) -> str:
         plan = view["plan"]
-        narration = narrate(
+        return narrate(
             staged=staged,
             plan=plan,
             diff=view["diff"],
             names=project_names(staged, self._names),
             timezone=plan["timezone"] if plan else self._device_tz,
         )
-        return view, narration
 
 
 async def _pending_id(tx: AsyncSession, user_id: uuid.UUID) -> uuid.UUID | None:

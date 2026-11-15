@@ -8,7 +8,16 @@ from typing import Any
 import anthropic
 import pytest
 
-from app.agent.loop import DECLINE, FALLBACK, STALE, AgentTurn, Committed, StaleBase
+from app.agent.loop import (
+    DECLINE,
+    FALLBACK,
+    STALE,
+    UPDATED,
+    AgentTurn,
+    DryRun,
+    Solve,
+    StaleBase,
+)
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.schemas import tool_definitions
 from app.agent.settings import AgentSettings
@@ -26,31 +35,36 @@ class Msg:
 
 
 class FakeProposer:
-    """Fingerprints a solve by its staged list unless `drift` says committed state moved."""
+    """Fingerprints a solve by its staged list; `drift` makes the committed solve differ
+    from every dry run (state moved underneath the turn)."""
 
     def __init__(self, narration: str = "Add Novel: 5h every week.", *, drift=False) -> None:
         self.narration = narration
         self.drift = drift
         self.dry_runs: list[list[Any]] = []
         self.commits: list[list[Any]] = []
-        self.current_calls = 0
+        self.reshows: list[str | None] = []
+
+    @staticmethod
+    def fp(staged) -> str:
+        return repr(list(staged))
 
     async def dry_run(self, staged):
         if not staged:
             raise ToolError("nothing is staged, so there is nothing to propose")
         self.dry_runs.append(list(staged))
-        return f"Proposed schedule (fits): {self.narration}"
+        return DryRun(f"Proposed schedule (fits): {self.narration}", self.fp(staged))
 
     async def commit(self, staged):
         self.commits.append(list(staged))
         if not staged:
-            return Committed(None, None, matches_dry_run=True)
-        seen = bool(self.dry_runs) and self.dry_runs[-1] == list(staged) and not self.drift
-        return Committed(CHANGESET, self.narration, matches_dry_run=seen)
+            return Solve(None, None, None)
+        return Solve(CHANGESET, self.narration, self.fp(staged) + ("~" if self.drift else ""))
 
-    async def reshow(self, staged):
-        self.current_calls += 1
-        return {"id": "pending-cs"}
+    async def reshow(self, staged, expected):
+        self.reshows.append(expected)
+        fp = self.fp(staged) + ("~" if self.drift else "")
+        return Solve({"id": "pending-cs"}, self.narration, fp)
 
 
 async def run(
@@ -172,12 +186,13 @@ async def test_staged_but_not_proposed_is_proposed_with_template_narration():
     )
     events, proposer, _ = await run(fake)
     done = terminal(events)[1]
-    assert done["reply"] == "Added your novel.\n\nAdd Novel: 5h every week."
+    # The model never saw a solve: its text is replaced by the template (M3 gate).
+    assert done["reply"] == f"{UPDATED} Add Novel: 5h every week."
     assert done["changeset"] == CHANGESET
     assert proposer.dry_runs == [] and len(proposer.commits) == 1
 
 
-async def test_restaging_after_propose_appends_narration_for_the_final_state():
+async def test_restaging_after_propose_replaces_reply_with_the_final_solve():
     fake = FakeAnthropic(
         Call([Tool("stage_project_create", _create())], "tool_use"),
         Call([Tool("propose_schedule", {})], "tool_use"),
@@ -185,7 +200,7 @@ async def test_restaging_after_propose_appends_narration_for_the_final_state():
         Call([Text("Also added piano.")]),
     )
     events, proposer, _ = await run(fake)
-    assert terminal(events)[1]["reply"].endswith("\n\nAdd Novel: 5h every week.")
+    assert terminal(events)[1]["reply"] == f"{UPDATED} Add Novel: 5h every week."
     assert len(proposer.commits[0]) == 2
 
 
@@ -254,7 +269,22 @@ async def test_cap_with_staged_changes_ends_like_a_turn():
     events, proposer, _ = await run(fake, calls=2)
     done = terminal(events)
     assert done[0] == "done" and done[1]["changeset"] == CHANGESET
+    assert done[1]["reply"] == f"{UPDATED} Add Novel: 5h every week."
     assert len(fake.requests) == 2 and len(proposer.commits) == 1
+
+
+async def test_propose_on_the_last_allowed_call_is_explained_by_the_template():
+    # M3 gate: the model never received this dry run's result, so it never explained it —
+    # even though the committed solve matches it.
+    fake = FakeAnthropic(
+        Call([Text("All set, everything fits!"), Tool("stage_project_create", _create())],
+             "tool_use"),
+        Call([Tool("propose_schedule", {})], "tool_use"),
+    )  # fmt: skip
+    events, proposer, _ = await run(fake, calls=2)
+    done = terminal(events)[1]
+    assert done["reply"] == f"{UPDATED} Add Novel: 5h every week."
+    assert len(proposer.dry_runs) == 1 and len(proposer.commits) == 1
 
 
 async def test_cap_without_staged_changes_is_an_error():
@@ -319,15 +349,15 @@ async def test_commit_failure_is_an_internal_error():
 # ---------------------------------------------------------------- review fixes (T3.2)
 
 
-async def test_committed_solve_differing_from_dry_run_is_narrated():
-    # Review: state moved between dry run and commit → the reply must describe the commit.
+async def test_committed_solve_differing_from_dry_run_replaces_the_reply():
+    # State moved between dry run and commit: the model's text describes another schedule.
     fake = FakeAnthropic(
         Call([Tool("stage_project_create", _create())], "tool_use"),
         Call([Tool("propose_schedule", {})], "tool_use"),
         Call([Text("Novel fits Mon and Wed.")]),
     )
     events, _, _ = await run(fake, proposer=FakeProposer(drift=True))
-    assert terminal(events)[1]["reply"] == "Novel fits Mon and Wed.\n\nAdd Novel: 5h every week."
+    assert terminal(events)[1]["reply"] == f"{UPDATED} Add Novel: 5h every week."
 
 
 async def test_reshowing_unchanged_pending_returns_its_card_without_writing():
@@ -339,8 +369,23 @@ async def test_reshowing_unchanged_pending_returns_its_card_without_writing():
     )
     proposer = FakeProposer()
     events, _, _ = await run(fake, staging=_turn(pending=first.mutations), proposer=proposer)
-    assert terminal(events)[1]["changeset"] == {"id": "pending-cs"}
-    assert proposer.commits == [] and proposer.current_calls == 1
+    done = terminal(events)[1]
+    assert done["changeset"] == {"id": "pending-cs"}
+    assert done["reply"] == "Here it is again. OK?"  # the model narrated this very solve
+    assert proposer.commits == [] and proposer.reshows == [FakeProposer.fp(first.mutations)]
+
+
+async def test_reshow_that_drifted_replaces_the_reply():
+    # M3 gate: re-show re-committed a solve that differs from the narrated dry run.
+    first = _turn()
+    first.call("stage_project_create", _create())
+    fake = FakeAnthropic(
+        Call([Tool("propose_schedule", {})], "tool_use"),
+        Call([Text("Same as before, all fits.")]),
+    )
+    proposer = FakeProposer(drift=True)
+    events, _, _ = await run(fake, staging=_turn(pending=first.mutations), proposer=proposer)
+    assert terminal(events)[1]["reply"] == f"{UPDATED} Add Novel: 5h every week."
 
 
 async def test_stale_base_is_a_terminal_error():

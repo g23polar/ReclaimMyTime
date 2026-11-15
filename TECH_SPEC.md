@@ -141,7 +141,7 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 - [x] T3.1 Extraction schemas + tools — `dca878e`
 - [x] T3.3 Narration templates — `dca878e`
 - [x] T3.2 `/agent/message` handler — T3.2 commit (2 Tessl rounds; no live API test by decision)
-- [ ] M3 architect gate
+- [x] M3 architect gate — Tessl lens; 3 majors (reply vs persisted solve) fixed
 
 **M4 — Google Calendar**
 - [ ] T4.1 OAuth + connection lifecycle
