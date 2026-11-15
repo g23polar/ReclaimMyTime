@@ -1046,7 +1046,7 @@ components:
         pin_kind: {$ref: '#/components/schemas/PinKind'}
         project_id: {type: [string, 'null'], format: uuid}
         span: {$ref: '#/components/schemas/Span'}
-        conflicts_with: {type: string, enum: [busy, exception, window, buffer, overlap, forbid, horizon]}
+        conflicts_with: {type: string, enum: [busy, exception, window, buffer, overlap, forbid, horizon, before_now, preferred_window]}
         exception_id: {type: [string, 'null'], format: uuid, description: Set when conflicts_with = exception.}
         related_lineage_ids: {type: array, items: {type: string, format: uuid}, description: The other block(s) involved when conflicts_with is overlap or buffer; empty otherwise.}
     Relaxation:
