@@ -287,7 +287,10 @@ def staged_out(staged: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 
 def changeset_out(
-    cs: Changeset, plan: dict[str, Any] | None, diff: dict[str, Any] | None
+    cs: Changeset,
+    plan: dict[str, Any] | None,
+    diff: dict[str, Any] | None,
+    narration: str | None = None,
 ) -> dict[str, Any]:
     """`plan_id`, `plan` and `diff` are all set or all null."""
     return {
@@ -299,6 +302,5 @@ def changeset_out(
         "resolved_at": opt_ts(cs.resolved_at),
         "plan": plan,
         "diff": diff,
-        # TODO(T3.3): deterministic narration templates for manual/system proposals.
-        "narration": None,
+        "narration": narration,
     }

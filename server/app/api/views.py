@@ -11,8 +11,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.narration import narrate, project_names
 from app.api.mappers import DiffBlock, changeset_out, diff_out, plan_out
-from app.db.models import Block, Changeset, WeekPlan
+from app.db.models import Block, Changeset, Project, WeekPlan
+from app.db.models.staged import parse_staged
 from app.db.solver_io import completed_minutes
 
 
@@ -95,9 +97,31 @@ async def changeset_view(
             .execution_options(populate_existing=True)
         )
     ).scalar_one()
-    if cs.plan_id is None:
-        return changeset_out(cs, None, None)
-    plan = await get_plan(tx, user_id, cs.plan_id)
-    assert plan is not None, "changesets.plan_id is ON DELETE SET NULL"
-    against = await _against(tx, user_id, cs, plan)
-    return changeset_out(cs, await plan_view(tx, user_id, plan), await diff_view(tx, plan, against))
+    plan_body = diff_body = None
+    if cs.plan_id is not None:
+        plan = await get_plan(tx, user_id, cs.plan_id)
+        assert plan is not None, "changesets.plan_id is ON DELETE SET NULL"
+        against = await _against(tx, user_id, cs, plan)
+        plan_body = await plan_view(tx, user_id, plan)
+        diff_body = await diff_view(tx, plan, against)
+    return changeset_out(
+        cs, plan_body, diff_body, await _narration(tx, user_id, cs, plan_body, diff_body)
+    )
+
+
+async def _narration(
+    tx: AsyncSession,
+    user_id: uuid.UUID,
+    cs: Changeset,
+    plan: dict[str, Any] | None,
+    diff: dict[str, Any] | None,
+) -> str | None:
+    """T3.3 template text when the write that produced this proposal (the last staged entry)
+    was manual or system; null when the agent made it — its reply narrates (contract)."""
+    staged = parse_staged(cs.staged)
+    if not staged or staged[-1].source == "agent":
+        return None
+    rows = await tx.execute(select(Project.id, Project.name).where(Project.user_id == user_id))
+    names = project_names(staged, {str(pid): name for pid, name in rows})
+    timezone = None if plan is None else plan["timezone"]
+    return narrate(staged=staged, plan=plan, diff=diff, names=names, timezone=timezone)
