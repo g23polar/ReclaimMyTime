@@ -123,7 +123,7 @@ paths:
           schema: {type: boolean, default: false}
       responses:
         '200':
-          description: All projects (no pagination in v1), ordered by created_at ascending.
+          description: All confirmed projects (no pagination in v1), ordered by created_at ascending. Projects with status `staged` are excluded; they are visible only inside their pending Changeset (D23).
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ProjectList'}
@@ -156,7 +156,7 @@ paths:
       tags: [projects]
       responses:
         '200':
-          description: The project (archived projects are still readable).
+          description: The project (archived projects are still readable; a `staged` project returns 404 `not_found` until its changeset is confirmed — D23).
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Project'}
@@ -696,7 +696,10 @@ components:
     # ---------------------------------------------------------------- enums (verbatim DDL)
     ConnectionStatus: {type: string, enum: [active, revoked]}
     ProjectKind: {type: string, enum: [deadline, perennial]}
-    ProjectStatus: {type: string, enum: [active, paused, done, archived]}
+    ProjectStatus:
+      type: string
+      enum: [staged, active, paused, done, archived]
+      description: staged = inserted by a pending project_created mutation (O1); visible only inside its Changeset, never in list/get (D23).
     DayDiversity: {type: string, enum: [focused, mixed]}
     PinKind: {type: string, enum: [pin, forbid]}
     PlanStatus: {type: string, enum: [proposed, live, superseded, rejected]}

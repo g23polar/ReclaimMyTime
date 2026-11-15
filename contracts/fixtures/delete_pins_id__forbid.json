@@ -3,7 +3,7 @@
   "method": "DELETE",
   "path": "/pins/{pin_id}",
   "case": "forbid",
-  "description": "Remove the forbid → re-solve proposal against live v9.",
+  "description": "Remove the forbid \u2192 re-solve proposal against live v9.",
   "request": {
     "headers": {
       "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
@@ -153,7 +153,7 @@
             "id": "d651ae51-8262-5f68-9c94-a1e70cd615bc",
             "plan_id": "9c0d4e2b-6a1f-4c8e-a3b7-2f5d1e9c8a10",
             "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b03",
-            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000017",
+            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000011",
             "span": {
               "start": "2026-11-22T23:00:00Z",
               "end": "2026-11-23T00:00:00Z"
@@ -279,22 +279,15 @@
               "start": "2026-11-22T00:00:00Z",
               "end": "2026-11-22T01:00:00Z"
             },
-            "after": null,
-            "change": "removed"
-          },
-          {
-            "lineage_id": "1a2b3c4d-5e6f-4a7b-8c9d-000000000017",
-            "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b03",
-            "before": null,
             "after": {
               "start": "2026-11-22T23:00:00Z",
               "end": "2026-11-23T00:00:00Z"
             },
-            "change": "added"
+            "change": "moved"
           }
         ]
       },
-      "narration": "Sun 3–4 PM is open again: Reading moves back from Saturday."
+      "narration": "Sun 3\u20134 PM is open again: Reading moves back from Saturday."
     }
   }
 }
