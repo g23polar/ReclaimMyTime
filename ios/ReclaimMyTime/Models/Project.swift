@@ -94,6 +94,13 @@ struct Project: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+/// `PATCH /projects/{id}`: a name-only edit is applied directly (200 + Project); anything else is
+/// staged (202 + Changeset).
+enum UpdateProjectResult: Hashable, Sendable {
+    case applied(Project)
+    case staged(Changeset)
+}
+
 struct ProjectList: Codable, Hashable, Sendable {
     let projects: [Project]
 }

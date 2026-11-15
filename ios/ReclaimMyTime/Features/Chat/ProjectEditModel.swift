@@ -104,8 +104,9 @@ final class ProjectEditModel {
         return patch == ProjectPatch() ? nil : patch
     }
 
-    /// Returns the new pending changeset, or nil (with `errorMessage`) on failure or no change.
-    func save(api: any APIClient) async -> Changeset? {
+    /// Returns the server's answer (a name-only edit is applied, anything else staged), or nil
+    /// (with `errorMessage`) on failure or no change.
+    func save(api: any APIClient) async -> UpdateProjectResult? {
         guard canSave, let patch = makePatch() else { return nil }
         isSaving = true
         errorMessage = nil

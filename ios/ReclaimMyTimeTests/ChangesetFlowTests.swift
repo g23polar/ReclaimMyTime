@@ -161,7 +161,8 @@ final class ProjectEditTests: XCTestCase {
         edit.weeklyTargetHours = 3
         XCTAssertEqual(edit.makePatch(), ProjectPatch(weeklyTargetHours: 3))
 
-        let replacement = try await XCTUnwrapAsync(await edit.save(api: h.model.api))
+        let result = try await XCTUnwrapAsync(await edit.save(api: h.model.api))
+        guard case .staged(let replacement) = result else { return XCTFail("a weekly-target edit is staged (202)") }
         await h.chat.applyEdit(entryId: entry.id, changeset: replacement)
 
         let patches = await h.transport.requests(method: "PATCH", path: "/projects/\(T52Fixtures.workoutId.pathComponent)")

@@ -44,6 +44,7 @@ final class CalendarConnectionModel {
 
     static let statusKey = "gcalConnectionStatus"
     static let consentCompletedKey = "gcalConsentCompletedUsers"
+    static let revokedBannerKey = "gcalRevokedBannerShown"
 
     private(set) var status: Status
     private(set) var connectedEmail: String?
@@ -53,6 +54,8 @@ final class CalendarConnectionModel {
     /// routing observes `completeConsentStep`.
     private(set) var consentCompletedUsers: Set<String>
     private(set) var activeUserId: UUID?
+    /// The one-time "Google Calendar disconnected" banner (design/notifications.md §5).
+    private(set) var showsRevokedBanner = false
 
     private let api: any APIClient
     private let defaults: UserDefaults
@@ -84,6 +87,7 @@ final class CalendarConnectionModel {
         connectedEmail = nil
         callout = nil
         isConnecting = false
+        showsRevokedBanner = false
         status = userId.flatMap { defaults.string(forKey: statusKey(for: $0)) }.flatMap(Status.init(rawValue:)) ?? .unknown
     }
 
@@ -138,6 +142,7 @@ final class CalendarConnectionModel {
         case .connected:
             callout = nil
             setStatus(.connected)
+            clearRevokedBannerMarker()
             return true
         case .error(let code):
             callout = Self.callout(forCode: code)
@@ -163,6 +168,11 @@ final class CalendarConnectionModel {
             if let connection = remote.connection {
                 connectedEmail = connection.googleEmail
                 setStatus(connection.status == .active ? .connected : .revoked)
+                if connection.status == .active {
+                    clearRevokedBannerMarker()
+                } else {
+                    raiseRevokedBannerOnce(revokedAt: connection.revokedAt)
+                }
             } else {
                 connectedEmail = nil
                 setStatus(.notConnected)
@@ -170,6 +180,32 @@ final class CalendarConnectionModel {
         } catch {
             logger.notice("Couldn't refresh calendar status")
         }
+    }
+
+    func dismissRevokedBanner() {
+        showsRevokedBanner = false
+    }
+
+    /// Per-account, per-backend key remembering which revocation the banner already announced.
+    func revokedBannerKey(for userId: UUID) -> String {
+        "\(Self.revokedBannerKey).\(scope).\(userId.uuidString)"
+    }
+
+    /// Shown once per revocation: marked when raised, so a relaunch doesn't show it again. A later
+    /// reconnect clears the marker, so a second revocation is announced too.
+    private func raiseRevokedBannerOnce(revokedAt: Date?) {
+        guard let activeUserId else { return }
+        let marker = revokedAt.map { String($0.timeIntervalSince1970) } ?? "revoked"
+        let key = revokedBannerKey(for: activeUserId)
+        guard defaults.string(forKey: key) != marker else { return }
+        defaults.set(marker, forKey: key)
+        showsRevokedBanner = true
+    }
+
+    private func clearRevokedBannerMarker() {
+        guard let activeUserId else { return }
+        defaults.removeObject(forKey: revokedBannerKey(for: activeUserId))
+        showsRevokedBanner = false
     }
 
     func dismissCallout() {

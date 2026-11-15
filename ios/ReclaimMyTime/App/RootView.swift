@@ -6,6 +6,7 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(AuthState.self) private var auth
     @AppStorage("hasSeenIntro") private var hasSeenIntro = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -39,6 +40,9 @@ struct RootView: View {
         .onChange(of: auth.phase, initial: true) { _, phase in
             model.handleAuthPhase(phase)
         }
+        .onChange(of: scenePhase) { _, phase in
+            model.handleScenePhase(phase)
+        }
     }
 }
 
@@ -65,9 +69,21 @@ struct MainTabView: View {
 
     var body: some View {
         @Bindable var navigation = model.navigation
+        let timezone = model.timezone
+        let timezonePrompt = Binding<TimezoneMonitor.Prompt?>(
+            get: { navigation.selectedTab == .week && !navigation.isReviewingProposal ? timezone.prompt : nil },
+            set: { value in
+                if value == nil, timezone.prompt != nil, !timezone.isReplanning { timezone.dismissForNow() }
+            }
+        )
         TabView(selection: $navigation.selectedTab) {
             WeekView()
-                .pendingChangesetBanner()
+                .pendingChangesetBanner { NotificationPrePromptCard() }
+                .sheet(item: timezonePrompt, onDismiss: {
+                    if timezone.consumeReviewRequest() { navigation.presentReview() }
+                }) { prompt in
+                    TimezoneChangeSheet(prompt: prompt)
+                }
                 .tabItem { Label("Week", systemImage: "calendar") }
                 .tag(AppTab.week)
             ChatView() // draws the banner itself, below its composer
@@ -82,6 +98,7 @@ struct MainTabView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppTab.settings)
         }
+        .safeAreaInset(edge: .top, spacing: 0) { GcalRevokedBanner() }
         .changesetNoticeToast()
         .sheet(isPresented: $navigation.isReviewingProposal) {
             ProposalReviewSheet()

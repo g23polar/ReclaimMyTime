@@ -8,9 +8,13 @@ import Observation
 @Observable
 final class ProjectDirectory {
     private(set) var known: [UUID: ProjectCard] = [:]
+    /// Names applied directly by a name-only `PATCH /projects` (200), newer than any staged draft.
+    private var appliedNames: [UUID: String] = [:]
     private var inFlight: Set<UUID> = []
     private var generation = 0
     private let api: any APIClient
+    /// Called after a successful `GET /projects/{id}`: other caches of that project are older.
+    var onProjectRead: (@MainActor (Project) -> Void)?
 
     init(api: any APIClient) {
         self.api = api
@@ -27,6 +31,19 @@ final class ProjectDirectory {
                 known[projectId] = ProjectCard(id: projectId, draft: draft, isNew: true)
             }
         }
+    }
+
+    func appliedName(for id: UUID) -> String? {
+        appliedNames[id]
+    }
+
+    /// A name-only edit came back applied (200 + Project): the server's row is the newest copy.
+    func applyApplied(_ project: Project) {
+        var card = ProjectCard(project: project)
+        card.isNew = known[project.id]?.isNew ?? false
+        known[project.id] = card
+        appliedNames[project.id] = project.name
+        onProjectRead?(project)
     }
 
     /// After confirm the staged values are live: fold them in.
@@ -55,7 +72,10 @@ final class ProjectDirectory {
             let project = try? await api.getProject(id: id)
             guard started == generation else { return }
             inFlight.remove(id)
-            if let project { known[id] = ProjectCard(project: project) }
+            if let project {
+                known[id] = ProjectCard(project: project)
+                onProjectRead?(project)
+            }
         }
     }
 
@@ -63,5 +83,6 @@ final class ProjectDirectory {
         generation += 1
         inFlight.removeAll()
         known.removeAll()
+        appliedNames.removeAll()
     }
 }

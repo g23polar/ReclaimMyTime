@@ -1,11 +1,13 @@
 import SwiftUI
+import UIKit
 
-/// Settings: Google Calendar connection, backend mode and sign-out. Account deletion and the rest
+/// Settings: Google Calendar connection, notifications, backend mode and sign-out. Account deletion and the rest
 /// come in later tasks.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(AuthState.self) private var auth
     @Environment(\.webAuthenticationSession) private var webAuthenticationSession
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         let calendar = model.calendar
@@ -30,6 +32,7 @@ struct SettingsView: View {
                             .foregroundStyle(ColorToken.warning)
                     }
                 }
+                notificationsSection
                 Section("Backend") {
                     LabeledContent("Mode", value: model.config.usesMock ? "Mock fixtures" : model.config.baseURL.absoluteString)
                 }
@@ -42,6 +45,33 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .task { await calendar.refreshStatus() }
         }
+    }
+
+    /// design/notifications.md §2: "Heads-up 10 minutes before" (off by default).
+    @ViewBuilder
+    private var notificationsSection: some View {
+        @Bindable var notifications = model.notifications
+        Section {
+            Toggle("Heads-up 10 minutes before", isOn: $notifications.warningsEnabled)
+            switch notifications.authorization {
+            case .authorized:
+                EmptyView()
+            case .notDetermined:
+                Button("Turn on notifications") {
+                    Task { await notifications.requestFromSettings() }
+                }
+            case .denied:
+                // SwiftUI has no settings-URL API; the UIKit constant is the only route.
+                Button("Notifications are off. Open iOS Settings") {
+                    if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
+                }
+            }
+        } header: {
+            Text("Notifications")
+        } footer: {
+            Text("A nudge when each block starts.")
+        }
+        .task { await notifications.refreshAuthorization() }
     }
 
     private func connectButton(title: String) -> some View {

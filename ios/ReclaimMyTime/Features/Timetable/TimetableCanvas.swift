@@ -14,7 +14,7 @@ struct TimetableCanvas<BlockLayer: View>: View {
     var body: some View {
         let timetable = model.timetable
         ZStack(alignment: .topLeading) {
-            HourGutter(metrics: metrics, time: timetable.timeText)
+            HourGutter(metrics: metrics, time: timetable.timeText, origin: TimetableGeometry.labelOrigin(columns: columns))
             ZStack(alignment: .topLeading) {
                 GridBackground(
                     columnCount: columns.count,

@@ -29,7 +29,7 @@ struct GridMetrics: Hashable, Sendable {
     }
 }
 
-/// A span clipped to one column, in wall-clock minutes of that day.
+/// A span clipped to one column, in minutes elapsed since that column's start.
 struct ColumnSegment: Hashable, Sendable {
     let column: Int
     let startMinute: Double
@@ -53,6 +53,45 @@ enum TimetableGeometry {
         }
     }
 
+    /// The local days `span` touches, in order: `[span.start, span.end)` split at local midnights.
+    /// A plan horizon built in another zone (or a DST week, 167/169 h) can touch 6–8 dates; every
+    /// one gets a column so no block falls off the grid.
+    static func columns(spanning span: Span, calendar: Calendar) -> [DayColumn] {
+        var result: [DayColumn] = []
+        var dayStart = calendar.startOfDay(for: span.start)
+        while dayStart < span.end, result.count < 14 {
+            guard let next = calendar.date(byAdding: .day, value: 1, to: dayStart), next > dayStart else { break }
+            result.append(DayColumn(start: dayStart, end: next))
+            dayStart = next
+        }
+        return result
+    }
+
+    /// Gutter label for grid row `hour`: the wall-clock hour at `origin + hour` elapsed hours, so a
+    /// fall-back day reads 12 AM, 1 AM, 1 AM, 2 AM and a spring-forward day skips 2 AM.
+    static func hourLabel(hour: Int, origin: Date?, time: TimeText) -> String {
+        let style = Date.FormatStyle(date: .omitted, time: .omitted, locale: time.locale, calendar: time.calendar, timeZone: time.calendar.timeZone).hour()
+        if let origin {
+            return origin.addingTimeInterval(Double(hour) * 3600).formatted(style)
+        }
+        var parts = DateComponents()
+        parts.hour = hour % 24
+        parts.minute = 0
+        return (time.calendar.date(from: parts) ?? Date()).formatted(style)
+    }
+
+    /// The column whose start labels a shared gutter: the first ordinary (24 h) day, so a DST day
+    /// in a multi-day grid doesn't relabel every other column.
+    static func labelOrigin(columns: [DayColumn]) -> Date? {
+        (columns.first { $0.end.timeIntervalSince($0.start) == 86_400 } ?? columns.first)?.start
+    }
+
+    /// Grid row (elapsed hour of its column) to scroll to so `date` sits near the top.
+    static func anchorHour(for date: Date, columns: [DayColumn], calendar: Calendar) -> Int? {
+        guard let column = columns.first(where: { $0.contains(date) }) else { return nil }
+        return Int(minuteOfDay(date, in: column, calendar: calendar) / 60) - 1
+    }
+
     /// Start of the week containing `date`, with weeks starting on ISO weekday `isoWeekStart`
     /// (1 = Monday … 7 = Sunday, D20).
     static func weekStart(containing date: Date, isoWeekStart: Int, calendar: Calendar) -> Date {
@@ -61,12 +100,12 @@ enum TimetableGeometry {
         return cal.dateInterval(of: .weekOfYear, for: date)?.start ?? cal.startOfDay(for: date)
     }
 
-    /// Wall-clock minute of `date` within `column` (0 at or before its start, 1440 at or after its end).
+    /// Minutes elapsed from the column's start instant to `date`, clamped to the column. Elapsed
+    /// time, not wall clock: on a DST day the column is 1380 or 1500 minutes long and a span across
+    /// the repeated hour keeps its true length (wall-clock minutes would run backwards there).
     static func minuteOfDay(_ date: Date, in column: DayColumn, calendar: Calendar) -> Double {
-        if date <= column.start { return 0 }
-        if date >= column.end { return 24 * 60 }
-        let parts = calendar.dateComponents([.hour, .minute, .second], from: date)
-        return Double((parts.hour ?? 0) * 60 + (parts.minute ?? 0)) + Double(parts.second ?? 0) / 60
+        let clamped = min(max(date, column.start), column.end)
+        return clamped.timeIntervalSince(column.start) / 60
     }
 
     /// The parts of `span` that fall in each column (a span crossing midnight yields two).
@@ -81,7 +120,7 @@ enum TimetableGeometry {
     }
 
     /// Schedulable windows (local times in `windowTimeZone`, the preferences zone) projected onto
-    /// a display column, as wall-clock minute ranges. Neighbouring dates are included so a zone
+    /// a display column, as minute ranges elapsed from the column start. Neighbouring dates are included so a zone
     /// difference that shifts a window across midnight still lands in the right column.
     static func windowMinutes(for column: DayColumn, windows: WeekWindows, windowTimeZone: TimeZone, calendar: Calendar) -> [(Double, Double)] {
         let display = LocalDate.gregorian(timeZone: calendar.timeZone)
@@ -143,8 +182,9 @@ enum TimetableGeometry {
                 high = max(high, segment.endMinute)
             }
         }
+        let longest = columns.map { Int(($0.end.timeIntervalSince($0.start) / 3600).rounded(.up)) }.max() ?? 24
         let startHour = max(0, Int((low / 60).rounded(.down)))
-        let endHour = min(24, max(startHour + 1, Int((high / 60).rounded(.up))))
+        let endHour = min(max(24, longest), max(startHour + 1, Int((high / 60).rounded(.up))))
         return GridMetrics(startHour: startHour, endHour: endHour, pointsPerHour: pointsPerHour)
     }
 

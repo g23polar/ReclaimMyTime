@@ -11,7 +11,7 @@ struct GridBackground: View {
     let columnCount: Int
     let metrics: GridMetrics
     let columnWidth: CGFloat
-    /// Per column: wall-clock minute ranges outside the schedulable windows.
+    /// Per column: minute ranges (elapsed from the column start) outside the schedulable windows.
     let outsideBands: [[(Double, Double)]]
 
     var body: some View {
@@ -60,6 +60,8 @@ struct GridBackground: View {
 struct HourGutter: View {
     let metrics: GridMetrics
     var time = TimeText()
+    /// Start of the column the labels follow (elapsed hours from it); nil = plain clock hours.
+    var origin: Date?
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -87,11 +89,7 @@ struct HourGutter: View {
     }
 
     private func label(_ hour: Int) -> String {
-        var parts = DateComponents()
-        parts.hour = hour % 24
-        parts.minute = 0
-        let date = time.calendar.date(from: parts) ?? Date()
-        return date.formatted(Date.FormatStyle(date: .omitted, time: .omitted, locale: time.locale, calendar: time.calendar, timeZone: time.calendar.timeZone).hour())
+        TimetableGeometry.hourLabel(hour: hour, origin: origin, time: time)
     }
 }
 

@@ -139,6 +139,18 @@ final class ChatModel {
         await pendingStore.confirm(id: changeset.id)
     }
 
+    /// The Edit sheet's PATCH answer. A name-only edit came back applied (200 + Project): the
+    /// project and its card rename in place and the pending changeset is left alone. Anything
+    /// else was staged (202) and supersedes the pending changeset.
+    func applyEdit(entryId: UUID, result: UpdateProjectResult) async {
+        switch result {
+        case .applied(let project):
+            directory.applyApplied(project)
+        case .staged(let changeset):
+            await applyEdit(entryId: entryId, changeset: changeset)
+        }
+    }
+
     /// The Edit sheet's PATCH returned a new pending changeset: it supersedes the old one and the
     /// cards under `entryId` update in place.
     func applyEdit(entryId: UUID, changeset: Changeset) async {
@@ -152,7 +164,17 @@ final class ChatModel {
     /// Cards for an entry's changeset.
     func cards(for entry: Entry) -> [ProjectCard] {
         guard let changeset = entry.changeset else { return [] }
-        return ProjectCardDerivation.cards(from: changeset, base: { directory.card(for: $0) })
+        let created = Set(changeset.staged.compactMap { mutation -> UUID? in
+            if case let .projectCreated(id, _) = mutation.change { return id }
+            return nil
+        })
+        return ProjectCardDerivation.cards(from: changeset, base: { directory.card(for: $0) }).map { card in
+            // A creation card is drawn from its staged draft; a rename applied since wins.
+            guard created.contains(card.id), let name = directory.appliedName(for: card.id) else { return card }
+            var renamed = card
+            renamed.name = name
+            return renamed
+        }
     }
 
     /// Submit on the preferences cards: `PUT /preferences` → 202 → pending; with a plan, go to Week.

@@ -112,7 +112,7 @@ struct ProposalReviewSheet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if let diff = DiffModel(changeset) {
-                let columns = TimetableGeometry.columns(from: diff.plan.horizon.start, calendar: model.timetable.calendar)
+                let columns = TimetableGeometry.columns(spanning: diff.plan.horizon, calendar: model.timetable.calendar)
                 if isList {
                     DiffList(diff: diff, columns: columns)
                 } else {

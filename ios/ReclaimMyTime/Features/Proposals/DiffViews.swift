@@ -173,8 +173,7 @@ struct DiffGrid: View {
                     }
                     .onAppear {
                         let firstChange = diff.changes.compactMap(\.displaySpan).map(\.start).min() ?? diff.allSpans.map(\.start).min()
-                        if let firstChange {
-                            let hour = timetable.calendar.component(.hour, from: firstChange) - 1
+                        if let firstChange, let hour = TimetableGeometry.anchorHour(for: firstChange, columns: columns, calendar: timetable.calendar) {
                             reader.scrollTo("hour-\(max(metrics.startHour, min(hour, metrics.endHour)))", anchor: .top)
                         }
                     }

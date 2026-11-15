@@ -178,7 +178,13 @@ enum RelaxationRequest: Hashable, Sendable {
     /// Sends the write; the 202 body is the new pending changeset.
     func send(_ api: any APIClient) async throws -> Changeset {
         switch self {
-        case let .patchProject(id, patch): try await api.updateProject(id: id, patch: patch)
+        case let .patchProject(id, patch):
+            // A relaxation never edits only `name`, so the server stages it; a direct apply here
+            // would mean the contract changed under us.
+            switch try await api.updateProject(id: id, patch: patch) {
+            case .staged(let changeset): changeset
+            case .applied: throw APIError.unexpectedStatus(200)
+            }
         case let .deletePin(id): try await api.deletePin(id: id)
         case let .deleteException(id): try await api.deleteException(id: id)
         }

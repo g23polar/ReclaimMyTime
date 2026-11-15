@@ -70,8 +70,13 @@ final class TimetableModel {
     private(set) var pulseLineages: Set<UUID> = []
     /// Bumped on every rejected drop (drives the rigid haptic).
     private(set) var rejectedDropCount = 0
-    /// A day the Week tab should open (demo hooks, later deep links).
+    /// A day the Week tab should open (demo hooks, notification taps).
     var requestedDay: Date?
+    /// Minute tick counter; see `advanceClock()`.
+    private(set) var clock = 0
+    /// Called whenever the published plan changes (including to nil), after reference data that
+    /// arrived with it. Drives the local-notification rebuild (T5.4).
+    var onPlanChanged: (@MainActor (WeekPlan?) -> Void)?
 
     /// Design gap G1: no route exposes calendar busy intervals, so this stays nil and the busy
     /// layer is not drawn. TODO(G1): fill from `WeekPlan.busy` if the contract adds it.
@@ -87,6 +92,11 @@ final class TimetableModel {
     private let navigation: AppNavigation
     private let directory: ProjectDirectory
     private var generation = 0
+    /// Monotonic load tickets. Every load takes one; a mutation that publishes newer state
+    /// (complete/skip, confirm, a project read) takes one too. Each resource keeps the ticket of
+    /// what it last published and drops any result carrying an older ticket.
+    private var ticketCounter = 0
+    private var publishedTickets: [Resource: Int] = [:]
     private let logger = Logger(subsystem: "com.reclaimmytime.app", category: "timetable")
 
     init(api: any APIClient, pending: PendingChangesetStore, navigation: AppNavigation, directory: ProjectDirectory) {
@@ -105,7 +115,8 @@ final class TimetableModel {
     var forbids: [BlockPin] { PinJoin.forbids(pins) }
 
     func classification(for block: Block) -> BlockClassification {
-        BlockClassifier.classify(block, now: now(), pinnedIds: pinnedBlockIds)
+        _ = clock
+        return BlockClassifier.classify(block, now: now(), pinnedIds: pinnedBlockIds)
     }
 
     /// Staged edits from the pending changeset plus edits still in flight.
@@ -138,6 +149,38 @@ final class TimetableModel {
             base = TimetableGeometry.weekStart(containing: now(), isoWeekStart: preferences?.weekStart ?? 1, calendar: calendar)
         }
         return calendar.date(byAdding: .day, value: 7 * offset, to: base) ?? base
+    }
+
+    /// Columns for the week at `offset`. The live week is drawn from the plan's own horizon, split
+    /// into the local days it touches (7 normally; 8 when the device zone differs from the plan's),
+    /// so every block has a column. Other weeks are 7 device days placed around it.
+    func columns(weekOffset: Int) -> [DayColumn] {
+        guard let plan else {
+            return TimetableGeometry.columns(from: weekStart(offset: weekOffset), calendar: calendar)
+        }
+        let current = TimetableGeometry.columns(spanning: plan.horizon, calendar: calendar)
+        guard weekOffset != 0, let first = current.first, let last = current.last else { return current }
+        let anchor = weekOffset > 0
+            ? calendar.date(byAdding: .day, value: 7 * (weekOffset - 1), to: last.end)
+            : calendar.date(byAdding: .day, value: 7 * weekOffset, to: first.start)
+        return TimetableGeometry.columns(from: anchor ?? first.start, calendar: calendar)
+    }
+
+    /// The minute tick: time-dependent presentation (classification, elapsed shading, which
+    /// actions a block offers) reads `clock`, so bumping it re-renders those views.
+    func advanceClock() {
+        clock &+= 1
+    }
+
+    /// Bumps `clock` on every minute boundary until cancelled (the Week tab's `.task`).
+    func runClock() async {
+        while !Task.isCancelled {
+            let now = Date().timeIntervalSinceReferenceDate
+            let next = (now / 60).rounded(.down) * 60 + 60
+            try? await Task.sleep(for: .seconds(next - now))
+            guard !Task.isCancelled else { return }
+            advanceClock()
+        }
     }
 
     /// Blocks shown for a week: the live plan only covers the current one (O7: no plan history).
@@ -222,42 +265,113 @@ final class TimetableModel {
         }
     }
 
-    /// Fetches the week and its reference data. The plan decides the phase; the others keep their
-    /// last value on failure.
+    private enum Resource: Hashable {
+        case plan, pins, projects, preferences, exceptions
+    }
+
+    private enum LoadResult: Sendable {
+        case plan(Fetch<WeekPlan>)
+        case pins(Fetch<[BlockPin]>)
+        case projects(Fetch<[Project]>)
+        case preferences(Fetch<UserPreferences>)
+        case exceptions(Fetch<[AvailabilityException]>)
+    }
+
+    private func issueTicket() -> Int {
+        ticketCounter += 1
+        return ticketCounter
+    }
+
+    /// True (and recorded) when `ticket` is newer than what `resource` last published.
+    private func accept(_ resource: Resource, ticket: Int) -> Bool {
+        guard ticket > publishedTickets[resource, default: 0] else { return false }
+        publishedTickets[resource] = ticket
+        return true
+    }
+
+    private func isCurrent(_ resource: Resource, ticket: Int) -> Bool {
+        ticket > publishedTickets[resource, default: 0]
+    }
+
+    /// Fetches the week and its reference data. Each part publishes as soon as it arrives (the
+    /// plan never waits on pins/projects/preferences/exceptions, which enrich it later), and only
+    /// if nothing newer was published for that part since this load began. Reference data keeps
+    /// its last value on failure.
     func load() async {
         let started = generation
+        let ticket = issueTicket()
         if plan == nil, phase != .noPlan { phase = .loading }
         let api = self.api
-        async let planResult = Self.fetch { try await api.getCurrentPlan() }
-        async let pinsResult = Self.fetch { try await api.listPins() }
-        async let projectsResult = Self.fetch { try await api.listProjects() }
-        async let preferencesResult = Self.fetch { try await api.getPreferences() }
-        async let exceptionsResult = Self.fetch { try await api.listExceptions() }
-        let (planFetch, pinsFetch, projectsFetch, preferencesFetch, exceptionsFetch) =
-            await (planResult, pinsResult, projectsResult, preferencesResult, exceptionsResult)
-        guard started == generation else { return }
+        await withTaskGroup(of: LoadResult.self) { group in
+            group.addTask { .plan(await Self.fetch { try await api.getCurrentPlan() }) }
+            group.addTask { .pins(await Self.fetch { try await api.listPins() }) }
+            group.addTask { .projects(await Self.fetch { try await api.listProjects() }) }
+            group.addTask { .preferences(await Self.fetch { try await api.getPreferences() }) }
+            group.addTask { .exceptions(await Self.fetch { try await api.listExceptions() }) }
+            for await result in group {
+                guard started == generation else { continue }
+                publish(result, ticket: ticket)
+            }
+        }
+    }
 
-        if case .ok(let value) = pinsFetch { pins = value }
-        if case .ok(let value) = projectsFetch { projects = Dictionary(value.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last }) }
-        if case .ok(let value) = preferencesFetch { preferences = value }
-        if case .ok(let value) = exceptionsFetch { exceptions = value }
+    private func publish(_ result: LoadResult, ticket: Int) {
+        switch result {
+        case .pins(.ok(let value)):
+            if accept(.pins, ticket: ticket) {
+                pins = value
+                notifyPlanChanged()
+            }
+        case .projects(.ok(let value)):
+            if accept(.projects, ticket: ticket) {
+                projects = Dictionary(value.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+                notifyPlanChanged()
+            }
+        case .preferences(.ok(let value)):
+            if accept(.preferences, ticket: ticket) { preferences = value }
+        case .exceptions(.ok(let value)):
+            if accept(.exceptions, ticket: ticket) { exceptions = value }
+        case .pins, .projects, .preferences, .exceptions:
+            break
+        case .plan(let fetch):
+            publishPlan(fetch, ticket: ticket)
+        }
+    }
 
-        switch planFetch {
+    private func publishPlan(_ fetch: Fetch<WeekPlan>, ticket: Int) {
+        switch fetch {
         case .ok(let value):
+            guard accept(.plan, ticket: ticket) else { return }
             plan = value
             phase = .loaded
             connectivity = .online
+            notifyPlanChanged()
         case .failed(let error) where error.serverCode == KnownErrorCode.noLivePlan:
+            guard accept(.plan, ticket: ticket) else { return }
             plan = nil
             phase = .noPlan
             connectivity = .online
+            notifyPlanChanged()
         case .failed(let error):
+            guard isCurrent(.plan, ticket: ticket) else { return }
             if case .transport = error { connectivity = .offline } else { connectivity = .error }
             logger.notice("Plan refresh failed")
             phase = plan == nil ? .unavailable : .loaded
         case .cancelled:
             if phase == .loading { phase = plan == nil ? .idle : .loaded }
         }
+    }
+
+    private func notifyPlanChanged() {
+        onPlanChanged?(plan)
+    }
+
+    /// A fresh read of one project (e.g. `GET /projects/{id}` from the directory) is newer than
+    /// this cache: drop the cached copy and any list still in flight, so `projectName` falls back
+    /// to the directory until the next load.
+    func invalidateProject(_ id: UUID) {
+        projects[id] = nil
+        publishedTickets[.projects] = issueTicket()
     }
 
     // MARK: editing (timetable.md §5)
@@ -298,6 +412,20 @@ final class TimetableModel {
         await sendApplied(.skip, for: block)
     }
 
+    /// "Skip this" from a block-start notification. The lineage finds the block in the current
+    /// plan (the notification may predate a re-plan); the notified block id is the fallback.
+    func skip(lineageId: UUID, fallbackBlockId: UUID?) async {
+        if plan == nil { await load() }
+        if let block = plan?.blocks.first(where: { $0.lineageId == lineageId }) {
+            await skip(block)
+            return
+        }
+        guard let fallbackBlockId else { return }
+        if case .applied(let updated)? = try? await api.patchBlock(id: fallbackBlockId, action: .skip) {
+            replace(updated)
+        }
+    }
+
     func rejectPastDrop() {
         rejectedDropCount += 1
         notice = .pastDrop
@@ -331,6 +459,11 @@ final class TimetableModel {
 
     /// Wired to `PendingChangesetStore.onConfirmed`: what changed pulses once on the new plan.
     func noteConfirmed(_ changeset: Changeset) {
+        // The confirmed changeset is newer than any snapshot in flight: drop the project cache
+        // (renames are folded into the directory) and any plan/projects load issued before it.
+        projects = [:]
+        publishedTickets[.projects] = issueTicket()
+        publishedTickets[.plan] = issueTicket()
         pulseLineages = Set((changeset.diff?.entries ?? []).compactMap { entry in
             switch entry.change {
             case .moved, .added: entry.lineageId
@@ -357,6 +490,8 @@ final class TimetableModel {
         inFlight = [:]
         pulseLineages = []
         requestedDay = nil
+        publishedTickets = [:]
+        notifyPlanChanged()
     }
 
     // MARK: private
@@ -407,6 +542,8 @@ final class TimetableModel {
             createdAt: plan.createdAt, supersededAt: plan.supersededAt,
             blocks: plan.blocks.map { $0.id == updated.id ? updated : $0 }
         )
+        publishedTickets[.plan] = issueTicket()
+        notifyPlanChanged()
     }
 
     private func handleWriteError(_ error: any Error) async {

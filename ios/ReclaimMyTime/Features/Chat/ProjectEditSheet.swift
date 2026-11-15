@@ -3,7 +3,7 @@ import SwiftUI
 /// Edit sheet for a staged project (onboarding.md §4): a standard Form prefilled from the card.
 struct ProjectEditSheet: View {
     @State var model: ProjectEditModel
-    let onSaved: (Changeset) async -> Void
+    let onSaved: (UpdateProjectResult) async -> Void
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
 
@@ -82,8 +82,8 @@ struct ProjectEditSheet: View {
                         Button("Save") {
                             Task {
                                 guard model.makePatch() != nil else { return dismiss() }
-                                if let changeset = await model.save(api: app.api) {
-                                    await onSaved(changeset)
+                                if let result = await model.save(api: app.api) {
+                                    await onSaved(result)
                                     dismiss()
                                 }
                             }

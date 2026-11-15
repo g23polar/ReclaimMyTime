@@ -18,7 +18,8 @@ protocol APIClient: Sendable {
     func listProjects(includeArchived: Bool) async throws -> [Project]
     func createProject(_ draft: ProjectDraft) async throws -> Changeset
     func getProject(id: UUID) async throws -> Project
-    func updateProject(id: UUID, patch: ProjectPatch) async throws -> Changeset
+    /// 200 + Project for a name-only edit (applied directly); 202 + Changeset otherwise.
+    func updateProject(id: UUID, patch: ProjectPatch) async throws -> UpdateProjectResult
     func archiveProject(id: UUID) async throws -> Changeset
 
     // preferences

@@ -29,7 +29,7 @@ struct DayView: View {
 
     var body: some View {
         let timetable = model.timetable
-        let weekColumns = TimetableGeometry.columns(from: timetable.weekStart(offset: 0), calendar: timetable.calendar)
+        let weekColumns = timetable.columns(weekOffset: 0)
         let column = TimetableGeometry.columns(from: day, calendar: timetable.calendar, count: 1)
         let blocks = (timetable.plan?.blocks ?? []).filter { block in column.contains { block.span.start < $0.end && block.span.end > $0.start } }
         let metrics = timetable.gridMetrics(columns: column, spans: blocks.map(\.span), pointsPerHour: GridMetrics.dayPointsPerHour)
@@ -297,8 +297,7 @@ struct DayView: View {
         let timetable = model.timetable
         let now = timetable.now()
         let anchor = column.first?.contains(now) == true ? now : blocks.map(\.span.start).min()
-        guard let anchor else { return }
-        let hour = timetable.calendar.component(.hour, from: anchor) - 1
+        guard let anchor, let hour = TimetableGeometry.anchorHour(for: anchor, columns: column, calendar: timetable.calendar) else { return }
         reader.scrollTo("hour-\(max(metrics.startHour, min(hour, metrics.endHour)))", anchor: .top)
     }
 }

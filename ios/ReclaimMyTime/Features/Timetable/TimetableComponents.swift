@@ -41,6 +41,7 @@ extension TimetableModel {
     func elapsedFraction(_ block: Block) -> CGFloat {
         let total = block.span.end.timeIntervalSince(block.span.start)
         guard total > 0 else { return 0 }
+        _ = clock
         return CGFloat(now().timeIntervalSince(block.span.start) / total)
     }
 

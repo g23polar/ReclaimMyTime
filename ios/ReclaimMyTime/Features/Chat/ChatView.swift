@@ -42,8 +42,8 @@ struct ChatView: View {
             .navigationTitle("Chat")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(item: $editing) { target in
-                ProjectEditSheet(model: ProjectEditModel(card: target.card)) { changeset in
-                    await model.chat.applyEdit(entryId: target.entryId, changeset: changeset)
+                ProjectEditSheet(model: ProjectEditModel(card: target.card)) { result in
+                    await model.chat.applyEdit(entryId: target.entryId, result: result)
                 }
             }
         }

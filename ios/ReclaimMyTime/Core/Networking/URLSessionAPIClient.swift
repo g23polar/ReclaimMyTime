@@ -76,8 +76,12 @@ final class URLSessionAPIClient: APIClient {
         try await send(Endpoint(method: .get, path: "/projects/\(id.pathComponent)"))
     }
 
-    func updateProject(id: UUID, patch: ProjectPatch) async throws -> Changeset {
-        try await send(Endpoint(method: .patch, path: "/projects/\(id.pathComponent)", body: try encode(patch)))
+    func updateProject(id: UUID, patch: ProjectPatch) async throws -> UpdateProjectResult {
+        let (data, response) = try await perform(Endpoint(method: .patch, path: "/projects/\(id.pathComponent)", body: try encode(patch)))
+        if response.statusCode == 202 {
+            return .staged(try decode(Changeset.self, from: data))
+        }
+        return .applied(try decode(Project.self, from: data))
     }
 
     func archiveProject(id: UUID) async throws -> Changeset {

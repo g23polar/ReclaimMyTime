@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+import OSLog
+import SwiftUI
+import UserNotifications
 
 /// Composition root: builds the transport (mock or network), the typed client, the session store
 /// and auth state, and the app-wide observable state (pending changeset, chat, calendar, tabs).
@@ -17,6 +20,19 @@ final class AppModel {
     let calendar: CalendarConnectionModel
     let chat: ChatModel
     let timetable: TimetableModel
+    /// Local notifications: the 48-hour window, warnings setting, permission pre-prompt (T5.4).
+    let notifications: NotificationScheduler
+    /// The time-zone change prompt (T5.4).
+    let timezone: TimezoneMonitor
+
+    static let lastDriftNotifiedKey = "drift.lastNotifiedChangeset"
+
+    private let defaults: UserDefaults
+    private let backgroundScheduler: any BackgroundRefreshScheduling
+    private let driftSource: any DriftSource
+    /// Retained here: `UNUserNotificationCenter.delegate` is weak.
+    private var responder: NotificationResponder?
+    private let logger = Logger(subsystem: "com.reclaimmytime.app", category: "app")
 
     /// - Parameters:
     ///   - transport: override for tests; defaults to the fixture mock or URLSession per `config`.
@@ -25,9 +41,15 @@ final class AppModel {
         config: AppConfig = .fromProcess(),
         transport: (any HTTPTransport)? = nil,
         sessionStore: SessionStore? = nil,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        notificationCenter: (any LocalNotificationCenter)? = nil,
+        backgroundScheduler: (any BackgroundRefreshScheduling)? = nil,
+        driftSource: (any DriftSource)? = nil
     ) {
         self.config = config
+        self.defaults = defaults
+        self.backgroundScheduler = backgroundScheduler ?? SystemBackgroundRefreshScheduler()
+        self.driftSource = driftSource ?? UnavailableDriftSource()
         let transport: any HTTPTransport = transport ?? Self.defaultTransport(config: config)
         let sessionStore = sessionStore ?? SessionStore.forBackend(config.backend)
         let relay = SessionInvalidationRelay()
@@ -53,20 +75,142 @@ final class AppModel {
         self.chat = chat
         let timetable = TimetableModel(api: api, pending: pending, navigation: navigation, directory: projects)
         self.timetable = timetable
+        let notifications = NotificationScheduler(center: notificationCenter ?? SystemNotificationCenter(), defaults: defaults)
+        self.notifications = notifications
+        let timezone = TimezoneMonitor(api: api, pending: pending, defaults: defaults)
+        self.timezone = timezone
         relay.auth = auth
+        projects.onProjectRead = { [weak timetable] project in
+            timetable?.invalidateProject(project.id)
+        }
 
-        pending.onConfirmed = { [weak chat, weak projects, weak timetable] changeset in
+        pending.onConfirmed = { [weak chat, weak projects, weak timetable, weak notifications] changeset in
             projects?.applyConfirmed(changeset)
             timetable?.noteConfirmed(changeset)
             chat?.changesetConfirmed(changeset)
+            // Permission is asked after a week is confirmed, never at launch.
+            if changeset.planId != nil, let notifications {
+                Task { await notifications.weekConfirmed() }
+            }
         }
-        pending.onDiscarded = { [weak chat, weak palette] changeset, replacement in
+        pending.onDiscarded = { [weak chat, weak palette, weak timezone] changeset, replacement in
             chat?.changesetDiscarded(changeset, replacement: replacement)
+            timezone?.changesetDiscarded(changeset, replacement: replacement)
             // A staged project that never got confirmed gives its palette slot back.
             let kept = Set(replacement.map(Self.createdProjectIds) ?? [])
             for id in Self.createdProjectIds(changeset) where !kept.contains(id) {
                 palette?.release(id)
             }
+        }
+        wirePlanObservers()
+    }
+
+    // MARK: notifications, foreground, background (T5.4)
+
+    /// Called once from `App.init`, before launch finishes, so a notification tap that launches
+    /// the app is delivered. Not called by tests.
+    func installSystemHooks() {
+        let responder = NotificationResponder { [weak self] route in
+            await self?.handle(route)
+        }
+        self.responder = responder
+        UNUserNotificationCenter.current().delegate = responder
+        Task { await notifications.registerCategories() }
+    }
+
+    /// Wires plan publication to the notification window and the time-zone check. Separate from
+    /// `installSystemHooks` so tests get it without touching the system delegate.
+    private func wirePlanObservers() {
+        timetable.onPlanChanged = { [weak self] plan in self?.planChanged(plan) }
+    }
+
+    private func planChanged(_ plan: WeekPlan?) {
+        notifications.enqueueRebuild(notificationSnapshot())
+        timezone.check(plan: plan)
+    }
+
+    /// What the window is built from: the live plan plus names/pins/projects for the copy.
+    func notificationSnapshot() -> NotificationSnapshot {
+        let plan = timetable.plan
+        var names: [UUID: String] = [:]
+        for id in Set((plan?.blocks ?? []).map(\.projectId)) {
+            names[id] = timetable.projectName(id)
+        }
+        return NotificationSnapshot(plan: plan, pins: timetable.pins, projects: timetable.projects, projectNames: names)
+    }
+
+    func handleScenePhase(_ phase: ScenePhase) {
+        switch phase {
+        case .active:
+            Task { await handleForeground() }
+        case .background:
+            scheduleBackgroundRefresh()
+        default:
+            break
+        }
+    }
+
+    /// Every foreground: refresh the week (which rebuilds the window on publish), rebuild anyway
+    /// (offline keeps the last plan, and the 48-hour window has moved), compare time zones, and
+    /// re-read the Google connection (§5).
+    func handleForeground() async {
+        guard case .signedIn = auth.phase else { return }
+        await notifications.refreshAuthorization()
+        await timetable.load()
+        await notifications.rebuild(notificationSnapshot())
+        timezone.check(plan: timetable.plan)
+        await calendar.refreshStatus()
+    }
+
+    /// Asks for the next `BGAppRefreshTask` (on entering the background, and from the task itself).
+    func scheduleBackgroundRefresh() {
+        guard case .signedIn = auth.phase else { return }
+        do {
+            try backgroundScheduler.submitAppRefresh(
+                identifier: BackgroundTaskID.driftCheck,
+                earliestBeginDate: timetable.now().addingTimeInterval(BackgroundTaskID.refreshInterval)
+            )
+        } catch {
+            // The simulator and Low Power Mode refuse; the next foreground covers it.
+            logger.notice("Background refresh not scheduled")
+        }
+    }
+
+    /// The `BGAppRefreshTask` handler: refetch `GET /plans/current` (keeping the window rolling)
+    /// and, if the server has a new drift proposal, post the §4 notification. Never applies it.
+    func handleBackgroundRefresh() async {
+        if case .loading = auth.phase { await auth.bootstrap() }
+        guard case .signedIn = auth.phase else { return }
+        scheduleBackgroundRefresh()
+        await timetable.load()
+        await notifications.rebuild(notificationSnapshot())
+        guard let plan = timetable.plan,
+              let alert = try? await driftSource.pendingDrift(livePlan: plan),
+              defaults.string(forKey: Self.lastDriftNotifiedKey) != alert.changesetId.pathComponent
+        else { return }
+        defaults.set(alert.changesetId.pathComponent, forKey: Self.lastDriftNotifiedKey)
+        let request = DriftNotification.request(alert, projectName: timetable.projectName(alert.projectId), time: timetable.timeText)
+        await notifications.post(request)
+    }
+
+    /// A notification response (tap or action), on the main actor.
+    func handle(_ route: NotificationRoute) async {
+        if case .loading = auth.phase { await auth.bootstrap() }
+        guard case .signedIn = auth.phase else { return }
+        switch route {
+        case let .openBlock(lineageId, _):
+            navigation.selectedTab = .week
+            if timetable.plan == nil { await timetable.load() }
+            if let block = timetable.plan?.blocks.first(where: { $0.lineageId == lineageId }) {
+                timetable.requestedDay = timetable.calendar.startOfDay(for: block.span.start)
+            }
+        case let .skipBlock(lineageId, blockId):
+            await timetable.skip(lineageId: lineageId, fallbackBlockId: blockId)
+        case .drift:
+            // TODO(O2/T4.3): open review for `changesetId` once a pending changeset can be fetched.
+            // Until then this opens the Week tab, where the pending banner shows any proposal.
+            navigation.selectedTab = .week
+            if pending.hasPending { navigation.presentReview() }
         }
     }
 
@@ -90,6 +234,7 @@ final class AppModel {
         projects.reset()
         calendar.activate(userId: nil)
         timetable.reset()
+        timezone.reset()
         navigation.isReviewingProposal = false
         navigation.tradeOffsRequested = false
         navigation.selectedTab = .week

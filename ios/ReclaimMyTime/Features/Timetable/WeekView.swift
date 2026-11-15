@@ -4,7 +4,7 @@ struct DayRoute: Hashable {
     let day: Date
 }
 
-/// Week tab root (timetable.md §1): 7-column grid, 44 pt per hour; list of days at AX sizes.
+/// Week tab root (timetable.md §1): one column per local day of the plan horizon (usually 7), 44 pt per hour; list of days at AX sizes.
 /// Long-press context menus only; dragging lives in Day view.
 struct WeekView: View {
     @Environment(AppModel.self) private var model
@@ -15,7 +15,7 @@ struct WeekView: View {
 
     var body: some View {
         let timetable = model.timetable
-        let columns = TimetableGeometry.columns(from: timetable.weekStart(offset: weekOffset), calendar: timetable.calendar)
+        let columns = timetable.columns(weekOffset: weekOffset)
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
                 statusRows
@@ -56,6 +56,7 @@ struct WeekView: View {
             path = [DayRoute(day: day)]
             timetable.requestedDay = nil
         }
+        .task { await timetable.runClock() }
         .task(id: timetable.pulseLineages) {
             guard !timetable.pulseLineages.isEmpty else { return }
             try? await Task.sleep(for: .seconds(2))
@@ -196,8 +197,7 @@ struct WeekGrid: View {
         let timetable = model.timetable
         let now = timetable.now()
         let anchor: Date? = columns.contains(where: { $0.contains(now) }) ? now : blocks.map(\.span.start).min()
-        guard let anchor else { return }
-        let hour = timetable.calendar.component(.hour, from: anchor) - 1
+        guard let anchor, let hour = TimetableGeometry.anchorHour(for: anchor, columns: columns, calendar: timetable.calendar) else { return }
         reader.scrollTo("hour-\(max(metrics.startHour, min(hour, metrics.endHour)))", anchor: .top)
     }
 }
