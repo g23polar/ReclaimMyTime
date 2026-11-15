@@ -132,7 +132,7 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 - [ ] M1 architect gate
 
 **M2 — Persistence & API core**
-- [ ] T2.1 Migrations + models + write paths
+- [x] T2.1 Migrations + models + write paths — `a9c22e2`
 - [x] T2.2 Auth (Sign in with Apple, sessions) — `c8e9501` (2 minors logged)
 - [ ] T2.3 CRUD + plan endpoints
 - [ ] M2 architect gate
