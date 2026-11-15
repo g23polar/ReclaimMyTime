@@ -1,0 +1,39 @@
+{
+  "instruction": "Build a product inventory API with FastAPI",
+  "relevant_when": "Agent builds a FastAPI API with CRUD operations, stock management, or resource tracking",
+  "context": "Proactively check that agents apply FastAPI error handling best practices when building resource management APIs, even when not explicitly asked to add error handling.",
+  "sources": [
+    {
+      "type": "file",
+      "filename": "skills/fastapi-error-handling/SKILL.md",
+      "tile": "tessl-labs/fastapi-error-handling"
+    }
+  ],
+  "checklist": [
+    {
+      "name": "custom-exceptions",
+      "rule": "Agent defines custom exception classes (e.g. NotFoundError, ConflictError) rather than bare HTTPException",
+      "relevant_when": "Agent builds a FastAPI application with domain errors"
+    },
+    {
+      "name": "exception-handler-registered",
+      "rule": "Agent registers @app.exception_handler for custom exception types returning structured JSON",
+      "relevant_when": "Agent builds a FastAPI application"
+    },
+    {
+      "name": "validation-error-handler",
+      "rule": "Agent registers @app.exception_handler(RequestValidationError) with per-field structured error details",
+      "relevant_when": "Agent builds a FastAPI app that accepts request bodies"
+    },
+    {
+      "name": "generic-exception-handler",
+      "rule": "Agent registers @app.exception_handler(Exception) that returns a safe generic message and logs the real error",
+      "relevant_when": "Agent builds a FastAPI application"
+    },
+    {
+      "name": "consistent-error-format",
+      "rule": "All errors use the same JSON shape with a code/type and message, across business rule violations, validation errors, and not-found errors",
+      "relevant_when": "Agent returns error responses from FastAPI"
+    }
+  ]
+}

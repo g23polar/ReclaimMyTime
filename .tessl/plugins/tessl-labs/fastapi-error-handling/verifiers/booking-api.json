@@ -1,0 +1,39 @@
+{
+  "instruction": "Build a meeting room booking API with FastAPI",
+  "relevant_when": "Agent builds a FastAPI API with scheduling, reservations, or time-based business rules",
+  "context": "Proactively check that agents apply FastAPI error handling best practices when building booking/scheduling APIs, even when not explicitly asked to add error handling.",
+  "sources": [
+    {
+      "type": "file",
+      "filename": "skills/fastapi-error-handling/SKILL.md",
+      "tile": "tessl-labs/fastapi-error-handling"
+    }
+  ],
+  "checklist": [
+    {
+      "name": "custom-exception-hierarchy",
+      "rule": "Agent defines a custom exception hierarchy with a base class and specific subclasses for not-found, conflict, and business-rule errors",
+      "relevant_when": "Agent builds a FastAPI application with domain errors"
+    },
+    {
+      "name": "exception-handler-for-custom-errors",
+      "rule": "Agent registers @app.exception_handler for custom exception types producing structured JSON error responses",
+      "relevant_when": "Agent builds a FastAPI application"
+    },
+    {
+      "name": "request-validation-handler",
+      "rule": "Agent registers @app.exception_handler(RequestValidationError) with field-level error details in a structured format",
+      "relevant_when": "Agent builds a FastAPI app accepting request bodies"
+    },
+    {
+      "name": "catch-all-handler",
+      "rule": "Agent registers @app.exception_handler(Exception) returning a safe generic message for unexpected errors, no stack traces leaked",
+      "relevant_when": "Agent builds a FastAPI application"
+    },
+    {
+      "name": "error-logging",
+      "rule": "The catch-all exception handler logs the actual error using Python logging, structlog, or similar before returning the generic response",
+      "relevant_when": "Agent handles unexpected errors in a FastAPI application"
+    }
+  ]
+}

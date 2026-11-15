@@ -1,0 +1,11 @@
+{
+  "name": "testland/hypothesis-testing",
+  "version": "1.2.19",
+  "summary": "Use for any question or task about property-based or generated-input tests in Python, including quick how-to questions, round-trip checks like parse(format(x)), and inputs that break code in production: Hypothesis @given strategies, composite strategies, assume and filtering, settings, reproducibility and CI. Has round-trip and metamorphic property templates.",
+  "private": false,
+  "skills": {
+    "hypothesis-testing": {
+      "path": "SKILL.md"
+    }
+  }
+}

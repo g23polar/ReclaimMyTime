@@ -1,0 +1,11 @@
+{
+  "name": "tessl-labs/fastapi-error-handling",
+  "version": "0.2.1",
+  "summary": "Production error handling for FastAPI — exception handlers, structured error",
+  "skills": {
+    "fastapi-error-handling": {
+      "path": "skills/fastapi-error-handling/SKILL.md"
+    }
+  },
+  "private": false
+}
