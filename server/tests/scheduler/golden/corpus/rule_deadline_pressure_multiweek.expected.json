@@ -1,0 +1,112 @@
+{
+  "fingerprint": {
+    "solver_version": "1.0.0",
+    "input_schema_version": 1
+  },
+  "output": {
+    "input_schema_version": 1,
+    "solver_version": "1.0.0",
+    "blocks": [
+      {
+        "lineage_id": "eb8646a9-286c-5e07-82dd-56a37bc9e63d",
+        "project_id": "course",
+        "span": {
+          "start": "2026-11-16T08:00:00Z",
+          "end": "2026-11-16T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "19b1a74d-4bd3-546a-a5fb-419c9ac8bdda",
+        "project_id": "taxes",
+        "span": {
+          "start": "2026-11-16T10:15:00Z",
+          "end": "2026-11-16T11:45:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "48d87778-cbe9-5856-86b2-4b674b8af0e5",
+        "project_id": "run",
+        "span": {
+          "start": "2026-11-16T12:00:00Z",
+          "end": "2026-11-16T13:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "da5ca7a7-4505-5ce6-a2df-b276c5e73a00",
+        "project_id": "course",
+        "span": {
+          "start": "2026-11-17T08:00:00Z",
+          "end": "2026-11-17T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "0b57b7aa-132d-542d-9178-506b84bad59a",
+        "project_id": "taxes",
+        "span": {
+          "start": "2026-11-17T10:15:00Z",
+          "end": "2026-11-17T11:45:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "e613bdc8-669d-58e9-adba-bc10f07e0e6f",
+        "project_id": "run",
+        "span": {
+          "start": "2026-11-17T12:00:00Z",
+          "end": "2026-11-17T13:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "b9771f88-d0dd-58e2-927a-b16224e40075",
+        "project_id": "course",
+        "span": {
+          "start": "2026-11-18T08:00:00Z",
+          "end": "2026-11-18T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "fffab0b0-8f14-5d3b-9890-ccbf4fe2847c",
+        "project_id": "taxes",
+        "span": {
+          "start": "2026-11-18T10:15:00Z",
+          "end": "2026-11-18T11:15:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "b2d788ce-b7d1-577d-a6d7-8071d1f54059",
+        "project_id": "run",
+        "span": {
+          "start": "2026-11-18T12:00:00Z",
+          "end": "2026-11-18T13:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "fc7870ef-7d72-5f4f-9460-6e14b4c49202",
+        "project_id": "course",
+        "span": {
+          "start": "2026-11-19T08:00:00Z",
+          "end": "2026-11-19T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "07a9cb25-caad-5c48-90ac-46c0e0571824",
+        "project_id": "course",
+        "span": {
+          "start": "2026-11-20T08:00:00Z",
+          "end": "2026-11-20T10:00:00Z"
+        },
+        "pinned": false
+      }
+    ],
+    "infeasibility": null
+  }
+}

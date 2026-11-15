@@ -1,0 +1,104 @@
+{
+  "description": "Strict preferred window: guitar only 18-21.",
+  "solver_input": {
+    "input_schema_version": 1,
+    "solver_version": "golden",
+    "now": "2026-11-16T00:00:00Z",
+    "horizon": {
+      "start": "2026-11-16T00:00:00Z",
+      "end": "2026-11-23T00:00:00Z"
+    },
+    "busy": [],
+    "schedulable": [
+      {
+        "start": "2026-11-16T08:00:00Z",
+        "end": "2026-11-16T22:00:00Z"
+      },
+      {
+        "start": "2026-11-17T08:00:00Z",
+        "end": "2026-11-17T22:00:00Z"
+      },
+      {
+        "start": "2026-11-18T08:00:00Z",
+        "end": "2026-11-18T22:00:00Z"
+      },
+      {
+        "start": "2026-11-19T08:00:00Z",
+        "end": "2026-11-19T22:00:00Z"
+      },
+      {
+        "start": "2026-11-20T08:00:00Z",
+        "end": "2026-11-20T22:00:00Z"
+      },
+      {
+        "start": "2026-11-21T08:00:00Z",
+        "end": "2026-11-21T22:00:00Z"
+      },
+      {
+        "start": "2026-11-22T08:00:00Z",
+        "end": "2026-11-22T22:00:00Z"
+      }
+    ],
+    "frozen": [],
+    "pins": [],
+    "projects": [
+      {
+        "id": "guitar",
+        "remaining_minutes": 0,
+        "weekly_target_minutes": 240,
+        "max_block_minutes": 90,
+        "min_block_minutes": 30,
+        "preferred_windows": [
+          {
+            "start": "2026-11-16T18:00:00Z",
+            "end": "2026-11-16T21:00:00Z"
+          },
+          {
+            "start": "2026-11-17T18:00:00Z",
+            "end": "2026-11-17T21:00:00Z"
+          },
+          {
+            "start": "2026-11-18T18:00:00Z",
+            "end": "2026-11-18T21:00:00Z"
+          },
+          {
+            "start": "2026-11-19T18:00:00Z",
+            "end": "2026-11-19T21:00:00Z"
+          },
+          {
+            "start": "2026-11-20T18:00:00Z",
+            "end": "2026-11-20T21:00:00Z"
+          },
+          {
+            "start": "2026-11-21T18:00:00Z",
+            "end": "2026-11-21T21:00:00Z"
+          },
+          {
+            "start": "2026-11-22T18:00:00Z",
+            "end": "2026-11-22T21:00:00Z"
+          }
+        ],
+        "preferred_windows_strict": true,
+        "requirement_tags": [],
+        "target_date": null,
+        "deadline": null
+      },
+      {
+        "id": "deck",
+        "remaining_minutes": 480,
+        "weekly_target_minutes": null,
+        "max_block_minutes": 120,
+        "min_block_minutes": 60,
+        "preferred_windows": [],
+        "preferred_windows_strict": false,
+        "requirement_tags": [],
+        "target_date": "2026-11-22",
+        "deadline": "2026-11-23T00:00:00Z"
+      }
+    ],
+    "exceptions": [],
+    "day_diversity": "mixed",
+    "buffer_minutes": 15
+  },
+  "previous": []
+}

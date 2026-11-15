@@ -1,0 +1,87 @@
+{
+  "description": "pack fixture diversity_focused: PRD \u00a75.2 dayDiversity=focused: one-project (themed) days.",
+  "solver_input": {
+    "input_schema_version": 1,
+    "solver_version": "test",
+    "now": "2026-11-16T00:00:00Z",
+    "horizon": {
+      "start": "2026-11-16T00:00:00Z",
+      "end": "2026-11-23T00:00:00Z"
+    },
+    "busy": [],
+    "schedulable": [
+      {
+        "start": "2026-11-16T08:00:00Z",
+        "end": "2026-11-16T20:00:00Z"
+      },
+      {
+        "start": "2026-11-17T08:00:00Z",
+        "end": "2026-11-17T20:00:00Z"
+      },
+      {
+        "start": "2026-11-18T08:00:00Z",
+        "end": "2026-11-18T20:00:00Z"
+      },
+      {
+        "start": "2026-11-19T08:00:00Z",
+        "end": "2026-11-19T20:00:00Z"
+      },
+      {
+        "start": "2026-11-20T08:00:00Z",
+        "end": "2026-11-20T20:00:00Z"
+      },
+      {
+        "start": "2026-11-21T08:00:00Z",
+        "end": "2026-11-21T20:00:00Z"
+      },
+      {
+        "start": "2026-11-22T08:00:00Z",
+        "end": "2026-11-22T20:00:00Z"
+      }
+    ],
+    "frozen": [],
+    "pins": [],
+    "projects": [
+      {
+        "id": "alpha",
+        "remaining_minutes": 480,
+        "weekly_target_minutes": null,
+        "max_block_minutes": 120,
+        "min_block_minutes": 60,
+        "preferred_windows": [],
+        "preferred_windows_strict": false,
+        "requirement_tags": [],
+        "target_date": "2026-11-22",
+        "deadline": "2026-11-23T00:00:00Z"
+      },
+      {
+        "id": "beta",
+        "remaining_minutes": 480,
+        "weekly_target_minutes": null,
+        "max_block_minutes": 120,
+        "min_block_minutes": 60,
+        "preferred_windows": [],
+        "preferred_windows_strict": false,
+        "requirement_tags": [],
+        "target_date": "2026-11-22",
+        "deadline": "2026-11-23T00:00:00Z"
+      },
+      {
+        "id": "gamma",
+        "remaining_minutes": 480,
+        "weekly_target_minutes": null,
+        "max_block_minutes": 120,
+        "min_block_minutes": 60,
+        "preferred_windows": [],
+        "preferred_windows_strict": false,
+        "requirement_tags": [],
+        "target_date": "2026-11-22",
+        "deadline": "2026-11-23T00:00:00Z"
+      }
+    ],
+    "exceptions": [],
+    "day_diversity": "focused",
+    "buffer_minutes": 15
+  },
+  "previous": []
+}

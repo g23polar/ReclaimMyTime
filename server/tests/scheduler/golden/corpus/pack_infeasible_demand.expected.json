@@ -1,0 +1,172 @@
+{
+  "fingerprint": {
+    "solver_version": "1.0.0",
+    "input_schema_version": 1
+  },
+  "output": {
+    "input_schema_version": 1,
+    "solver_version": "1.0.0",
+    "blocks": [
+      {
+        "lineage_id": "c1a7d354-156a-5930-a3a6-88f3eb7d13ab",
+        "project_id": "thesis",
+        "span": {
+          "start": "2026-11-16T18:00:00Z",
+          "end": "2026-11-16T20:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "0a679f7c-1190-5dbe-bd2e-3852dbc11217",
+        "project_id": "thesis",
+        "span": {
+          "start": "2026-11-17T18:00:00Z",
+          "end": "2026-11-17T20:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "ed38f22d-1443-5a54-8f58-497a34b20534",
+        "project_id": "thesis",
+        "span": {
+          "start": "2026-11-18T18:00:00Z",
+          "end": "2026-11-18T20:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "3a9597c3-f4dd-5c1b-8b2a-9e43e6a8be31",
+        "project_id": "thesis",
+        "span": {
+          "start": "2026-11-19T18:00:00Z",
+          "end": "2026-11-19T20:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "a9733e12-afeb-5c4b-afcc-ed0329bbca7d",
+        "project_id": "gym",
+        "span": {
+          "start": "2026-11-20T18:00:00Z",
+          "end": "2026-11-20T19:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "bd72521a-9224-57ec-8e38-6a9d73ced272",
+        "project_id": "thesis",
+        "span": {
+          "start": "2026-11-21T18:00:00Z",
+          "end": "2026-11-21T20:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "e59aa77c-ef5e-5998-b7c1-8652a6201aec",
+        "project_id": "thesis",
+        "span": {
+          "start": "2026-11-22T18:00:00Z",
+          "end": "2026-11-22T20:00:00Z"
+        },
+        "pinned": false
+      }
+    ],
+    "infeasibility": {
+      "violations": [
+        {
+          "kind": "demand_shortfall",
+          "project_id": "gym",
+          "required_minutes": 180,
+          "scheduled_minutes": 60,
+          "shortfall_minutes": 120
+        },
+        {
+          "kind": "demand_shortfall",
+          "project_id": "thesis",
+          "required_minutes": 3000,
+          "scheduled_minutes": 720,
+          "shortfall_minutes": 2280
+        }
+      ],
+      "relaxations": [
+        {
+          "kind": "extend_deadline",
+          "description": "Move thesis's target date to 2026-12-20",
+          "affected_ids": [
+            "gym",
+            "thesis"
+          ],
+          "recovers_minutes": 2340,
+          "project_id": "thesis",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": "2026-12-20",
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "reduce_estimate",
+          "description": "Lower thesis's remaining estimate to 720 min",
+          "affected_ids": [
+            "thesis"
+          ],
+          "recovers_minutes": 2280,
+          "project_id": "thesis",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": 720,
+          "weekly_target_minutes": null,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "reduce_weekly_target",
+          "description": "Lower gym's weekly target to 60 min",
+          "affected_ids": [
+            "gym"
+          ],
+          "recovers_minutes": 120,
+          "project_id": "gym",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": 60,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "remove_exception",
+          "description": "Drop availability exception trip",
+          "affected_ids": [
+            "thesis"
+          ],
+          "recovers_minutes": 60,
+          "project_id": null,
+          "pin_id": null,
+          "exception_id": "trip",
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "raise_max_block_minutes",
+          "description": "Allow gym sittings up to 90 min",
+          "affected_ids": [
+            "gym"
+          ],
+          "recovers_minutes": 30,
+          "project_id": "gym",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": 90
+        }
+      ],
+      "verify_violations": []
+    }
+  }
+}

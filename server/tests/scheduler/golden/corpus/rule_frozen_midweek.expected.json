@@ -1,0 +1,67 @@
+{
+  "fingerprint": {
+    "solver_version": "1.0.0",
+    "input_schema_version": 1
+  },
+  "output": {
+    "input_schema_version": 1,
+    "solver_version": "1.0.0",
+    "blocks": [
+      {
+        "lineage_id": "5b73e3a8-8e67-56b7-bfdc-215260166d9d",
+        "project_id": "essay",
+        "span": {
+          "start": "2026-11-19T08:00:00Z",
+          "end": "2026-11-19T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "a9733e12-afeb-5c4b-afcc-ed0329bbca7d",
+        "project_id": "gym",
+        "span": {
+          "start": "2026-11-19T10:15:00Z",
+          "end": "2026-11-19T11:15:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "e4a4bb14-50f3-569a-abe1-59843b37d96f",
+        "project_id": "essay",
+        "span": {
+          "start": "2026-11-20T08:00:00Z",
+          "end": "2026-11-20T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "3d7e8ac4-6ed7-54a9-8d51-fe5e9bab6b6c",
+        "project_id": "gym",
+        "span": {
+          "start": "2026-11-20T10:15:00Z",
+          "end": "2026-11-20T11:15:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "b2ecfc73-d852-5243-ae3b-b459410c9935",
+        "project_id": "essay",
+        "span": {
+          "start": "2026-11-21T08:00:00Z",
+          "end": "2026-11-21T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "3bde304a-5bff-57c1-b5b6-544078b28b1f",
+        "project_id": "gym",
+        "span": {
+          "start": "2026-11-21T10:15:00Z",
+          "end": "2026-11-21T11:15:00Z"
+        },
+        "pinned": false
+      }
+    ],
+    "infeasibility": null
+  }
+}

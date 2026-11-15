@@ -1,0 +1,58 @@
+{
+  "fingerprint": {
+    "solver_version": "1.0.0",
+    "input_schema_version": 1
+  },
+  "output": {
+    "input_schema_version": 1,
+    "solver_version": "1.0.0",
+    "blocks": [
+      {
+        "lineage_id": "5b73e3a8-8e67-56b7-bfdc-215260166d9d",
+        "project_id": "essay",
+        "span": {
+          "start": "2026-11-16T08:00:00Z",
+          "end": "2026-11-16T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "e4a4bb14-50f3-569a-abe1-59843b37d96f",
+        "project_id": "essay",
+        "span": {
+          "start": "2026-11-17T08:00:00Z",
+          "end": "2026-11-17T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "b2ecfc73-d852-5243-ae3b-b459410c9935",
+        "project_id": "essay",
+        "span": {
+          "start": "2026-11-18T08:00:00Z",
+          "end": "2026-11-18T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "4634f6d7-5a37-5f2b-ad04-03b0d559d963",
+        "project_id": "essay",
+        "span": {
+          "start": "2026-11-19T08:00:00Z",
+          "end": "2026-11-19T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "516dccfb-3606-5518-b82c-b173520ce16d",
+        "project_id": "essay",
+        "span": {
+          "start": "2026-11-20T08:00:00Z",
+          "end": "2026-11-20T10:00:00Z"
+        },
+        "pinned": false
+      }
+    ],
+    "infeasibility": null
+  }
+}

@@ -1,0 +1,454 @@
+{
+  "fingerprint": {
+    "solver_version": "1.0.0",
+    "input_schema_version": 1
+  },
+  "output": {
+    "input_schema_version": 1,
+    "solver_version": "1.0.0",
+    "blocks": [
+      {
+        "lineage_id": "119ce9dd-42f6-5080-ad0b-9b76ffef9387",
+        "project_id": "book",
+        "span": {
+          "start": "2026-11-16T09:00:00Z",
+          "end": "2026-11-16T11:00:00Z"
+        },
+        "pinned": true
+      },
+      {
+        "lineage_id": "7fe5cd2c-be0f-5629-8c43-8f9d110edf4c",
+        "project_id": "code",
+        "span": {
+          "start": "2026-11-16T19:00:00Z",
+          "end": "2026-11-16T20:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "e2e7809b-31c3-5704-ac38-ffa121cc99cb",
+        "project_id": "book",
+        "span": {
+          "start": "2026-11-17T08:00:00Z",
+          "end": "2026-11-17T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "46cc758f-1f51-5439-918b-5bb288ce305b",
+        "project_id": "code",
+        "span": {
+          "start": "2026-11-17T10:15:00Z",
+          "end": "2026-11-17T12:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "780f01ee-9c53-51c0-b1f0-3e084eb545c5",
+        "project_id": "code",
+        "span": {
+          "start": "2026-11-17T19:00:00Z",
+          "end": "2026-11-17T20:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "d338edf8-7190-5283-8ee4-e74c61b285d0",
+        "project_id": "book",
+        "span": {
+          "start": "2026-11-18T08:00:00Z",
+          "end": "2026-11-18T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "e304f4c5-5fc8-570f-9352-9e53ac930887",
+        "project_id": "book",
+        "span": {
+          "start": "2026-11-18T10:15:00Z",
+          "end": "2026-11-18T12:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "71622843-4a6f-50d6-975e-4754a660be0e",
+        "project_id": "book",
+        "span": {
+          "start": "2026-11-18T19:00:00Z",
+          "end": "2026-11-18T20:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "61b8a20c-65fc-51c7-9d31-86d871dec7f4",
+        "project_id": "book",
+        "span": {
+          "start": "2026-11-20T08:00:00Z",
+          "end": "2026-11-20T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "56859031-8351-5bfc-8a16-5feb9e2b881b",
+        "project_id": "code",
+        "span": {
+          "start": "2026-11-20T10:15:00Z",
+          "end": "2026-11-20T12:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "9873af76-b42a-592a-a820-73f61dbc0bea",
+        "project_id": "code",
+        "span": {
+          "start": "2026-11-20T19:00:00Z",
+          "end": "2026-11-20T20:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "fed191f7-0996-5f7f-95ff-70409064b864",
+        "project_id": "code",
+        "span": {
+          "start": "2026-11-21T08:00:00Z",
+          "end": "2026-11-21T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "1b0a94b2-5290-5ab8-8862-e6151d3a8f46",
+        "project_id": "book",
+        "span": {
+          "start": "2026-11-21T10:15:00Z",
+          "end": "2026-11-21T12:15:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "c4f63128-3cde-53b2-8860-411c75eb5b2c",
+        "project_id": "code",
+        "span": {
+          "start": "2026-11-21T12:30:00Z",
+          "end": "2026-11-21T14:30:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "1934e6e9-b742-5810-8288-55b914321427",
+        "project_id": "book",
+        "span": {
+          "start": "2026-11-21T14:45:00Z",
+          "end": "2026-11-21T16:45:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "b22ca0e3-5275-5bf5-bde5-a1c635ee5d33",
+        "project_id": "code",
+        "span": {
+          "start": "2026-11-21T17:00:00Z",
+          "end": "2026-11-21T19:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "5503421b-72e0-5176-8b1a-4ed8d941bd90",
+        "project_id": "code",
+        "span": {
+          "start": "2026-11-22T08:00:00Z",
+          "end": "2026-11-22T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "3af8ed36-c5f6-5ff4-be9b-31f85c9522fb",
+        "project_id": "book",
+        "span": {
+          "start": "2026-11-22T10:15:00Z",
+          "end": "2026-11-22T12:15:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "18883b48-8061-5866-843e-2b5b333ed0b6",
+        "project_id": "code",
+        "span": {
+          "start": "2026-11-22T12:30:00Z",
+          "end": "2026-11-22T14:30:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "13bfe513-2ec6-59a1-9f80-2e7004bed7a0",
+        "project_id": "book",
+        "span": {
+          "start": "2026-11-22T14:45:00Z",
+          "end": "2026-11-22T16:45:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "3916a7bd-1d5b-5c08-84ad-340ebfc0ab2a",
+        "project_id": "book",
+        "span": {
+          "start": "2026-11-22T18:00:00Z",
+          "end": "2026-11-22T20:00:00Z"
+        },
+        "pinned": false
+      }
+    ],
+    "infeasibility": {
+      "violations": [
+        {
+          "kind": "pin_invalidated",
+          "pin_id": "p-overlap",
+          "pin_kind": "pin",
+          "project_id": "code",
+          "span": {
+            "start": "2026-11-16T10:00:00Z",
+            "end": "2026-11-16T12:00:00Z"
+          },
+          "conflicts_with": "overlap",
+          "exception_id": null,
+          "related_lineage_ids": [
+            "119ce9dd-42f6-5080-ad0b-9b76ffef9387"
+          ]
+        },
+        {
+          "kind": "pin_invalidated",
+          "pin_id": "p-busy",
+          "pin_kind": "pin",
+          "project_id": "book",
+          "span": {
+            "start": "2026-11-17T13:00:00Z",
+            "end": "2026-11-17T15:00:00Z"
+          },
+          "conflicts_with": "busy",
+          "exception_id": null,
+          "related_lineage_ids": []
+        },
+        {
+          "kind": "pin_invalidated",
+          "pin_id": "p-exc",
+          "pin_kind": "pin",
+          "project_id": "code",
+          "span": {
+            "start": "2026-11-18T09:00:00Z",
+            "end": "2026-11-18T11:00:00Z"
+          },
+          "conflicts_with": "exception",
+          "exception_id": "no-laptop",
+          "related_lineage_ids": []
+        },
+        {
+          "kind": "pin_invalidated",
+          "pin_id": "p-forbid",
+          "pin_kind": "pin",
+          "project_id": "book",
+          "span": {
+            "start": "2026-11-19T09:00:00Z",
+            "end": "2026-11-19T10:00:00Z"
+          },
+          "conflicts_with": "forbid",
+          "exception_id": null,
+          "related_lineage_ids": []
+        },
+        {
+          "kind": "pin_invalidated",
+          "pin_id": "p-ok",
+          "pin_kind": "pin",
+          "project_id": "code",
+          "span": {
+            "start": "2026-11-20T14:00:00Z",
+            "end": "2026-11-20T16:00:00Z"
+          },
+          "conflicts_with": "busy",
+          "exception_id": null,
+          "related_lineage_ids": []
+        },
+        {
+          "kind": "demand_shortfall",
+          "project_id": "book",
+          "required_minutes": 1500,
+          "scheduled_minutes": 1245,
+          "shortfall_minutes": 255
+        },
+        {
+          "kind": "demand_shortfall",
+          "project_id": "code",
+          "required_minutes": 1200,
+          "scheduled_minutes": 990,
+          "shortfall_minutes": 210
+        }
+      ],
+      "relaxations": [
+        {
+          "kind": "extend_deadline",
+          "description": "Move book's target date to 2026-11-29",
+          "affected_ids": [
+            "book",
+            "code"
+          ],
+          "recovers_minutes": 465,
+          "project_id": "book",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": "2026-11-29",
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "extend_deadline",
+          "description": "Move code's target date to 2026-11-29",
+          "affected_ids": [
+            "book",
+            "code"
+          ],
+          "recovers_minutes": 465,
+          "project_id": "code",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": "2026-11-29",
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "reduce_estimate",
+          "description": "Lower book's remaining estimate to 1245 min",
+          "affected_ids": [
+            "book",
+            "code"
+          ],
+          "recovers_minutes": 255,
+          "project_id": "book",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": 1245,
+          "weekly_target_minutes": null,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "remove_pin",
+          "description": "Remove forbid f-thu",
+          "affected_ids": [
+            "book",
+            "code"
+          ],
+          "recovers_minutes": 225,
+          "project_id": null,
+          "pin_id": "f-thu",
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "reduce_estimate",
+          "description": "Lower code's remaining estimate to 990 min",
+          "affected_ids": [
+            "book",
+            "code"
+          ],
+          "recovers_minutes": 210,
+          "project_id": "code",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": 990,
+          "weekly_target_minutes": null,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "raise_max_block_minutes",
+          "description": "Allow book sittings up to 240 min",
+          "affected_ids": [
+            "book"
+          ],
+          "recovers_minutes": 30,
+          "project_id": "book",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": 240
+        },
+        {
+          "kind": "raise_max_block_minutes",
+          "description": "Allow code sittings up to 180 min",
+          "affected_ids": [
+            "code"
+          ],
+          "recovers_minutes": 15,
+          "project_id": "code",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": 180
+        }
+      ],
+      "verify_violations": [
+        {
+          "kind": "busy",
+          "message": "block 5d0469db-2d8e-58b3-99c9-447eb34333d3 [2026-11-17T13:00:00+00:00, 2026-11-17T15:00:00+00:00) intersects busy time [2026-11-17T12:00:00+00:00, 2026-11-17T19:00:00+00:00), [2026-11-17T14:00:00+00:00, 2026-11-17T15:00:00+00:00)",
+          "block_lineage_ids": [
+            "5d0469db-2d8e-58b3-99c9-447eb34333d3"
+          ],
+          "related_ids": [
+            "p-busy"
+          ]
+        },
+        {
+          "kind": "busy",
+          "message": "block 9083c41c-428f-51a8-8178-56ac869ddb7e [2026-11-20T14:00:00+00:00, 2026-11-20T16:00:00+00:00) intersects busy time [2026-11-20T12:00:00+00:00, 2026-11-20T19:00:00+00:00)",
+          "block_lineage_ids": [
+            "9083c41c-428f-51a8-8178-56ac869ddb7e"
+          ],
+          "related_ids": [
+            "p-ok"
+          ]
+        },
+        {
+          "kind": "exception",
+          "message": "block c47832db-88b8-56d8-bed8-a57094bf7f00 intersects availability exception(s) no-laptop",
+          "block_lineage_ids": [
+            "c47832db-88b8-56d8-bed8-a57094bf7f00"
+          ],
+          "related_ids": [
+            "no-laptop",
+            "p-exc"
+          ]
+        },
+        {
+          "kind": "forbid",
+          "message": "block 12b6e4a7-2149-5ed1-b76a-61ac57fbc752 intersects forbid pin(s) f-thu",
+          "block_lineage_ids": [
+            "12b6e4a7-2149-5ed1-b76a-61ac57fbc752"
+          ],
+          "related_ids": [
+            "f-thu",
+            "p-forbid"
+          ]
+        },
+        {
+          "kind": "overlap",
+          "message": "blocks 119ce9dd-42f6-5080-ad0b-9b76ffef9387 and bcea1913-e1b9-57c6-9120-34e31ae341fc overlap",
+          "block_lineage_ids": [
+            "119ce9dd-42f6-5080-ad0b-9b76ffef9387",
+            "bcea1913-e1b9-57c6-9120-34e31ae341fc"
+          ],
+          "related_ids": [
+            "p-a",
+            "p-overlap"
+          ]
+        }
+      ]
+    }
+  }
+}

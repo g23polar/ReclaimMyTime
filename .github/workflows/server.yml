@@ -6,6 +6,9 @@ on:
     paths: ["server/**", "contracts/**", ".github/workflows/server.yml"]
   pull_request:
     paths: ["server/**", "contracts/**", ".github/workflows/server.yml"]
+  schedule:
+    - cron: "0 7 * * *"  # nightly slow property suite (~15 min)
+  workflow_dispatch: {}
 
 concurrency:
   group: server-${{ github.ref }}
@@ -67,11 +70,11 @@ jobs:
         run: uv run --with openapi-spec-validator --with 'jsonschema[format]' --with rfc3339-validator python ../contracts/validate_fixtures.py
 
   slow:
-    # The 10k-example solver property run; nightly-style, only on main.
-    if: github.event_name == 'push'
+    # The 10k + 5k-example solver property runs (~15 min): nightly and on demand, not per push.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     defaults:
       run:
         working-directory: server

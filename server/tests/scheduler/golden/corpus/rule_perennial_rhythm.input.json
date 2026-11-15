@@ -1,0 +1,104 @@
+{
+  "description": "PRD \u00a75.2 perennial rhythm: workout mornings (non-strict window).",
+  "solver_input": {
+    "input_schema_version": 1,
+    "solver_version": "golden",
+    "now": "2026-11-16T00:00:00Z",
+    "horizon": {
+      "start": "2026-11-16T00:00:00Z",
+      "end": "2026-11-23T00:00:00Z"
+    },
+    "busy": [],
+    "schedulable": [
+      {
+        "start": "2026-11-16T06:00:00Z",
+        "end": "2026-11-16T22:00:00Z"
+      },
+      {
+        "start": "2026-11-17T06:00:00Z",
+        "end": "2026-11-17T22:00:00Z"
+      },
+      {
+        "start": "2026-11-18T06:00:00Z",
+        "end": "2026-11-18T22:00:00Z"
+      },
+      {
+        "start": "2026-11-19T06:00:00Z",
+        "end": "2026-11-19T22:00:00Z"
+      },
+      {
+        "start": "2026-11-20T06:00:00Z",
+        "end": "2026-11-20T22:00:00Z"
+      },
+      {
+        "start": "2026-11-21T06:00:00Z",
+        "end": "2026-11-21T22:00:00Z"
+      },
+      {
+        "start": "2026-11-22T06:00:00Z",
+        "end": "2026-11-22T22:00:00Z"
+      }
+    ],
+    "frozen": [],
+    "pins": [],
+    "projects": [
+      {
+        "id": "workout",
+        "remaining_minutes": 0,
+        "weekly_target_minutes": 300,
+        "max_block_minutes": 60,
+        "min_block_minutes": 30,
+        "preferred_windows": [
+          {
+            "start": "2026-11-16T06:00:00Z",
+            "end": "2026-11-16T09:00:00Z"
+          },
+          {
+            "start": "2026-11-17T06:00:00Z",
+            "end": "2026-11-17T09:00:00Z"
+          },
+          {
+            "start": "2026-11-18T06:00:00Z",
+            "end": "2026-11-18T09:00:00Z"
+          },
+          {
+            "start": "2026-11-19T06:00:00Z",
+            "end": "2026-11-19T09:00:00Z"
+          },
+          {
+            "start": "2026-11-20T06:00:00Z",
+            "end": "2026-11-20T09:00:00Z"
+          },
+          {
+            "start": "2026-11-21T06:00:00Z",
+            "end": "2026-11-21T09:00:00Z"
+          },
+          {
+            "start": "2026-11-22T06:00:00Z",
+            "end": "2026-11-22T09:00:00Z"
+          }
+        ],
+        "preferred_windows_strict": false,
+        "requirement_tags": [],
+        "target_date": null,
+        "deadline": null
+      },
+      {
+        "id": "reading",
+        "remaining_minutes": 0,
+        "weekly_target_minutes": 210,
+        "max_block_minutes": 45,
+        "min_block_minutes": 30,
+        "preferred_windows": [],
+        "preferred_windows_strict": false,
+        "requirement_tags": [],
+        "target_date": null,
+        "deadline": null
+      }
+    ],
+    "exceptions": [],
+    "day_diversity": "mixed",
+    "buffer_minutes": 15
+  },
+  "previous": []
+}

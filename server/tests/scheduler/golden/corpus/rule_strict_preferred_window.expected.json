@@ -1,0 +1,76 @@
+{
+  "fingerprint": {
+    "solver_version": "1.0.0",
+    "input_schema_version": 1
+  },
+  "output": {
+    "input_schema_version": 1,
+    "solver_version": "1.0.0",
+    "blocks": [
+      {
+        "lineage_id": "92398e4f-4ac6-52b8-b8dc-88bad0d95e19",
+        "project_id": "deck",
+        "span": {
+          "start": "2026-11-16T08:00:00Z",
+          "end": "2026-11-16T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "95fac793-10d6-574f-b0cb-7c9859d59f1a",
+        "project_id": "guitar",
+        "span": {
+          "start": "2026-11-16T18:00:00Z",
+          "end": "2026-11-16T19:30:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "458cdb26-a11a-5c26-a46a-21e6c9de1f38",
+        "project_id": "deck",
+        "span": {
+          "start": "2026-11-17T08:00:00Z",
+          "end": "2026-11-17T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "e5e6c21f-9235-5038-8334-07fabc3ca46f",
+        "project_id": "guitar",
+        "span": {
+          "start": "2026-11-17T18:00:00Z",
+          "end": "2026-11-17T19:30:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "71d6bdc7-32dd-5fa4-91ae-1cd103e3ccef",
+        "project_id": "deck",
+        "span": {
+          "start": "2026-11-18T08:00:00Z",
+          "end": "2026-11-18T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "64e2e585-021b-5d82-aa57-857ab95b789f",
+        "project_id": "guitar",
+        "span": {
+          "start": "2026-11-18T18:00:00Z",
+          "end": "2026-11-18T19:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "18e0a3ac-0b71-56dd-886d-280fc7fbf871",
+        "project_id": "deck",
+        "span": {
+          "start": "2026-11-19T08:00:00Z",
+          "end": "2026-11-19T10:00:00Z"
+        },
+        "pinned": false
+      }
+    ],
+    "infeasibility": null
+  }
+}

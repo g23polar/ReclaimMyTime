@@ -1,0 +1,139 @@
+{
+  "fingerprint": {
+    "solver_version": "1.0.0",
+    "input_schema_version": 1
+  },
+  "output": {
+    "input_schema_version": 1,
+    "solver_version": "1.0.0",
+    "blocks": [
+      {
+        "lineage_id": "69f4f2cd-822b-5f85-ae49-65ef46e7a9fa",
+        "project_id": "grant",
+        "span": {
+          "start": "2026-11-16T08:00:00Z",
+          "end": "2026-11-16T11:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "b6e2b964-29e9-5fa6-b7fc-288b2a539c24",
+        "project_id": "walk",
+        "span": {
+          "start": "2026-11-16T11:15:00Z",
+          "end": "2026-11-16T12:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "3b97fe23-35f2-5ad0-ae24-401895c1380f",
+        "project_id": "grant",
+        "span": {
+          "start": "2026-11-16T12:15:00Z",
+          "end": "2026-11-16T15:15:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "aa073f4c-08ed-57a6-a6b2-b544ba9cefd1",
+        "project_id": "walk",
+        "span": {
+          "start": "2026-11-16T15:30:00Z",
+          "end": "2026-11-16T16:15:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "35d195b4-ed71-5fbd-8700-8e3a37daf498",
+        "project_id": "grant",
+        "span": {
+          "start": "2026-11-16T16:30:00Z",
+          "end": "2026-11-16T19:30:00Z"
+        },
+        "pinned": false
+      }
+    ],
+    "infeasibility": {
+      "violations": [
+        {
+          "kind": "demand_shortfall",
+          "project_id": "grant",
+          "required_minutes": 900,
+          "scheduled_minutes": 540,
+          "shortfall_minutes": 360
+        },
+        {
+          "kind": "demand_shortfall",
+          "project_id": "walk",
+          "required_minutes": 120,
+          "scheduled_minutes": 90,
+          "shortfall_minutes": 30
+        }
+      ],
+      "relaxations": [
+        {
+          "kind": "extend_deadline",
+          "description": "Move grant's target date to 2026-11-17",
+          "affected_ids": [
+            "grant",
+            "walk"
+          ],
+          "recovers_minutes": 390,
+          "project_id": "grant",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": "2026-11-17",
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "reduce_estimate",
+          "description": "Lower grant's remaining estimate to 540 min",
+          "affected_ids": [
+            "grant"
+          ],
+          "recovers_minutes": 360,
+          "project_id": "grant",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": 540,
+          "weekly_target_minutes": null,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "raise_max_block_minutes",
+          "description": "Allow grant sittings up to 270 min",
+          "affected_ids": [
+            "grant"
+          ],
+          "recovers_minutes": 45,
+          "project_id": "grant",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": 270
+        },
+        {
+          "kind": "reduce_weekly_target",
+          "description": "Lower walk's weekly target to 90 min",
+          "affected_ids": [
+            "walk"
+          ],
+          "recovers_minutes": 30,
+          "project_id": "walk",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": 90,
+          "max_block_minutes": null
+        }
+      ],
+      "verify_violations": []
+    }
+  }
+}

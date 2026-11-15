@@ -1,0 +1,132 @@
+{
+  "description": "pack fixture no_laptop_tue_wed: PRD \u00a76: 'no laptop Tue\u2013Wed' (tag laptop) displaces only laptop-tagged projects.",
+  "solver_input": {
+    "input_schema_version": 1,
+    "solver_version": "test",
+    "now": "2026-11-16T00:00:00Z",
+    "horizon": {
+      "start": "2026-11-16T00:00:00Z",
+      "end": "2026-11-23T00:00:00Z"
+    },
+    "busy": [],
+    "schedulable": [
+      {
+        "start": "2026-11-16T08:00:00Z",
+        "end": "2026-11-16T20:00:00Z"
+      },
+      {
+        "start": "2026-11-17T08:00:00Z",
+        "end": "2026-11-17T20:00:00Z"
+      },
+      {
+        "start": "2026-11-18T08:00:00Z",
+        "end": "2026-11-18T20:00:00Z"
+      },
+      {
+        "start": "2026-11-19T08:00:00Z",
+        "end": "2026-11-19T20:00:00Z"
+      },
+      {
+        "start": "2026-11-20T08:00:00Z",
+        "end": "2026-11-20T20:00:00Z"
+      },
+      {
+        "start": "2026-11-21T08:00:00Z",
+        "end": "2026-11-21T20:00:00Z"
+      },
+      {
+        "start": "2026-11-22T08:00:00Z",
+        "end": "2026-11-22T20:00:00Z"
+      }
+    ],
+    "frozen": [],
+    "pins": [],
+    "projects": [
+      {
+        "id": "portfolio",
+        "remaining_minutes": 600,
+        "weekly_target_minutes": null,
+        "max_block_minutes": 120,
+        "min_block_minutes": 60,
+        "preferred_windows": [],
+        "preferred_windows_strict": false,
+        "requirement_tags": [
+          "laptop"
+        ],
+        "target_date": "2026-11-22",
+        "deadline": "2026-11-23T00:00:00Z"
+      },
+      {
+        "id": "workout",
+        "remaining_minutes": 0,
+        "weekly_target_minutes": 240,
+        "max_block_minutes": 60,
+        "min_block_minutes": 45,
+        "preferred_windows": [
+          {
+            "start": "2026-11-16T07:00:00Z",
+            "end": "2026-11-16T10:00:00Z"
+          },
+          {
+            "start": "2026-11-17T07:00:00Z",
+            "end": "2026-11-17T10:00:00Z"
+          },
+          {
+            "start": "2026-11-18T07:00:00Z",
+            "end": "2026-11-18T10:00:00Z"
+          },
+          {
+            "start": "2026-11-19T07:00:00Z",
+            "end": "2026-11-19T10:00:00Z"
+          },
+          {
+            "start": "2026-11-20T07:00:00Z",
+            "end": "2026-11-20T10:00:00Z"
+          },
+          {
+            "start": "2026-11-21T07:00:00Z",
+            "end": "2026-11-21T10:00:00Z"
+          },
+          {
+            "start": "2026-11-22T07:00:00Z",
+            "end": "2026-11-22T10:00:00Z"
+          }
+        ],
+        "preferred_windows_strict": false,
+        "requirement_tags": [
+          "gym"
+        ],
+        "target_date": null,
+        "deadline": null
+      },
+      {
+        "id": "reading",
+        "remaining_minutes": 0,
+        "weekly_target_minutes": 300,
+        "max_block_minutes": 60,
+        "min_block_minutes": 30,
+        "preferred_windows": [],
+        "preferred_windows_strict": false,
+        "requirement_tags": [],
+        "target_date": null,
+        "deadline": null
+      }
+    ],
+    "exceptions": [
+      {
+        "id": "no-laptop",
+        "span": {
+          "start": "2026-11-17T00:00:00Z",
+          "end": "2026-11-19T00:00:00Z"
+        },
+        "tags": [
+          "laptop"
+        ],
+        "blocks_all": false
+      }
+    ],
+    "day_diversity": "mixed",
+    "buffer_minutes": 15
+  },
+  "previous": []
+}

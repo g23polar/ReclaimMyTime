@@ -1,5 +1,6 @@
 """Pure, deterministic scheduling core (ARCHITECTURE.md §4)."""
 
+from .golden import replay, solver_fingerprint
 from .models import (
     INPUT_SCHEMA_VERSION,
     DemandShortfall,
@@ -44,5 +45,7 @@ __all__ = [
     "Violation",
     "ViolationKind",
     "pack",
+    "replay",
+    "solver_fingerprint",
     "verify",
 ]

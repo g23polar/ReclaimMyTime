@@ -1,0 +1,85 @@
+{
+  "fingerprint": {
+    "solver_version": "1.0.0",
+    "input_schema_version": 1
+  },
+  "output": {
+    "input_schema_version": 1,
+    "solver_version": "1.0.0",
+    "blocks": [
+      {
+        "lineage_id": "6a19a8d5-7779-5e27-b780-e659b3177c0c",
+        "project_id": "report",
+        "span": {
+          "start": "2026-11-16T11:00:00Z",
+          "end": "2026-11-16T12:50:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "f03ab411-c088-5442-b088-c7e4ff811be4",
+        "project_id": "report",
+        "span": {
+          "start": "2026-11-16T14:00:00Z",
+          "end": "2026-11-16T16:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "f879aae1-d811-53d5-b040-99161120575e",
+        "project_id": "report",
+        "span": {
+          "start": "2026-11-17T11:00:00Z",
+          "end": "2026-11-17T12:50:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "7b91be9e-ed63-5aff-98ae-35b4a8cec0a5",
+        "project_id": "report",
+        "span": {
+          "start": "2026-11-17T14:00:00Z",
+          "end": "2026-11-17T16:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "598b0375-5dbf-5a0e-bff5-c0fd500f38ef",
+        "project_id": "report",
+        "span": {
+          "start": "2026-11-18T11:00:00Z",
+          "end": "2026-11-18T12:20:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "2450fc2d-690d-5500-8460-3d06a6f359b7",
+        "project_id": "report",
+        "span": {
+          "start": "2026-11-18T14:00:00Z",
+          "end": "2026-11-18T16:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "e80599b6-2889-57c3-89b1-f4db5b537b2d",
+        "project_id": "report",
+        "span": {
+          "start": "2026-11-19T14:00:00Z",
+          "end": "2026-11-19T16:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "036622ed-4618-57e2-a83f-57a3233f6389",
+        "project_id": "report",
+        "span": {
+          "start": "2026-11-20T14:00:00Z",
+          "end": "2026-11-20T16:00:00Z"
+        },
+        "pinned": false
+      }
+    ],
+    "infeasibility": null
+  }
+}

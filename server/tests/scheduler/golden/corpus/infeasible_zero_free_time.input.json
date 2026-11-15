@@ -1,0 +1,104 @@
+{
+  "description": "Infeasible: every waking hour is busy (zero free time).",
+  "solver_input": {
+    "input_schema_version": 1,
+    "solver_version": "golden",
+    "now": "2026-11-16T00:00:00Z",
+    "horizon": {
+      "start": "2026-11-16T00:00:00Z",
+      "end": "2026-11-23T00:00:00Z"
+    },
+    "busy": [
+      {
+        "start": "2026-11-16T07:00:00Z",
+        "end": "2026-11-16T21:00:00Z"
+      },
+      {
+        "start": "2026-11-17T07:00:00Z",
+        "end": "2026-11-17T21:00:00Z"
+      },
+      {
+        "start": "2026-11-18T07:00:00Z",
+        "end": "2026-11-18T21:00:00Z"
+      },
+      {
+        "start": "2026-11-19T07:00:00Z",
+        "end": "2026-11-19T21:00:00Z"
+      },
+      {
+        "start": "2026-11-20T07:00:00Z",
+        "end": "2026-11-20T21:00:00Z"
+      },
+      {
+        "start": "2026-11-21T07:00:00Z",
+        "end": "2026-11-21T21:00:00Z"
+      },
+      {
+        "start": "2026-11-22T07:00:00Z",
+        "end": "2026-11-22T21:00:00Z"
+      }
+    ],
+    "schedulable": [
+      {
+        "start": "2026-11-16T08:00:00Z",
+        "end": "2026-11-16T20:00:00Z"
+      },
+      {
+        "start": "2026-11-17T08:00:00Z",
+        "end": "2026-11-17T20:00:00Z"
+      },
+      {
+        "start": "2026-11-18T08:00:00Z",
+        "end": "2026-11-18T20:00:00Z"
+      },
+      {
+        "start": "2026-11-19T08:00:00Z",
+        "end": "2026-11-19T20:00:00Z"
+      },
+      {
+        "start": "2026-11-20T08:00:00Z",
+        "end": "2026-11-20T20:00:00Z"
+      },
+      {
+        "start": "2026-11-21T08:00:00Z",
+        "end": "2026-11-21T20:00:00Z"
+      },
+      {
+        "start": "2026-11-22T08:00:00Z",
+        "end": "2026-11-22T20:00:00Z"
+      }
+    ],
+    "frozen": [],
+    "pins": [],
+    "projects": [
+      {
+        "id": "thesis",
+        "remaining_minutes": 600,
+        "weekly_target_minutes": null,
+        "max_block_minutes": 120,
+        "min_block_minutes": 60,
+        "preferred_windows": [],
+        "preferred_windows_strict": false,
+        "requirement_tags": [],
+        "target_date": "2026-11-22",
+        "deadline": "2026-11-23T00:00:00Z"
+      },
+      {
+        "id": "gym",
+        "remaining_minutes": 0,
+        "weekly_target_minutes": 120,
+        "max_block_minutes": 60,
+        "min_block_minutes": 30,
+        "preferred_windows": [],
+        "preferred_windows_strict": false,
+        "requirement_tags": [],
+        "target_date": null,
+        "deadline": null
+      }
+    ],
+    "exceptions": [],
+    "day_diversity": "mixed",
+    "buffer_minutes": 15
+  },
+  "previous": []
+}

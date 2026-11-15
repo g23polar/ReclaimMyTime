@@ -1,0 +1,112 @@
+{
+  "fingerprint": {
+    "solver_version": "1.0.0",
+    "input_schema_version": 1
+  },
+  "output": {
+    "input_schema_version": 1,
+    "solver_version": "1.0.0",
+    "blocks": [
+      {
+        "lineage_id": "ae944fbc-82d1-5b77-bb54-c9fb33900449",
+        "project_id": "P1",
+        "span": {
+          "start": "2026-11-16T09:00:00Z",
+          "end": "2026-11-16T10:00:00Z"
+        },
+        "pinned": true
+      },
+      {
+        "lineage_id": "L-b2",
+        "project_id": "P2",
+        "span": {
+          "start": "2026-11-16T10:30:00Z",
+          "end": "2026-11-16T11:30:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "L-pin",
+        "project_id": "P1",
+        "span": {
+          "start": "2026-11-16T13:00:00Z",
+          "end": "2026-11-16T15:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "1e516b30-a803-5edd-9483-3e912fc4c8cd",
+        "project_id": "P1",
+        "span": {
+          "start": "2026-11-16T16:15:00Z",
+          "end": "2026-11-16T17:15:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "L-b3",
+        "project_id": "P2",
+        "span": {
+          "start": "2026-11-16T18:00:00Z",
+          "end": "2026-11-16T19:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "4326e52d-8817-508c-b113-647c6deb2732",
+        "project_id": "P2",
+        "span": {
+          "start": "2026-11-16T21:00:00Z",
+          "end": "2026-11-16T22:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "bdf22ca2-4692-5fb1-86d0-38ce6bc62875",
+        "project_id": "P1",
+        "span": {
+          "start": "2026-11-17T08:00:00Z",
+          "end": "2026-11-17T10:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "53f872cc-7423-5e4c-81db-5b6d017067a8",
+        "project_id": "P1",
+        "span": {
+          "start": "2026-11-17T11:15:00Z",
+          "end": "2026-11-17T13:15:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "96587004-c6ca-50e8-972f-98bf13a4ea02",
+        "project_id": "P1",
+        "span": {
+          "start": "2026-11-17T14:30:00Z",
+          "end": "2026-11-17T16:30:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "89829036-2a22-5b34-9583-8be74399c4d2",
+        "project_id": "P2",
+        "span": {
+          "start": "2026-11-17T16:45:00Z",
+          "end": "2026-11-17T17:45:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "19bf507f-5d38-5e49-bfe7-56649fc0739a",
+        "project_id": "P2",
+        "span": {
+          "start": "2026-11-17T19:00:00Z",
+          "end": "2026-11-17T20:00:00Z"
+        },
+        "pinned": false
+      }
+    ],
+    "infeasibility": null
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "fingerprint": {
+    "solver_version": "1.0.0",
+    "input_schema_version": 1
+  },
+  "output": {
+    "input_schema_version": 1,
+    "solver_version": "1.0.0",
+    "blocks": [],
+    "infeasibility": {
+      "violations": [
+        {
+          "kind": "demand_shortfall",
+          "project_id": "gym",
+          "required_minutes": 120,
+          "scheduled_minutes": 0,
+          "shortfall_minutes": 120
+        },
+        {
+          "kind": "demand_shortfall",
+          "project_id": "thesis",
+          "required_minutes": 600,
+          "scheduled_minutes": 0,
+          "shortfall_minutes": 600
+        }
+      ],
+      "relaxations": [],
+      "verify_violations": []
+    }
+  }
+}

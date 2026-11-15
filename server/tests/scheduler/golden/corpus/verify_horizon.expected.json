@@ -1,0 +1,206 @@
+{
+  "fingerprint": {
+    "solver_version": "1.0.0",
+    "input_schema_version": 1
+  },
+  "output": {
+    "input_schema_version": 1,
+    "solver_version": "1.0.0",
+    "blocks": [
+      {
+        "lineage_id": "4326e52d-8817-508c-b113-647c6deb2732",
+        "project_id": "P2",
+        "span": {
+          "start": "2026-11-16T08:00:00Z",
+          "end": "2026-11-16T08:45:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "ae944fbc-82d1-5b77-bb54-c9fb33900449",
+        "project_id": "P1",
+        "span": {
+          "start": "2026-11-16T09:00:00Z",
+          "end": "2026-11-16T10:00:00Z"
+        },
+        "pinned": true
+      },
+      {
+        "lineage_id": "1e516b30-a803-5edd-9483-3e912fc4c8cd",
+        "project_id": "P1",
+        "span": {
+          "start": "2026-11-16T10:15:00Z",
+          "end": "2026-11-16T12:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "bdf22ca2-4692-5fb1-86d0-38ce6bc62875",
+        "project_id": "P1",
+        "span": {
+          "start": "2026-11-16T13:00:00Z",
+          "end": "2026-11-16T15:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "53f872cc-7423-5e4c-81db-5b6d017067a8",
+        "project_id": "P1",
+        "span": {
+          "start": "2026-11-16T15:15:00Z",
+          "end": "2026-11-16T15:45:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "96587004-c6ca-50e8-972f-98bf13a4ea02",
+        "project_id": "P1",
+        "span": {
+          "start": "2026-11-16T16:00:00Z",
+          "end": "2026-11-16T18:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "89829036-2a22-5b34-9583-8be74399c4d2",
+        "project_id": "P2",
+        "span": {
+          "start": "2026-11-16T18:15:00Z",
+          "end": "2026-11-16T19:15:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "1e200bf4-ed9b-5a84-b6d5-566729991032",
+        "project_id": "P1",
+        "span": {
+          "start": "2026-11-16T20:00:00Z",
+          "end": "2026-11-16T20:30:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "b6dc7d27-f025-52cf-8dbb-63cb14e2cc5a",
+        "project_id": "P1",
+        "span": {
+          "start": "2026-11-16T21:00:00Z",
+          "end": "2026-11-16T22:00:00Z"
+        },
+        "pinned": false
+      }
+    ],
+    "infeasibility": {
+      "violations": [
+        {
+          "kind": "demand_shortfall",
+          "project_id": "P1",
+          "required_minutes": 600,
+          "scheduled_minutes": 525,
+          "shortfall_minutes": 75
+        },
+        {
+          "kind": "demand_shortfall",
+          "project_id": "P2",
+          "required_minutes": 300,
+          "scheduled_minutes": 105,
+          "shortfall_minutes": 195
+        }
+      ],
+      "relaxations": [
+        {
+          "kind": "reduce_estimate",
+          "description": "Lower P2's remaining estimate to 105 min",
+          "affected_ids": [
+            "P1",
+            "P2"
+          ],
+          "recovers_minutes": 195,
+          "project_id": "P2",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": 105,
+          "weekly_target_minutes": null,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "reduce_estimate",
+          "description": "Lower P1's remaining estimate to 525 min",
+          "affected_ids": [
+            "P1",
+            "P2"
+          ],
+          "recovers_minutes": 60,
+          "project_id": "P1",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": 525,
+          "weekly_target_minutes": null,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "raise_max_block_minutes",
+          "description": "Allow P1 sittings up to 180 min",
+          "affected_ids": [
+            "P2"
+          ],
+          "recovers_minutes": 45,
+          "project_id": "P1",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": 180
+        },
+        {
+          "kind": "raise_max_block_minutes",
+          "description": "Allow P2 sittings up to 90 min",
+          "affected_ids": [
+            "P2"
+          ],
+          "recovers_minutes": 30,
+          "project_id": "P2",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": 90
+        },
+        {
+          "kind": "remove_exception",
+          "description": "Drop availability exception exc-1",
+          "affected_ids": [
+            "P2"
+          ],
+          "recovers_minutes": 15,
+          "project_id": null,
+          "pin_id": null,
+          "exception_id": "exc-1",
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "remove_pin",
+          "description": "Remove forbid forbid-1",
+          "affected_ids": [
+            "P2"
+          ],
+          "recovers_minutes": 15,
+          "project_id": null,
+          "pin_id": "forbid-1",
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": null
+        }
+      ],
+      "verify_violations": []
+    }
+  }
+}
