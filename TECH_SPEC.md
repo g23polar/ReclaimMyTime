@@ -128,7 +128,7 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 **M1 — Solver**
 - [x] T1.1 Solver models + `verify()` — `03dc641`
 - [x] T1.2 Packing heuristic — `28ea65a`
-- [ ] T1.3 Determinism + golden harness
+- [x] T1.3 Determinism + golden harness — `216c474` (2 minors logged)
 - [ ] M1 architect gate
 
 **M2 — Persistence & API core**
