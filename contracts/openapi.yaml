@@ -177,6 +177,11 @@ paths:
           application/json:
             schema: {$ref: '#/components/schemas/ProjectPatch'}
       responses:
+        '200':
+          description: Name-only edit, applied directly (not staged; Staging model).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Project'}
         '202': {$ref: '#/components/responses/ChangesetStaged'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}

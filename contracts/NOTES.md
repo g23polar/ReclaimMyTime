@@ -63,6 +63,7 @@ Every non-2xx/3xx JSON response uses this shape:
 | 404 | `no_live_plan` | `GET /plans/current` when no live plan covers now |
 | 409 | `changeset_not_pending` | confirm/reject on a changeset in a different terminal state; `details.status` |
 | 409 | `changeset_stale` | confirm found the proposal out of date (a block it moves has started, or state changed — O8). Nothing applied; the server staged a fresh proposal: `details.changeset_id` = the new pending changeset to review (2026-11-15, T2.1) |
+| 409 | `project_exists` \| `exception_exists` \| `pin_exists` | a staged write reuses an id that already exists (agent-staged writes; T2.3, 2026-11-15) |
 | 409 | `block_not_started` | `complete`/`skip` on a future block |
 | 409 | `block_immutable` | `edit`/`delete` on a past or in-progress block (Principle 4) |
 | 409 | `block_superseded` | PATCH on a block that isn't in the current live plan |
