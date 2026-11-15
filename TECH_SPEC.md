@@ -148,7 +148,7 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 **M5 — iOS**
 - [x] T5.0 Visual design spec — `927bb08` (intent panels: product owner)
 - [x] T5.1 Skeleton + API client + mock — `a301a16`
-- [ ] T5.2 Onboarding journey (sign-in, consent, chat intake, summary cards, preferences)
+- [x] T5.2 Onboarding journey (sign-in, consent, chat intake, summary cards, preferences) — `265fba3`
 - [ ] T5.3 Timetable + editing + diff + trade-off sheet
 - [ ] T5.4 Notifications + background
 - [ ] Intent-narrative panels (product owner)
