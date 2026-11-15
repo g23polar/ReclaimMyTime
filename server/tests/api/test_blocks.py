@@ -17,8 +17,10 @@ pytestmark = requires_db
 Maker = async_sessionmaker[AsyncSession]
 
 
-async def _live_snapshot(maker: Maker, uid: uuid.UUID) -> list[tuple[str, str, str]]:
-    return [(str(b.id), str(b.span), b.state) for b in await live_blocks(maker, uid)]
+async def _live_snapshot(maker: Maker, uid: uuid.UUID) -> list[tuple[str, str]]:
+    # Ids and spans only: staging lazily sweeps ended blocks to `completed` (M1+M2 gate),
+    # which is not an edit.
+    return [(str(b.id), str(b.span)) for b in await live_blocks(maker, uid)]
 
 
 async def test_edit_stages_a_pin_and_never_edits_in_place(
@@ -140,3 +142,76 @@ async def test_superseded_and_foreign_blocks(
         resp = await client.patch(f"/blocks/{current.id}", json=body)
         assert resp.status_code == 404
         assert resp.json()["error"]["details"]["resource"] == "block"
+
+
+# ---------------------------------------------------------------- re-moving a pinned block
+
+
+async def _project_minutes(maker: Maker, uid: uuid.UUID, project: uuid.UUID) -> int:
+    return sum(
+        int((b.span.upper - b.span.lower).total_seconds() // 60)
+        for b in await live_blocks(maker, uid)
+        if b.project_id == project
+    )
+
+
+async def _move(client: httpx.AsyncClient, block_id: uuid.UUID, start, minutes: int) -> dict:  # type: ignore[no-untyped-def]
+    span = {"start": start.isoformat(), "end": (start + timedelta(minutes=minutes)).isoformat()}
+    resp = await client.patch(f"/blocks/{block_id}", json={"action": "edit", "span": span})
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert (await client.post(f"/changesets/{body['id']}/confirm")).status_code == 200
+    return body
+
+
+async def _realizing(maker: Maker, uid: uuid.UUID, pin_span: dict[str, str], project: str):  # type: ignore[no-untyped-def]
+    return next(
+        b
+        for b in await live_blocks(maker, uid)
+        if span_json(b.span) == pin_span and str(b.project_id) == project
+    )
+
+
+async def test_moving_a_pinned_block_again_replaces_its_pin(
+    client: httpx.AsyncClient, maker: Maker, world: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    block = await future_block(maker, user_id)
+    project, minutes = block.project_id, int((block.span.upper - block.span.lower).seconds // 60)
+    effort = await _project_minutes(maker, user_id, project)
+    sessions = len([b for b in await live_blocks(maker, user_id) if b.project_id == project])
+
+    first = await _move(client, block.id, NOW + timedelta(days=2, hours=1), minutes)  # Thu 10:30
+    pin1 = first["staged"][0]["payload"]
+    moved = await _realizing(maker, user_id, pin1["span"], str(project))
+
+    second = await _move(client, moved.id, NOW + timedelta(days=3, hours=2), minutes)  # Fri 11:30
+    assert [(m["kind"], m["payload"].get("kind")) for m in second["staged"]] == [
+        ("pin_removed", None),
+        ("pin_added", "pin"),
+    ]
+    assert second["staged"][0]["payload"] == {"pin_id": pin1["pin_id"]}
+    pins = await rows(maker, "SELECT kind::text, span FROM block_pins")
+    assert len(pins) == 1 and pins[0][0] == "pin"
+    live = [b for b in await live_blocks(maker, user_id) if b.project_id == project]
+    assert len(live) == sessions
+    assert [b for b in live if span_json(b.span) == pin1["span"]] == []
+    assert await _project_minutes(maker, user_id, project) == effort
+
+
+async def test_deleting_a_pinned_block_replaces_its_pin_with_a_forbid(
+    client: httpx.AsyncClient, maker: Maker, world: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    block = await future_block(maker, user_id)
+    minutes = int((block.span.upper - block.span.lower).seconds // 60)
+    first = await _move(client, block.id, NOW + timedelta(days=2, hours=1), minutes)
+    pin1 = first["staged"][0]["payload"]
+    moved = await _realizing(maker, user_id, pin1["span"], str(block.project_id))
+    resp = await client.patch(f"/blocks/{moved.id}", json={"action": "delete"})
+    assert resp.status_code == 202, resp.text
+    staged = resp.json()["staged"]
+    assert [(m["kind"], m["payload"].get("kind")) for m in staged] == [
+        ("pin_removed", None),
+        ("pin_added", "forbid"),
+    ]
+    assert (await client.post(f"/changesets/{resp.json()['id']}/confirm")).status_code == 200
+    assert await rows(maker, "SELECT kind::text FROM block_pins") == [("forbid",)]

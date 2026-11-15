@@ -763,6 +763,9 @@ async def stage_changeset(
     if (solver_input is None) != (solver_output is None):
         raise ValueError("solver_input and solver_output go together")
     await lock_user(tx, user_id)
+    if solver_input is not None:
+        # M1+M2 gate: ended work is `completed` before anything is stored against it.
+        await sweep_past_blocks(tx, user_id, now)
     staged = parse_staged(staged_mutations)
     new_created = created_project_ids(staged)
 
@@ -887,6 +890,10 @@ async def propose_changeset(
     `previous`, then `stage_changeset`. When no preferences exist yet (onboarding) the
     changeset is stored without a plan."""
     await lock_user(tx, user_id)
+    # M1+M2 gate: credit ended-but-unswept blocks (completed_minutes counts only `completed`
+    # rows) before solving — they may lie outside the new horizon (week-start change), where
+    # no frozen copy would otherwise account for them.
+    await sweep_past_blocks(tx, user_id, now)
     staged = parse_staged(staged_mutations)
     state = overlay(await load_constraint_state(tx, user_id), staged)
     if state.preferences is None:
@@ -983,6 +990,33 @@ async def _stale_check(
     return stored_input
 
 
+async def _check_current_week(
+    tx: AsyncSession,
+    user_id: uuid.UUID,
+    plan: WeekPlan,
+    staged: Sequence[StagedMutation],
+    *,
+    now: datetime,
+    busy: Sequence[Interval] | None,
+) -> None:
+    """M1+M2 gate finding 3: a proposal for a week that has ended is stale even when re-solving
+    its own horizon compares equal (an empty schedule, or one that is entirely frozen).
+    Raises ChangesetStale carrying a solve of the staged mutations over the CURRENT
+    preference week (overlaid preferences), for re-review; nothing is applied."""
+    week = await _preference_week(tx, user_id, staged)
+    if week is None:  # pragma: no cover - a planned changeset implies preferences
+        raise PreferencesNotSet("no preferences: cannot confirm a plan")
+    tz, week_start = week
+    current = expected_horizon(now, tz, week_start)
+    if to_interval(plan.horizon) == current:
+        return
+    fresh_input = await build_solver_input(
+        tx, user_id, current, now, tz, staged=staged, busy=() if busy is None else busy
+    )
+    previous = await load_previous(tx, user_id, current, now)
+    raise ChangesetStale(fresh_input, pack(fresh_input, previous), "the proposal's week has ended")
+
+
 async def _inherit_from_live(
     tx: AsyncSession,
     new_plan_id: uuid.UUID,
@@ -1039,7 +1073,9 @@ async def confirm_changeset(
     """Confirm under the per-user advisory lock (ARCH §3 Semantics):
 
     1. not pending → ChangesetNotPending(status); already confirmed → idempotent no-op;
-    2. O8 stale check (see `_stale_check`) → ChangesetStale, nothing applied; a planless
+    2. lazy-sweep, then: proposal horizon ≠ the current preference week → ChangesetStale with
+       a solve over the current week (`_check_current_week`); O8 stale check (see
+       `_stale_check`) → ChangesetStale, nothing applied; a planless
        changeset reaching a user who now has preferences → InvalidMutation; a live plan
        whose upcoming blocks fall outside the horizon → InvalidMutation (`_check_supersedable`);
     3. apply staged mutations via `apply_mutation` (staged projects → `active`);
@@ -1071,6 +1107,8 @@ async def confirm_changeset(
                 .execution_options(populate_existing=True)
             )
         ).scalar_one()
+        await sweep_past_blocks(tx, user_id, now)  # gate finding 2: credit ended work first
+        await _check_current_week(tx, user_id, plan, staged, now=now, busy=busy)
         stored_input = await _stale_check(tx, user_id, plan, staged, now=now, busy=busy)
         to_supersede = await _check_supersedable(tx, user_id, to_interval(plan.horizon), now)
     elif await _preference_week(tx, user_id, staged) is not None:

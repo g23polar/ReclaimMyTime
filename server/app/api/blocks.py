@@ -3,6 +3,7 @@
 - complete / skip → `mark_block_state` (D5): applied directly, started blocks only → 200 Block;
 - edit   → stage `pin_added` (kind=pin, the block's project, the new absolute span; D7) → 202;
 - delete → stage `pin_added` (kind=forbid, the block's project, its span; D6) → 202.
+If the block currently realizes a pin, `pin_removed` for it is staged first (M1+M2 gate).
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from app.api.mappers import block_out, ts
 from app.api.schemas import BLOCK_ACTION_TAGS, BlockAction, BlockComplete, BlockEdit, BlockSkip
 from app.api.staging import accepted, manual, stage
 from app.auth.dependencies import require_timezone
-from app.db.models import Block, WeekPlan
+from app.db.models import Block, BlockPin, WeekPlan
 from app.db.write_paths import lock_user, mark_block_state
 from app.errors import AppError
 
@@ -77,7 +78,24 @@ async def patch_block(
         "kind": kind,
         "created_from_block_id": str(block.id),
     }
-    return accepted(await stage(tx, user_id, [manual("pin_added", payload)], now=now))
+    # M1+M2 gate: a block that realizes a pin (exact project + span, the iOS G2 join) is
+    # re-placed by replacing that pin, not by stacking a second one — both changes are
+    # staged in this one changeset.
+    realized = (
+        await tx.execute(
+            select(BlockPin.id)
+            .where(
+                BlockPin.user_id == user_id,
+                BlockPin.kind == "pin",
+                BlockPin.project_id == block.project_id,
+                BlockPin.span == block.span,
+            )
+            .order_by(BlockPin.id)
+        )
+    ).scalars()
+    mutations = [manual("pin_removed", {"pin_id": str(pin_id)}) for pin_id in realized]
+    mutations.append(manual("pin_added", payload))
+    return accepted(await stage(tx, user_id, mutations, now=now))
 
 
 def _check_edit_span(action: BlockEdit, plan: WeekPlan, now: Any) -> None:

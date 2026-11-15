@@ -206,3 +206,51 @@ async def test_stale_recovery_does_not_replace_a_newer_proposal(
     assert await rows(maker, "SELECT status::text FROM projects WHERE name = 'Grant'") == [
         ("staged",)
     ]
+
+
+# ---------------------------------------------------------------- week rollover at confirm
+
+
+async def _assert_rolled_over(client: httpx.AsyncClient, maker: Maker, cs: str) -> None:
+    resp = await client.post(f"/changesets/{cs}/confirm")
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"]["code"] == "changeset_stale"
+    fresh = resp.json()["error"]["details"]["changeset_id"]
+    assert (await _status(maker, cs), await _status(maker, fresh)) == ("expired", "pending")
+    plan = await rows(
+        maker,
+        "SELECT p.week_start FROM changesets c JOIN week_plans p ON p.id = c.plan_id"
+        " WHERE c.id = :c",
+        c=uuid.UUID(fresh),
+    )
+    assert str(plan[0][0]) == "2026-11-23"
+
+
+async def test_rollover_of_an_empty_schedule_is_stale(
+    client: httpx.AsyncClient, maker: Maker, clock: SettableClock
+) -> None:
+    prefs = {
+        "timezone": "America/Los_Angeles",
+        "schedulable_windows": {"mon": [["08:00", "20:00"]]},
+        "day_diversity": "mixed",
+        "buffer_minutes": 15,
+        "week_start": 1,
+    }
+    resp = await client.put("/preferences", json=prefs)  # no projects: zero blocks
+    assert resp.status_code == 202 and resp.json()["plan"]["blocks"] == []
+    clock.current = T0 + timedelta(days=7)
+    await _assert_rolled_over(client, maker, resp.json()["id"])
+    assert await rows(maker, "SELECT count(*) FROM user_preferences") == [(0,)]
+
+
+async def test_rollover_of_a_fully_frozen_schedule_is_stale(
+    client: httpx.AsyncClient, maker: Maker, user_id: uuid.UUID, clock: SettableClock
+) -> None:
+    await bootstrap(maker, user_id)
+    clock.current = at(6, "23:00")  # Sunday night: every block has ended
+    sunday = {"start_date": "2026-11-22", "end_date": "2026-11-22", "blocks_all": True}
+    resp = await client.post("/exceptions", json=sunday)
+    assert resp.status_code == 202, resp.text
+    clock.current = at(7, "06:00")
+    await _assert_rolled_over(client, maker, resp.json()["id"])
+    assert await rows(maker, "SELECT count(*) FROM availability_exceptions") == [(0,)]
