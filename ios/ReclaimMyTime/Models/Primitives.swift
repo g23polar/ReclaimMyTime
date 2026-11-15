@@ -74,9 +74,23 @@ struct LocalDate: Codable, Hashable, Sendable, Comparable, CustomStringConvertib
         let parts = raw.split(separator: "-", omittingEmptySubsequences: false)
         guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
               parts.allSatisfy({ $0.allSatisfy(\.isASCII) && $0.allSatisfy(\.isNumber) }),
-              let month = Int(parts[1]), let day = Int(parts[2])
+              let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2])
         else { return false }
-        return (1...12).contains(month) && (1...31).contains(day)
+        guard (1...12).contains(month) else { return false }
+        return (1...daysInMonth(year: year, month: month)).contains(day)
+    }
+
+    /// Proleptic Gregorian month length; no Calendar or timezone involved.
+    private static func daysInMonth(year: Int, month: Int) -> Int {
+        switch month {
+        case 2:
+            let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+            return leap ? 29 : 28
+        case 4, 6, 9, 11:
+            return 30
+        default:
+            return 31
+        }
     }
 }
 

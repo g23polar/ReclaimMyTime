@@ -5,9 +5,17 @@ enum KeychainError: Error, Hashable, Sendable {
     case unexpectedStatus(OSStatus)
 }
 
+/// The Keychain operations `SessionStore` needs; a seam so read failures can be tested.
+protocol KeychainStoring: Sendable {
+    /// Returns nil only when the item is confirmed absent; any other failure throws.
+    func read(account: String) throws -> Data?
+    func write(_ data: Data, account: String) throws
+    func delete(account: String) throws
+}
+
 /// Generic-password Keychain access for one service. Items are
 /// `kSecAttrAccessibleAfterFirstUnlock` so background refresh (T5.4) can read the session.
-struct KeychainStore: Sendable {
+struct KeychainStore: KeychainStoring {
     let service: String
 
     init(service: String) {

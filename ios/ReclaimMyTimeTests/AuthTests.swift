@@ -67,13 +67,13 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(saved.userId, auth.user.id)
 
         let reloaded = SessionStore(keychain: keychain)
-        let current = await reloaded.current()
+        let current = try await reloaded.current()
         XCTAssertEqual(current, saved)
         let token = await reloaded.token()
         XCTAssertEqual(token, auth.token)
 
         await reloaded.clear()
-        let afterClear = await SessionStore(keychain: keychain).current()
+        let afterClear = try await SessionStore(keychain: keychain).current()
         XCTAssertNil(afterClear)
     }
 
@@ -102,13 +102,13 @@ final class AuthStateTests: XCTestCase {
 
         await auth.signInWithApple(identityToken: "t", authorizationCode: "c", rawNonce: Nonce.random())
         guard case .signedIn(let session) = auth.phase else { return XCTFail("expected signed in") }
-        let stored = await store.current()
+        let stored = try await store.current()
         XCTAssertEqual(stored, session)
         XCTAssertNil(auth.signInFailure)
 
         await auth.signOut()
         XCTAssertEqual(auth.phase, .signedOut)
-        let cleared = await store.current()
+        let cleared = try await store.current()
         XCTAssertNil(cleared)
     }
 
@@ -119,7 +119,7 @@ final class AuthStateTests: XCTestCase {
         await auth.signInWithApple(identityToken: "t", authorizationCode: "c", rawNonce: Nonce.random())
         XCTAssertEqual(auth.phase, .signedOut)
         XCTAssertEqual(auth.signInFailure, .appleRejected)
-        let stored = await store.current()
+        let stored = try await store.current()
         XCTAssertNil(stored)
     }
 
@@ -137,7 +137,7 @@ final class AuthStateTests: XCTestCase {
         try await store.save(TestFixtures.authSession())
         let relay = SessionInvalidationRelay()
         let api = URLSessionAPIClient(baseURL: URL(string: AppConfig.mockBaseURL)!, transport: mock, sessionStore: store,
-                                      onUnauthenticated: { await relay.notify() })
+                                      onUnauthenticated: { token in await relay.notify(token: token) })
         let auth = AuthState(api: api, sessionStore: store)
         relay.auth = auth
         await auth.bootstrap()

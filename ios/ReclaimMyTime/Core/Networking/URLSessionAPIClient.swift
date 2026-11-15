@@ -11,7 +11,9 @@ final class URLSessionAPIClient: APIClient {
     private let transport: any HTTPTransport
     private let sessionStore: SessionStore
     private let timeZoneIdentifier: @Sendable () -> String
-    private let onUnauthenticated: (@Sendable () async -> Void)?
+    /// Receives the rejected bearer token so auth can ignore a late notification for a session
+    /// that has since been replaced.
+    private let onUnauthenticated: (@Sendable (_ rejectedToken: String?) async -> Void)?
     private let logger = Logger(subsystem: "com.reclaimmytime.app", category: "api")
 
     init(
@@ -19,7 +21,7 @@ final class URLSessionAPIClient: APIClient {
         transport: any HTTPTransport,
         sessionStore: SessionStore,
         timeZoneIdentifier: @escaping @Sendable () -> String = { TimeZone.current.identifier },
-        onUnauthenticated: (@Sendable () async -> Void)? = nil
+        onUnauthenticated: (@Sendable (_ rejectedToken: String?) async -> Void)? = nil
     ) {
         self.baseURL = baseURL
         self.transport = transport
@@ -48,6 +50,12 @@ final class URLSessionAPIClient: APIClient {
 
     func revokeCurrentSession() async throws {
         try await sendExpectingNoContent(Endpoint(method: .delete, path: "/sessions/current"))
+    }
+
+    func revokeSession(token: String) async throws {
+        var endpoint = Endpoint(method: .delete, path: "/sessions/current")
+        endpoint.bearerToken = token
+        try await sendExpectingNoContent(endpoint)
     }
 
     // MARK: projects
@@ -164,7 +172,7 @@ final class URLSessionAPIClient: APIClient {
         continuation: AsyncThrowingStream<AgentEvent, any Error>.Continuation
     ) async throws {
         let endpoint = Endpoint(method: .post, path: "/agent/message", body: try encode(request), acceptsEventStream: true)
-        let urlRequest = try await makeURLRequest(endpoint)
+        let (urlRequest, sentToken) = try await makeAuthorizedRequest(endpoint)
         let response: HTTPURLResponse
         let chunks: AsyncThrowingStream<Data, any Error>
         do {
@@ -181,7 +189,7 @@ final class URLSessionAPIClient: APIClient {
             } catch {
                 throw Self.mapTransportError(error)
             }
-            throw await handleFailure(status: response.statusCode, body: body)
+            throw await handleFailure(status: response.statusCode, body: body, sentToken: sentToken)
         }
 
         let decoder = JSONCoding.makeDecoder()
@@ -246,7 +254,7 @@ final class URLSessionAPIClient: APIClient {
 
     /// Sends the request; returns the body for any 2xx, throws `APIError` otherwise.
     private func perform(_ endpoint: Endpoint) async throws -> (Data, HTTPURLResponse) {
-        let request = try await makeURLRequest(endpoint)
+        let (request, sentToken) = try await makeAuthorizedRequest(endpoint)
         let data: Data
         let response: HTTPURLResponse
         do {
@@ -255,22 +263,44 @@ final class URLSessionAPIClient: APIClient {
             throw Self.mapTransportError(error)
         }
         guard (200..<300).contains(response.statusCode) else {
-            throw await handleFailure(status: response.statusCode, body: data)
+            throw await handleFailure(status: response.statusCode, body: data, sentToken: sentToken)
         }
         return (data, response)
     }
 
-    private func handleFailure(status: Int, body: Data) async -> APIError {
+    /// `sentToken` is the bearer the failed request carried. The local session is cleared (and auth
+    /// notified) only if it is still that same session: a late 401 for a replaced session is ignored.
+    private func handleFailure(status: Int, body: Data, sentToken: String?) async -> APIError {
         let error = APIError.from(status: status, body: body, decoder: JSONCoding.makeDecoder())
         if status == 401, error.isUnauthenticated {
-            logger.notice("Session rejected by server (401 unauthenticated); clearing local session")
-            await sessionStore.clear()
-            await onUnauthenticated?()
+            if await sessionStore.clear(ifToken: sentToken) {
+                logger.notice("Session rejected by server (401 unauthenticated); cleared local session")
+                await onUnauthenticated?(sentToken)
+            } else {
+                logger.notice("Ignoring 401 for a session that is no longer current")
+            }
         }
         return error
     }
 
     func makeURLRequest(_ endpoint: Endpoint) async throws -> URLRequest {
+        try await makeAuthorizedRequest(endpoint).request
+    }
+
+    /// Builds the request and reports which bearer token (if any) it carries.
+    private func makeAuthorizedRequest(_ endpoint: Endpoint) async throws -> (request: URLRequest, token: String?) {
+        var token: String?
+        if endpoint.requiresAuth {
+            if let explicit = endpoint.bearerToken {
+                token = explicit
+            } else {
+                token = await sessionStore.token()
+            }
+        }
+        return (try buildURLRequest(endpoint, token: token), token)
+    }
+
+    private func buildURLRequest(_ endpoint: Endpoint, token: String?) throws -> URLRequest {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw APIError.encoding("Invalid base URL")
         }
@@ -283,7 +313,7 @@ final class URLSessionAPIClient: APIClient {
         request.httpMethod = endpoint.method.rawValue
         request.setValue(endpoint.acceptsEventStream ? "text/event-stream" : "application/json", forHTTPHeaderField: "Accept")
         request.setValue(timeZoneIdentifier(), forHTTPHeaderField: "X-Timezone")
-        if endpoint.requiresAuth, let token = await sessionStore.token() {
+        if let token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         if let body = endpoint.body {

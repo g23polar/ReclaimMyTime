@@ -10,6 +10,9 @@ protocol APIClient: Sendable {
     func deleteMe() async throws
     func revokeAllSessions() async throws
     func revokeCurrentSession() async throws
+    /// Revokes the session identified by `token` (not the stored one): used by local-first
+    /// sign-out after the Keychain is already cleared.
+    func revokeSession(token: String) async throws
 
     // projects
     func listProjects(includeArchived: Bool) async throws -> [Project]
@@ -66,6 +69,8 @@ struct Endpoint: Sendable {
     var body: Data?
     /// False only for `POST /auth/apple`.
     var requiresAuth = true
+    /// Overrides the stored session's token for this request.
+    var bearerToken: String?
     var acceptsEventStream = false
 }
 

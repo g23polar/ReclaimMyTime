@@ -16,7 +16,7 @@ final class APIClientTests: XCTestCase {
         StubURLProtocol.reset()
     }
 
-    private func makeClient(onUnauthenticated: (@Sendable () async -> Void)? = nil) -> URLSessionAPIClient {
+    private func makeClient(onUnauthenticated: (@Sendable (String?) async -> Void)? = nil) -> URLSessionAPIClient {
         URLSessionAPIClient(
             baseURL: URL(string: "https://api.example.test/v1")!,
             transport: URLSessionTransport(session: StubURLProtocol.makeSession()),
@@ -185,13 +185,13 @@ final class APIClientTests: XCTestCase {
         let notified = expectation(description: "onUnauthenticated")
 
         do {
-            _ = try await makeClient(onUnauthenticated: { notified.fulfill() }).getMe()
+            _ = try await makeClient(onUnauthenticated: { _ in notified.fulfill() }).getMe()
             XCTFail("expected an error")
         } catch let error as APIError {
             XCTAssertTrue(error.isUnauthenticated)
         }
         await fulfillment(of: [notified], timeout: 1)
-        let remaining = await sessionStore.current()
+        let remaining = try await sessionStore.current()
         XCTAssertNil(remaining)
     }
 
@@ -205,7 +205,7 @@ final class APIClientTests: XCTestCase {
         } catch let error as APIError {
             XCTAssertEqual(error.serverCode, "apple_token_invalid")
         }
-        let remaining = await sessionStore.current()
+        let remaining = try await sessionStore.current()
         XCTAssertNotNil(remaining)
     }
 
