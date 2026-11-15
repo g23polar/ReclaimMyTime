@@ -9,16 +9,22 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
+from app.db import models as _models  # noqa: F401  (registers every table on Base.metadata)
+from app.db.base import Base
 
 config = context.config
 
-if config.config_file_name is not None:
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     fileConfig(config.config_file_name)
 
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def database_url() -> str:
+    # Programmatic callers (tests) may set sqlalchemy.url on the Config; else DATABASE_URL.
+    configured = config.get_main_option("sqlalchemy.url")
+    if configured:
+        return configured
     try:
         return os.environ["DATABASE_URL"]
     except KeyError as exc:
@@ -61,6 +67,12 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
+    # A caller already inside an event loop (tests) passes a sync Connection obtained via
+    # AsyncConnection.run_sync; run on it directly instead of starting a new loop.
+    connection = config.attributes.get("connection")
+    if connection is not None:
+        do_run_migrations(connection)
+        return
     asyncio.run(run_async_migrations())
 
 
