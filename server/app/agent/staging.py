@@ -123,6 +123,9 @@ class TurnStaging:
         entry = TOOL_INPUTS.get(name)
         if entry is None or name == "propose_schedule":
             raise ToolError(f"unknown staging tool {name!r}")
+        if _bad_text(raw):
+            # Postgres rejects NUL and unpaired surrogates; refuse before any write path.
+            raise ToolError("text fields must be valid UTF-8 without NUL characters")
         try:
             draft = entry[0].model_validate(raw)
         except ValidationError as exc:
@@ -371,6 +374,27 @@ def _targets(m: StagedMutation) -> uuid.UUID | None:
     if isinstance(m, PinAdded):
         return m.payload.project_id
     return None
+
+
+def _bad_text(value: Any) -> bool:
+    if isinstance(value, str):
+        if "\x00" in value:
+            return True
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return True
+        return False
+    if isinstance(value, Mapping):
+        return any(_bad_text(v) for v in value.values())
+    if isinstance(value, list | tuple):
+        return any(_bad_text(v) for v in value)
+    return False
+
+
+def removed_ids(staged: Sequence[StagedMutation]) -> dict[str, int]:
+    """Committed row id → index in `staged` of the archive/removal that takes it away."""
+    return {rid: i for i, m in enumerate(staged) if (rid := _removes(m)) is not None}
 
 
 def _removes(m: StagedMutation) -> str | None:

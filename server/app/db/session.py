@@ -32,7 +32,9 @@ def get_engine() -> AsyncEngine:
     """The process-wide engine, created on first use from DATABASE_URL."""
     global _engine
     if _engine is None:
-        _engine = create_async_engine(database_url(), pool_pre_ping=True)
+        # hide_parameters: bound values (project names, reasons…) never reach logs or
+        # exception messages (agent turns log failures; T3.2 review).
+        _engine = create_async_engine(database_url(), pool_pre_ping=True, hide_parameters=True)
     return _engine
 
 

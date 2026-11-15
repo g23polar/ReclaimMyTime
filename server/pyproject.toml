@@ -44,9 +44,18 @@ testpaths = ["tests"]
 
 [tool.importlinter]
 root_package = "app"
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "scheduler-purity"
 type = "forbidden"
 source_modules = ["app.scheduler"]
 forbidden_modules = ["app.agent", "app.api", "app.gcal", "app.db"]
+
+[[tool.importlinter.contracts]]
+# ARCH §8: the LLM is reachable only from POST /agent/message. REST routers, write paths
+# and the solver never import the model client or the turn loop.
+name = "llm-only-behind-agent-route"
+type = "forbidden"
+source_modules = ["app.api", "app.db", "app.scheduler", "app.auth", "app.agent.narration", "app.agent.staging", "app.agent.schemas"]
+forbidden_modules = ["anthropic", "app.agent.loop", "app.agent.router"]

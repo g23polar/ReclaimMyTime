@@ -108,6 +108,7 @@ Codes in the `GET /gcal/callback` redirect (`reclaimmytime://gcal/callback?resul
 - **Exactly one terminal event** (`done` or `error`) ends every stream, and the server then closes it.
 - `done.reply` is authoritative: replace the streamed delta text with it. This also covers a refusal that arrives after some text was already streamed.
 - On `error`, nothing from the turn was staged. Discard the streamed text.
+  - In-stream `error.code` values (additive, M3 2026-11-15): `agent_unavailable` (LLM upstream failed mid-turn, or the turn hit its model-call cap with nothing staged), `changeset_stale` (the pending changeset this turn built on was confirmed, rejected or replaced elsewhere during the turn; refetch and retry the turn), `internal_error`.
 - The `changeset` in `done` is the only one the user can confirm right now. It may have `plan: null` during onboarding (e.g. a project summary card before preferences exist).
 
 ## Pagination
