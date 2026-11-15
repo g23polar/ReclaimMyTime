@@ -112,3 +112,47 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 ---
 
 *Milestone exit = all tasks accepted + architect-reviewer pass logged in `reviews/`.*
+
+---
+
+## Progress checklist
+
+*Maintained by the main session; a task is checked only when committed to `main` after local checks + review. Last updated 2026-11-15.*
+
+**M0 — Foundations**
+- [x] T0.1 API contracts — `9b94804`, frozen `86024f2`
+- [x] T0.2 Repo scaffold — `7444dc5`
+- [x] M0 architect gate — pass with conditions (`reviews/m0-gate-2026-11-14.md`); fixes `9a3ea30`
+- [x] CI: server tests on Postgres 16 — `2158d99`
+
+**M1 — Solver**
+- [x] T1.1 Solver models + `verify()` — `03dc641`
+- [x] T1.2 Packing heuristic — `28ea65a`
+- [ ] T1.3 Determinism + golden harness
+- [ ] M1 architect gate
+
+**M2 — Persistence & API core**
+- [ ] T2.1 Migrations + models + write paths
+- [x] T2.2 Auth (Sign in with Apple, sessions) — `c8e9501` (2 minors logged)
+- [ ] T2.3 CRUD + plan endpoints
+- [ ] M2 architect gate
+
+**M3 — LLM agent layer** (main session only)
+- [ ] M3 tasks
+
+**M4 — Google Calendar**
+- [ ] T4.1 OAuth + connection lifecycle
+- [ ] T4.2 freeBusy + app calendar
+- [ ] T4.3 Write-back outbox + drift
+
+**M5 — iOS**
+- [x] T5.0 Visual design spec — `927bb08` (intent panels: product owner)
+- [x] T5.1 Skeleton + API client + mock — `a301a16`
+- [ ] T5.2 Onboarding journey (sign-in, consent, chat intake, summary cards, preferences)
+- [ ] T5.3 Timetable + editing + diff + trade-off sheet
+- [ ] T5.4 Notifications + background
+- [ ] Intent-narrative panels (product owner)
+
+**M6 — Integration & hardening**
+- [ ] T6.1 Live integration
+- [ ] T6.2 Journey walkthrough + guards
