@@ -81,7 +81,7 @@ final class AppModel {
         self.timezone = timezone
         relay.auth = auth
         projects.onProjectRead = { [weak timetable] project in
-            timetable?.invalidateProject(project.id)
+            timetable?.adoptProject(project)
         }
 
         pending.onConfirmed = { [weak chat, weak projects, weak timetable, weak notifications] changeset in
@@ -235,6 +235,7 @@ final class AppModel {
         calendar.activate(userId: nil)
         timetable.reset()
         timezone.reset()
+        notifications.signOut()
         navigation.isReviewingProposal = false
         navigation.tradeOffsRequested = false
         navigation.selectedTab = .week

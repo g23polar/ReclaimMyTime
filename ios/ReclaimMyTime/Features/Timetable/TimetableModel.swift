@@ -129,9 +129,14 @@ final class TimetableModel {
         (preferences?.timezone ?? plan?.timezone).flatMap(TimeZone.init(identifier:))
     }
 
+    /// Projects whose name changed in a confirmed changeset since the last project list landed:
+    /// the directory (which folded the confirmed values in) names them until the refetch.
+    private var renamedSinceLoad: Set<UUID> = []
+
     /// Project name from what this client knows: live projects, staged creations it has seen
     /// (D23: staged projects are only visible inside their changeset), the pending changeset.
     func projectName(_ id: UUID) -> String {
+        if renamedSinceLoad.contains(id), let name = directory.card(for: id)?.name { return name }
         if let project = projects[id] { return project.name }
         if let name = directory.card(for: id)?.name { return name }
         for mutation in pending.pending?.staged ?? [] {
@@ -325,6 +330,7 @@ final class TimetableModel {
         case .projects(.ok(let value)):
             if accept(.projects, ticket: ticket) {
                 projects = Dictionary(value.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+                renamedSinceLoad = []
                 notifyPlanChanged()
             }
         case .preferences(.ok(let value)):
@@ -366,12 +372,14 @@ final class TimetableModel {
         onPlanChanged?(plan)
     }
 
-    /// A fresh read of one project (e.g. `GET /projects/{id}` from the directory) is newer than
-    /// this cache: drop the cached copy and any list still in flight, so `projectName` falls back
-    /// to the directory until the next load.
-    func invalidateProject(_ id: UUID) {
-        projects[id] = nil
+    /// A fresh copy of one project (`GET /projects/{id}`, or a name-only PATCH's 200) is newer
+    /// than this cache: adopt it (goal included, for notification copy), drop any older list still
+    /// in flight, and republish so the notification window picks up the change.
+    func adoptProject(_ project: Project) {
+        projects[project.id] = project
+        renamedSinceLoad.remove(project.id)
         publishedTickets[.projects] = issueTicket()
+        notifyPlanChanged()
     }
 
     // MARK: editing (timetable.md §5)
@@ -459,11 +467,22 @@ final class TimetableModel {
 
     /// Wired to `PendingChangesetStore.onConfirmed`: what changed pulses once on the new plan.
     func noteConfirmed(_ changeset: Changeset) {
-        // The confirmed changeset is newer than any snapshot in flight: drop the project cache
-        // (renames are folded into the directory) and any plan/projects load issued before it.
-        projects = [:]
+        // The confirmed changeset is newer than any snapshot in flight: drop any plan/projects load
+        // issued before it. Last-known projects stay (goal data for notification copy) until the
+        // refetch lands; confirmed renames are read from the directory meanwhile.
+        for mutation in changeset.staged {
+            switch mutation.change {
+            case let .projectUpdated(id, changes) where changes.name != nil:
+                renamedSinceLoad.insert(id)
+            case let .projectCreated(id, _):
+                renamedSinceLoad.insert(id)
+            default:
+                break
+            }
+        }
         publishedTickets[.projects] = issueTicket()
         publishedTickets[.plan] = issueTicket()
+        defer { notifyPlanChanged() }
         pulseLineages = Set((changeset.diff?.entries ?? []).compactMap { entry in
             switch entry.change {
             case .moved, .added: entry.lineageId
@@ -491,6 +510,7 @@ final class TimetableModel {
         pulseLineages = []
         requestedDay = nil
         publishedTickets = [:]
+        renamedSinceLoad = []
         notifyPlanChanged()
     }
 

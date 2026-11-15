@@ -32,6 +32,33 @@ enum NotificationActionID {
     static let open = "OPEN_BLOCK"
 }
 
+/// The categories and actions, as plain values so their options are testable.
+struct NotificationActionSpec: Hashable, Sendable {
+    let identifier: String
+    let title: String
+    /// Needs the device unlocked before the app runs it (state-changing actions).
+    let requiresAuthentication: Bool
+    /// Brings the app to the foreground.
+    let opensApp: Bool
+}
+
+struct NotificationCategorySpec: Hashable, Sendable {
+    let identifier: String
+    let actions: [NotificationActionSpec]
+}
+
+enum NotificationCategories {
+    /// Skip changes the plan, so it needs the device unlocked (not runnable from a locked phone).
+    static let skip = NotificationActionSpec(identifier: NotificationActionID.skip, title: "Skip this", requiresAuthentication: true, opensApp: false)
+    static let open = NotificationActionSpec(identifier: NotificationActionID.open, title: "Open", requiresAuthentication: false, opensApp: true)
+
+    static let all: [NotificationCategorySpec] = [
+        NotificationCategorySpec(identifier: NotificationCategoryID.blockStart, actions: [skip, open]),
+        NotificationCategorySpec(identifier: NotificationCategoryID.blockSoon, actions: [open]),
+        NotificationCategorySpec(identifier: NotificationCategoryID.drift, actions: []),
+    ]
+}
+
 /// The only door to `UNUserNotificationCenter`. Tests substitute a fake.
 protocol LocalNotificationCenter: Sendable {
     func authorization() async -> NotificationAuthorization
@@ -42,6 +69,9 @@ protocol LocalNotificationCenter: Sendable {
     /// Adds or, for an existing identifier, replaces.
     func add(_ request: LocalNotificationRequest) async throws
     func removePending(identifiers: [String]) async
+    /// Notifications already shown (in Notification Center).
+    func deliveredIdentifiers() async -> [String]
+    func removeDelivered(identifiers: [String]) async
 }
 
 /// Production implementation over `UNUserNotificationCenter.current()`.
@@ -59,13 +89,19 @@ struct SystemNotificationCenter: LocalNotificationCenter {
     }
 
     func registerCategories() async {
-        let skip = UNNotificationAction(identifier: NotificationActionID.skip, title: "Skip this", options: [])
-        let open = UNNotificationAction(identifier: NotificationActionID.open, title: "Open", options: [.foreground])
-        UNUserNotificationCenter.current().setNotificationCategories([
-            UNNotificationCategory(identifier: NotificationCategoryID.blockStart, actions: [skip, open], intentIdentifiers: []),
-            UNNotificationCategory(identifier: NotificationCategoryID.blockSoon, actions: [open], intentIdentifiers: []),
-            UNNotificationCategory(identifier: NotificationCategoryID.drift, actions: [], intentIdentifiers: []),
-        ])
+        let categories = NotificationCategories.all.map { spec in
+            UNNotificationCategory(
+                identifier: spec.identifier,
+                actions: spec.actions.map { action in
+                    var options: UNNotificationActionOptions = []
+                    if action.requiresAuthentication { options.insert(.authenticationRequired) }
+                    if action.opensApp { options.insert(.foreground) }
+                    return UNNotificationAction(identifier: action.identifier, title: action.title, options: options)
+                },
+                intentIdentifiers: []
+            )
+        }
+        UNUserNotificationCenter.current().setNotificationCategories(Set(categories))
     }
 
     func pendingIdentifiers() async -> [String] {
@@ -92,5 +128,13 @@ struct SystemNotificationCenter: LocalNotificationCenter {
 
     func removePending(identifiers: [String]) async {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
+
+    func deliveredIdentifiers() async -> [String] {
+        await UNUserNotificationCenter.current().deliveredNotifications().map(\.request.identifier)
+    }
+
+    func removeDelivered(identifiers: [String]) async {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
     }
 }

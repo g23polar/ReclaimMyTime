@@ -46,6 +46,8 @@ final class TimezoneMonitor {
     private let pending: PendingChangesetStore
     private let defaults: UserDefaults
     private var replanChangesetId: UUID?
+    /// Bumped by `reset()` (sign-out): a replan started before it writes and publishes nothing.
+    private var generation = 0
     /// The move the staged re-plan answers.
     private var replanPrompt: Prompt?
     private let logger = Logger(subsystem: "com.reclaimmytime.app", category: "timezone")
@@ -95,25 +97,29 @@ final class TimezoneMonitor {
     @discardableResult
     func replan(current: UserPreferences?) async -> Bool {
         guard let prompt, !isReplanning else { return false }
+        let started = generation
         isReplanning = true
         replanError = nil
-        defer { isReplanning = false }
+        defer { if started == generation { isReplanning = false } }
         do {
             var preferences: UserPreferences
             if let current {
                 preferences = current
             } else {
                 preferences = try await api.getPreferences()
+                // Signed out meanwhile: never send the old account's preferences.
+                guard started == generation else { return false }
             }
             preferences.timezone = prompt.deviceZone
             let changeset = try await api.putPreferences(preferences)
-            guard pending.stage(changeset) else { return false }
+            guard started == generation, pending.stage(changeset) else { return false }
             replanChangesetId = changeset.id
             replanPrompt = prompt
             reviewRequested = true
             self.prompt = nil
             return true
         } catch {
+            guard started == generation else { return false }
             logger.notice("Re-plan for a new time zone failed")
             replanError = "Couldn't re-plan right now. Nothing changed; try again."
             return false
@@ -138,6 +144,8 @@ final class TimezoneMonitor {
     }
 
     func reset() {
+        generation += 1
+        isReplanning = false
         prompt = nil
         replanChangesetId = nil
         replanPrompt = nil

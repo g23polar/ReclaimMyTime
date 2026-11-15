@@ -91,6 +91,11 @@ struct BlockNotificationPlanner {
         identifier.hasPrefix(startPrefix) || identifier.hasPrefix(soonPrefix)
     }
 
+    /// Everything this app posts that carries account data (block starts, warnings, drift).
+    static func isAccountNotification(_ identifier: String) -> Bool {
+        isBlockNotification(identifier) || identifier.hasPrefix(DriftNotification.prefix)
+    }
+
     /// Block starts first (by time), then 10-minute warnings in the capacity left under 64.
     func requests(for snapshot: NotificationSnapshot) -> [LocalNotificationRequest] {
         guard let plan = snapshot.plan else { return [] }

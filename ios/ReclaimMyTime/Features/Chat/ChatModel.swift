@@ -143,6 +143,8 @@ final class ChatModel {
     /// project and its card rename in place and the pending changeset is left alone. Anything
     /// else was staged (202) and supersedes the pending changeset.
     func applyEdit(entryId: UUID, result: UpdateProjectResult) async {
+        // The sheet's save can outlive the session (sign-out resets entries): drop stale answers.
+        guard entries.contains(where: { $0.id == entryId }) else { return }
         switch result {
         case .applied(let project):
             directory.applyApplied(project)

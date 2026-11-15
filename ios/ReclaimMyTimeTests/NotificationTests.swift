@@ -34,7 +34,39 @@ actor FakeNotificationCenter: LocalNotificationCenter {
 
     func pendingIdentifiers() async -> [String] { Array(pending.keys) }
 
+    private var addsHeld = false
+    private var heldAdds: [CheckedContinuation<Void, Never>] = []
+
+    /// Every `add` from now on waits for `releaseAdds()` (a slow notification center).
+    func holdAdds() { addsHeld = true }
+
+    func releaseAdds() {
+        addsHeld = false
+        let waiting = heldAdds
+        heldAdds = []
+        waiting.forEach { $0.resume() }
+    }
+
+    var waitingAdds: Int { heldAdds.count }
+
+    /// The system fired a pending request: it moves to Notification Center.
+    func deliver(_ identifier: String) {
+        if let request = pending.removeValue(forKey: identifier) { delivered.append(request) }
+    }
+
+    func deliveredIdentifiers() async -> [String] { delivered.map(\.identifier) }
+
+    func removeDelivered(identifiers: [String]) async {
+        delivered.removeAll { identifiers.contains($0.identifier) }
+    }
+
+    private(set) var addCount = 0
+
     func add(_ request: LocalNotificationRequest) async throws {
+        addCount += 1
+        if addsHeld {
+            await withCheckedContinuation { heldAdds.append($0) }
+        }
         if request.fireDate == nil {
             delivered.append(request)
         } else {

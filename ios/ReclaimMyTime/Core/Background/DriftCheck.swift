@@ -46,7 +46,8 @@ struct UnavailableDriftSource: DriftSource {
 }
 
 enum DriftNotification {
-    static func identifier(_ changesetId: UUID) -> String { "drift." + changesetId.pathComponent }
+    static let prefix = "drift."
+    static func identifier(_ changesetId: UUID) -> String { prefix + changesetId.pathComponent }
 
     static func request(_ alert: DriftAlert, projectName: String, time: TimeText) -> LocalNotificationRequest {
         let copy = NotificationCopy.drift(project: projectName, startText: time.time(alert.blockStart))
