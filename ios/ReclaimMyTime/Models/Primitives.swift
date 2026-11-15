@@ -94,6 +94,30 @@ struct LocalDate: Codable, Hashable, Sendable, Comparable, CustomStringConvertib
     }
 }
 
+extension LocalDate {
+    /// The fixed calendar `format: date` values are written in.
+    static func gregorian(timeZone: TimeZone) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        return calendar
+    }
+
+    /// The Gregorian date label of `date` in `timeZone` (picker input → wire). Display/input
+    /// conversion only; no scheduling arithmetic.
+    static func from(_ date: Date, timeZone: TimeZone) -> LocalDate? {
+        let parts = gregorian(timeZone: timeZone).dateComponents([.year, .month, .day], from: date)
+        guard let y = parts.year, let m = parts.month, let d = parts.day else { return nil }
+        return LocalDate(String(format: "%04d-%02d-%02d", y, m, d))
+    }
+
+    /// Noon of this Gregorian date in `timeZone` (clear of DST edges), for pickers and formatting.
+    func middayInstant(timeZone: TimeZone) -> Date? {
+        let parts = rawValue.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return LocalDate.gregorian(timeZone: timeZone).date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 12))
+    }
+}
+
 /// `LocalTime`: wall-clock `HH:MM` (24h). `"24:00"` is valid only as a window end.
 struct LocalTime: Codable, Hashable, Sendable, Comparable, CustomStringConvertible {
     let rawValue: String

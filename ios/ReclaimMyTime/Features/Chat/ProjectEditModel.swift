@@ -20,19 +20,47 @@ final class ProjectEditModel {
     private(set) var isSaving = false
     private(set) var errorMessage: String?
 
+    /// The calendar the picker presents in (device calendar by default). Only its time zone is
+    /// used for wire conversion; `LocalDate` is always Gregorian (`wireCalendar`).
     private let calendar: Calendar
+    /// What the form opened with. A field is sent only if the user moved it away from this, so a
+    /// UI fallback for a value the card doesn't know (partial `project_updated` cards) is never
+    /// mistaken for an edit.
+    private let initial: Snapshot
+
+    private struct Snapshot {
+        let name: String
+        let targetDate: Date
+        let estimatedTotalHours: Double
+        let weeklyTargetHours: Double
+        let maxBlockMinutes: Int
+        let hasMinimum: Bool
+        let minBlockMinutes: Int
+        let requirements: [String]
+    }
 
     init(card: ProjectCard, calendar: Calendar = .current) {
+        let start = Snapshot(
+            name: card.name ?? "",
+            targetDate: card.targetDate.flatMap { Self.date(from: $0, calendar: calendar) } ?? Date(),
+            estimatedTotalHours: card.estimatedTotalHours ?? 1,
+            weeklyTargetHours: card.weeklyTargetHours ?? 1,
+            maxBlockMinutes: card.maxBlockMinutes ?? 60,
+            hasMinimum: card.minBlockMinutes != nil,
+            minBlockMinutes: card.minBlockMinutes ?? 30,
+            requirements: card.requirements
+        )
         original = card
         self.calendar = calendar
-        name = card.name ?? ""
-        targetDate = card.targetDate.flatMap { Self.date(from: $0, calendar: calendar) } ?? Date()
-        estimatedTotalHours = card.estimatedTotalHours ?? 1
-        weeklyTargetHours = card.weeklyTargetHours ?? 1
-        maxBlockMinutes = card.maxBlockMinutes ?? 60
-        hasMinimum = card.minBlockMinutes != nil
-        minBlockMinutes = card.minBlockMinutes ?? 30
-        requirements = card.requirements
+        initial = start
+        name = start.name
+        targetDate = start.targetDate
+        estimatedTotalHours = start.estimatedTotalHours
+        weeklyTargetHours = start.weeklyTargetHours
+        maxBlockMinutes = start.maxBlockMinutes
+        hasMinimum = start.hasMinimum
+        minBlockMinutes = start.minBlockMinutes
+        requirements = start.requirements
     }
 
     var kind: ProjectKind? { original.kind }
@@ -56,23 +84,23 @@ final class ProjectEditModel {
     /// rounded to the contract's one decimal (D19).
     func makePatch() -> ProjectPatch? {
         var patch = ProjectPatch()
-        if trimmedName != (original.name ?? "") { patch.name = trimmedName }
+        if trimmedName != initial.name.trimmingCharacters(in: .whitespacesAndNewlines) { patch.name = trimmedName }
         switch original.kind {
         case .deadline:
             let date = Self.localDate(from: targetDate, calendar: calendar)
-            if let date, date != original.targetDate { patch.targetDate = date }
+            if let date, date != Self.localDate(from: initial.targetDate, calendar: calendar) { patch.targetDate = date }
             let hours = Self.oneDecimal(estimatedTotalHours)
-            if hours != original.estimatedTotalHours.map(Self.oneDecimal) { patch.estimatedTotalHours = hours }
+            if hours != Self.oneDecimal(initial.estimatedTotalHours) { patch.estimatedTotalHours = hours }
         case .perennial:
             let hours = Self.oneDecimal(weeklyTargetHours)
-            if hours != original.weeklyTargetHours.map(Self.oneDecimal) { patch.weeklyTargetHours = hours }
+            if hours != Self.oneDecimal(initial.weeklyTargetHours) { patch.weeklyTargetHours = hours }
         case nil:
             break
         }
-        if maxBlockMinutes != original.maxBlockMinutes { patch.maxBlockMinutes = maxBlockMinutes }
+        if maxBlockMinutes != initial.maxBlockMinutes { patch.maxBlockMinutes = maxBlockMinutes }
         // The contract has no way to clear min_block_minutes; switching it off is not sent.
-        if hasMinimum, minBlockMinutes != original.minBlockMinutes { patch.minBlockMinutes = minBlockMinutes }
-        if requirements != original.requirements { patch.requirements = requirements }
+        if hasMinimum, !initial.hasMinimum || minBlockMinutes != initial.minBlockMinutes { patch.minBlockMinutes = minBlockMinutes }
+        if requirements != initial.requirements { patch.requirements = requirements }
         return patch == ProjectPatch() ? nil : patch
     }
 
@@ -106,16 +134,14 @@ final class ProjectEditModel {
         (value * 10).rounded() / 10
     }
 
-    /// Calendar-date conversions for the DatePicker (input only).
+    /// Calendar-date conversions for the DatePicker (input only). `LocalDate` is a Gregorian label
+    /// (contract `format: date`), so conversion uses a fixed Gregorian calendar in the presenting
+    /// calendar's time zone, whatever the device calendar (Buddhist, Japanese, ...) is.
     static func localDate(from date: Date, calendar: Calendar) -> LocalDate? {
-        let parts = calendar.dateComponents([.year, .month, .day], from: date)
-        guard let y = parts.year, let m = parts.month, let d = parts.day else { return nil }
-        return LocalDate(String(format: "%04d-%02d-%02d", y, m, d))
+        LocalDate.from(date, timeZone: calendar.timeZone)
     }
 
     static func date(from local: LocalDate, calendar: Calendar) -> Date? {
-        let parts = local.rawValue.split(separator: "-").compactMap { Int($0) }
-        guard parts.count == 3 else { return nil }
-        return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 12))
+        local.middayInstant(timeZone: calendar.timeZone)
     }
 }

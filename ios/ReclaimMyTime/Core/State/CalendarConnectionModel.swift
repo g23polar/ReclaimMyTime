@@ -7,6 +7,10 @@ import OSLog
 ///
 /// `status` is persisted so "Not now" survives relaunch as a readable "Calendar not connected"
 /// state. `GET /gcal/status` (`refreshStatus`) is the authority and overwrites it when reachable.
+///
+/// All of it belongs to one account on one backend: `activate(userId:)` binds the model to the
+/// signed-in user (nil = signed out), clears in-memory identity, loads that user's own persisted
+/// status, and bumps an epoch so results of requests started for a previous account are dropped.
 @MainActor
 @Observable
 final class CalendarConnectionModel {
@@ -45,28 +49,52 @@ final class CalendarConnectionModel {
     private(set) var connectedEmail: String?
     private(set) var callout: Callout?
     private(set) var isConnecting = false
+    /// Users who finished the consent step. Stored (not computed from defaults) so RootView's
+    /// routing observes `completeConsentStep`.
+    private(set) var consentCompletedUsers: Set<String>
+    private(set) var activeUserId: UUID?
 
     private let api: any APIClient
     private let defaults: UserDefaults
+    /// Separates persisted state per backend (mock vs each live host).
+    let scope: String
+    private var epoch = 0
     private let logger = Logger(subsystem: "com.reclaimmytime.app", category: "gcal")
 
-    init(api: any APIClient, defaults: UserDefaults = .standard) {
+    init(api: any APIClient, defaults: UserDefaults = .standard, scope: String = "default") {
         self.api = api
         self.defaults = defaults
-        status = defaults.string(forKey: Self.statusKey).flatMap(Status.init(rawValue:)) ?? .unknown
+        self.scope = scope
+        status = .unknown
+        consentCompletedUsers = Set(defaults.stringArray(forKey: Self.consentCompletedKey) ?? [])
+    }
+
+    /// Per-account, per-backend persistence key for `status`.
+    func statusKey(for userId: UUID) -> String {
+        "\(Self.statusKey).\(scope).\(userId.uuidString)"
     }
 
     var isConnected: Bool { status == .connected }
 
+    /// Binds the model to `userId` (nil = signed out). Idempotent for the same user.
+    func activate(userId: UUID?) {
+        guard userId != activeUserId else { return }
+        epoch += 1
+        activeUserId = userId
+        connectedEmail = nil
+        callout = nil
+        isConnecting = false
+        status = userId.flatMap { defaults.string(forKey: statusKey(for: $0)) }.flatMap(Status.init(rawValue:)) ?? .unknown
+    }
+
     /// The consent screen is shown once per user after sign-in.
     func needsConsentStep(userId: UUID) -> Bool {
-        !completedUsers.contains(userId.uuidString)
+        !consentCompletedUsers.contains(userId.uuidString)
     }
 
     func completeConsentStep(userId: UUID) {
-        var users = completedUsers
-        users.insert(userId.uuidString)
-        defaults.set(Array(users).sorted(), forKey: Self.consentCompletedKey)
+        consentCompletedUsers.insert(userId.uuidString)
+        defaults.set(Array(consentCompletedUsers).sorted(), forKey: Self.consentCompletedKey)
     }
 
     /// "Not now": planning proceeds without busy data (O5).
@@ -81,10 +109,13 @@ final class CalendarConnectionModel {
         guard !isConnecting else { return false }
         isConnecting = true
         callout = nil
-        defer { isConnecting = false }
+        let started = epoch
+        defer { if started == epoch { isConnecting = false } }
         do {
             let connect = try await api.getGcalConnectUrl()
+            guard started == epoch else { return false }
             let callbackURL = try await authenticate(connect.authorizationUrl, GcalCallbackResult.scheme)
+            guard started == epoch else { return false }
             guard let result = GcalCallbackResult(url: callbackURL) else {
                 logger.error("Unrecognised gcal callback URL")
                 callout = .failed
@@ -92,7 +123,7 @@ final class CalendarConnectionModel {
             }
             return apply(result)
         } catch {
-            if Self.isCancellation(error) { return false }
+            if Self.isCancellation(error) || started != epoch { return false }
             logger.error("Google connect failed")
             callout = .failed
             return false
@@ -125,8 +156,10 @@ final class CalendarConnectionModel {
 
     /// Server truth (`GET /gcal/status`). Network failures keep the persisted state.
     func refreshStatus() async {
+        let started = epoch
         do {
             let remote = try await api.getGcalStatus()
+            guard started == epoch else { return }
             if let connection = remote.connection {
                 connectedEmail = connection.googleEmail
                 setStatus(connection.status == .active ? .connected : .revoked)
@@ -143,13 +176,9 @@ final class CalendarConnectionModel {
         callout = nil
     }
 
-    private var completedUsers: Set<String> {
-        Set(defaults.stringArray(forKey: Self.consentCompletedKey) ?? [])
-    }
-
     private func setStatus(_ new: Status) {
         status = new
-        defaults.set(new.rawValue, forKey: Self.statusKey)
+        if let activeUserId { defaults.set(new.rawValue, forKey: statusKey(for: activeUserId)) }
     }
 
     private static func isCancellation(_ error: any Error) -> Bool {

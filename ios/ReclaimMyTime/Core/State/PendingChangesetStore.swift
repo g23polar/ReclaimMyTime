@@ -51,6 +51,8 @@ final class PendingChangesetStore {
     var onDiscarded: (@MainActor (Changeset, Changeset?) -> Void)?
 
     private var outcomes: [UUID: Lifecycle] = [:]
+    /// High-water mark of adopted `created_at`s; survives resolution so ordering holds after it.
+    private var newestCreatedAt: Date?
     /// Bumped by `reset()` (sign-out). A confirm/reject that resumes in a later generation
     /// publishes nothing: results from a previous session never reach the next one.
     private var generation = 0
@@ -63,20 +65,27 @@ final class PendingChangesetStore {
 
     var hasPending: Bool { pending != nil }
 
-    /// Adopts a freshly staged changeset. Returns false (and ignores it) unless it is `pending` and
-    /// not older than the current one. A newer one supersedes the current one.
+    /// Adopts a freshly staged changeset. Returns false (and ignores it) unless it is `pending`,
+    /// unseen-as-resolved, and not older than the newest changeset this store has adopted, even
+    /// after that one resolved: the server expired every older proposal when it created the newer
+    /// one (D4), so a late response for an older write must never become actionable.
     @discardableResult
     func stage(_ changeset: Changeset) -> Bool {
         guard changeset.status == .pending else { return false }
+        if let current = pending, current.id == changeset.id {
+            pending = changeset
+            return true
+        }
+        if outcomes[changeset.id] != nil {
+            logger.notice("Ignoring a changeset this client already resolved")
+            return false
+        }
+        if let newest = newestCreatedAt, changeset.createdAt < newest {
+            logger.notice("Ignoring an older pending changeset")
+            return false
+        }
+        newestCreatedAt = changeset.createdAt
         if let current = pending {
-            if current.id == changeset.id {
-                pending = changeset
-                return true
-            }
-            guard changeset.createdAt >= current.createdAt else {
-                logger.notice("Ignoring an older pending changeset")
-                return false
-            }
             outcomes[current.id] = .superseded
             pending = changeset
             onDiscarded?(current, changeset)
@@ -112,7 +121,7 @@ final class PendingChangesetStore {
             return true
         } catch {
             guard started == generation else { return false }
-            handleResolutionError(error, id: id, verb: "confirm")
+            handleResolutionError(error, failed: current, verb: "confirm")
             return false
         }
     }
@@ -134,7 +143,7 @@ final class PendingChangesetStore {
             return true
         } catch {
             guard started == generation else { return false }
-            handleResolutionError(error, id: id, verb: "reject")
+            handleResolutionError(error, failed: current, verb: "reject")
             return false
         }
     }
@@ -148,6 +157,7 @@ final class PendingChangesetStore {
         generation += 1
         pending = nil
         outcomes.removeAll()
+        newestCreatedAt = nil
         notice = nil
         actionError = nil
         isResolving = false
@@ -155,18 +165,26 @@ final class PendingChangesetStore {
 
     /// 409 `changeset_not_pending` (diff-and-infeasibility.md §4): clear the banner, ask readers to
     /// refetch, toast. Anything else keeps the proposal and shows an inline retryable error.
-    private func handleResolutionError(_ error: any Error, id: UUID, verb: String) {
+    ///
+    /// `failed` is the changeset the operation was sent for. If a newer one replaced it while the
+    /// request was in flight, the supersession was already reported (`onDiscarded(failed, newer)`)
+    /// and the replacement is what the user is reviewing: record the outcome and touch nothing else.
+    private func handleResolutionError(_ error: any Error, failed: Changeset, verb: String) {
+        let stillCurrent = pending?.id == failed.id
         if let apiError = error as? APIError, apiError.serverCode == KnownErrorCode.changesetNotPending {
             logger.notice("Changeset no longer pending on \(verb, privacy: .public)")
-            let discarded = pending
-            outcomes[id] = .outOfDate
-            if pending?.id == id { pending = nil }
+            guard stillCurrent else {
+                outcomes[failed.id] = .outOfDate
+                return
+            }
+            outcomes[failed.id] = .outOfDate
+            pending = nil
             liveStateRevision += 1
             notice = .outOfDate
-            if let discarded { onDiscarded?(discarded, nil) }
+            onDiscarded?(failed, nil)
             return
         }
-        if error is CancellationError { return }
+        if error is CancellationError || !stillCurrent { return }
         logger.error("Changeset \(verb, privacy: .public) failed")
         actionError = "Couldn't reach the server. Nothing changed; try again."
     }

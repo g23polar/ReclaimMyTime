@@ -198,11 +198,8 @@ struct ProjectCardText {
     /// A local date label (e.g. "Fri, Dec 12"). The date is a calendar label, not an instant, so it
     /// is formatted from its components at midday to stay clear of DST edges.
     func formatDate(_ date: LocalDate) -> String {
-        let parts = date.rawValue.split(separator: "-").compactMap { Int($0) }
-        guard parts.count == 3 else { return date.rawValue }
-        var components = DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 12)
-        components.calendar = calendar
-        guard let instant = calendar.date(from: components) else { return date.rawValue }
+        // The label is Gregorian on the wire; it is presented in `calendar` (the device's).
+        guard let instant = date.middayInstant(timeZone: calendar.timeZone) else { return date.rawValue }
         var style = Date.FormatStyle(date: .omitted, time: .omitted, locale: locale, calendar: calendar, timeZone: calendar.timeZone)
         style = style.weekday(.abbreviated).day().month(.abbreviated)
         return instant.formatted(style)

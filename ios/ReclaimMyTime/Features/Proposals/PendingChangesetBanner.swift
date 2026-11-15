@@ -50,7 +50,6 @@ private struct PendingChangesetBannerModifier<Accessory: View>: ViewModifier {
     /// separate bottom insets don't compose reliably, so they share one.
     let accessory: Accessory
     @Environment(AppModel.self) private var model
-    @State private var isReviewing = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
@@ -59,7 +58,7 @@ private struct PendingChangesetBannerModifier<Accessory: View>: ViewModifier {
                 VStack(spacing: 0) {
                     accessory
                     if let changeset = model.pending.pending {
-                        PendingChangesetBanner(changeset: changeset) { isReviewing = true }
+                        PendingChangesetBanner(changeset: changeset) { model.navigation.presentReview() }
                             .padding(.top, Spacing.s)
                             .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                     }
@@ -67,9 +66,6 @@ private struct PendingChangesetBannerModifier<Accessory: View>: ViewModifier {
                 .background(.bar)
             }
             .animation(Motion.standard, value: model.pending.pending?.id)
-            .sheet(isPresented: $isReviewing) {
-                ProposalReviewPlaceholderSheet()
-            }
     }
 }
 

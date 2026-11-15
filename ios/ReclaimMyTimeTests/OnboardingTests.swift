@@ -126,10 +126,13 @@ final class CalendarConsentTests: XCTestCase {
         let h = try T52Harness()
         let user = UUID()
         XCTAssertTrue(h.model.calendar.needsConsentStep(userId: user))
+        h.model.calendar.activate(userId: user)
         h.model.calendar.skip()
         h.model.calendar.completeConsentStep(userId: user)
 
-        let reloaded = CalendarConnectionModel(api: h.model.api, defaults: h.defaults)
+        // Status is persisted per account and backend (T5.2 review finding).
+        let reloaded = CalendarConnectionModel(api: h.model.api, defaults: h.defaults, scope: h.model.calendar.scope)
+        reloaded.activate(userId: user)
         XCTAssertEqual(reloaded.status, .notConnected, "Settings reads the persisted 'Calendar not connected' state")
         XCTAssertFalse(reloaded.needsConsentStep(userId: user))
         XCTAssertTrue(reloaded.needsConsentStep(userId: UUID()))

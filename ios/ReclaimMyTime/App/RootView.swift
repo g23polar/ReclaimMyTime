@@ -36,8 +36,8 @@ struct RootView: View {
             await model.runDemoScenarioIfRequested()
             #endif
         }
-        .onChange(of: auth.phase) { _, phase in
-            if phase == .signedOut { model.resetSessionState() }
+        .onChange(of: auth.phase, initial: true) { _, phase in
+            model.handleAuthPhase(phase)
         }
     }
 }
@@ -66,7 +66,7 @@ struct MainTabView: View {
     var body: some View {
         @Bindable var navigation = model.navigation
         TabView(selection: $navigation.selectedTab) {
-            WeekPlaceholderView()
+            WeekView()
                 .pendingChangesetBanner()
                 .tabItem { Label("Week", systemImage: "calendar") }
                 .tag(AppTab.week)
@@ -83,5 +83,8 @@ struct MainTabView: View {
                 .tag(AppTab.settings)
         }
         .changesetNoticeToast()
+        .sheet(isPresented: $navigation.isReviewingProposal) {
+            ProposalReviewSheet()
+        }
     }
 }

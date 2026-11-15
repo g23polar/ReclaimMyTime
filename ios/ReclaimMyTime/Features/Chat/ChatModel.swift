@@ -166,9 +166,15 @@ final class ChatModel {
             weekStart: PreferencesFormModel.isoWeekStart(calendar: calendar)
         )
         guard started == generation, let changeset else { return nil }
-        pendingStore.stage(changeset)
+        // A newer proposal (e.g. an agent turn) may have been adopted while the PUT was in flight;
+        // the server expired this one when it created that one (D4). Not adopted = not submitted.
+        guard pendingStore.stage(changeset) else {
+            preferences.reopen()
+            return nil
+        }
         if changeset.planId != nil {
             navigation.selectedTab = .week
+            navigation.presentReview()
         }
         return changeset
     }
@@ -184,11 +190,12 @@ final class ChatModel {
     }
 
     /// Wired to `PendingChangesetStore.onDiscarded`: a rejected/expired preferences proposal lets
-    /// the user change their answers.
-    func changesetDiscarded(_ changeset: Changeset) {
-        if changeset.staged.contains(where: { $0.kind == .preferencesUpdated }) {
-            preferences?.reopen()
-        }
+    /// the user change their answers, unless its replacement carries the preferences forward.
+    func changesetDiscarded(_ changeset: Changeset, replacement: Changeset? = nil) {
+        let carriesPreferences: (Changeset) -> Bool = { $0.staged.contains { $0.kind == .preferencesUpdated } }
+        guard carriesPreferences(changeset) else { return }
+        if let replacement, carriesPreferences(replacement) { return }
+        preferences?.reopen()
     }
 
     func showPreferencesPrompt() {
@@ -271,7 +278,11 @@ final class ChatModel {
         }
         guard let changeset else { return }
         directory.register(changeset)
-        pendingStore.stage(changeset)
+        // A proposal with a plan opens review straight away (diff-and-infeasibility.md §1); plan-less
+        // onboarding proposals are reviewed through the inline cards.
+        if pendingStore.stage(changeset), changeset.planId != nil {
+            navigation.presentReview()
+        }
         if ProjectCardDerivation.hasProjectCards(changeset) {
             entries[index].changeset = changeset
             await directory.ensureBases(for: changeset)
