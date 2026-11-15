@@ -95,7 +95,7 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 - Accept: app runs fully against mock; decoding tests for every contract fixture.
 
 **T5.2 — Onboarding journey** · owner: `ios-developer` · deps: T5.1, T5.0
-- Out: intent panels, agent chat UI with SSE streaming + confirmation cards, project summary cards → changeset confirm.
+- Out: agent chat UI with SSE streaming + confirmation cards, project summary cards → changeset confirm. **Intent-narrative panels/animation (PRD §4.1) are owned by the product owner (decided 2026-11-14);** the app ships a placeholder view behind a replaceable seam.
 **T5.3 — Timetable + editing** · owner: `ios-developer` · deps: T5.1, T5.0
 - Out: week/day views, block drag/resize/delete emitting PATCH semantics (edit→pin, delete→forbid), proposal diff view highlighting moved blocks by `lineage_id`, infeasibility trade-off sheet.
 **T5.4 — Notifications + background** · owner: `ios-developer` · deps: T5.3
