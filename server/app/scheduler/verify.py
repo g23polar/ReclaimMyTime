@@ -14,12 +14,17 @@ planned block realizes a `pin`-kind Pin iff it has the pin's project_id and
 exactly the pin's span. A realized pin skips `block_length`; every other check
 still applies, and a violation on a realizing block carries the pin id in
 `related_ids` (derived from the matched input pin, not from `pinned`) so the
-caller can report it as `pin_invalidated`. `PlannedBlock.pinned` must agree
+caller can report it as `pin_invalidated`. Identity (`duplicate_lineage`) and
+pairwise (`overlap`, `buffer`) violations carry the realized pin ids of every
+participating planned or frozen block. `PlannedBlock.pinned` must agree
 with the inputs, otherwise `pin_unmatched`.
 
 Frozen blocks are the represented past: they are exempt from `before_now` and
 from the per-block checks, but count for overlap, buffer, pin realization, and
-lineage uniqueness. Strict preferred windows are hard (`preferred_window`);
+lineage uniqueness. `pin_missing` is raised only for a realizable pin: one whose
+exact block would pass every check against the inputs, the frozen blocks, and the
+other pins the plan realizes; a pin displaced by an ordinary block is still
+missing. Strict preferred windows are hard (`preferred_window`);
 non-strict windows produce nothing here.
 """
 
@@ -65,13 +70,58 @@ def _realizes(item: PlannedBlock | FrozenBlock, pin: Pin) -> bool:
     return pin.kind == "pin" and item.project_id == pin.project_id and item.span == pin.span
 
 
-def _realized_pin_ids(block: PlannedBlock, pins: Sequence[Pin]) -> list[str]:
+def _realized_pin_ids(block: PlannedBlock | FrozenBlock, pins: Sequence[Pin]) -> list[str]:
     """Ids of the input `pin`-kind pins this block exactly realizes."""
     return [p.id for p in pins if _realizes(block, p)]
 
 
 def _inside(span: Interval, merged: Sequence[tuple[datetime, datetime]]) -> bool:
     return any(s <= span.start and span.end <= e for s, e in merged)
+
+
+def _gap_minutes(a: Interval, b: Interval) -> int:
+    first, second = (a, b) if a.start <= b.start else (b, a)
+    return (second.start - first.end) // timedelta(minutes=1)
+
+
+def _pin_realizable(
+    pin: Pin,
+    input: SolverInput,
+    projects: dict[str, ProjectInput],
+    schedulable: Sequence[tuple[datetime, datetime]],
+    preferred: dict[str, list[tuple[datetime, datetime]]],
+    anchors: Sequence[Interval],
+) -> bool:
+    """Whether a block exactly on `pin` could pass every check except block_length, given
+    only the inputs, the frozen blocks, and the other pins realized in the plan."""
+    span = pin.span
+    project = projects.get(pin.project_id or "")
+    if project is None:
+        return False
+    if span.start < input.now or not input.horizon.contains(span):
+        return False
+    if not _inside(span, schedulable):
+        return False
+    if any(iv.overlaps(span) for iv in input.busy):
+        return False
+    req = set(project.requirement_tags)
+    if any(
+        e.span.overlaps(span) and (e.blocks_all or req.intersection(e.tags))
+        for e in input.exceptions
+    ):
+        return False
+    if any(
+        q.kind == "forbid"
+        and q.span.overlaps(span)
+        and (q.project_id is None or q.project_id == project.id)
+        for q in input.pins
+    ):
+        return False
+    if project.preferred_windows_strict and not _inside(span, preferred[project.id]):
+        return False
+    return not any(
+        a.overlaps(span) or _gap_minutes(a, span) < input.buffer_minutes for a in anchors
+    )
 
 
 def verify(plan: Sequence[PlannedBlock], input: SolverInput) -> list[Violation]:
@@ -90,7 +140,7 @@ def verify(plan: Sequence[PlannedBlock], input: SolverInput) -> list[Violation]:
         message: str,
         lineage_ids: Iterable[str] = (),
         related: Iterable[str] = (),
-        pinned_blocks: Iterable[PlannedBlock] = (),
+        pinned_blocks: Iterable[PlannedBlock | FrozenBlock] = (),
     ) -> None:
         rel = list(related)
         for b in pinned_blocks:
@@ -244,16 +294,25 @@ def verify(plan: Sequence[PlannedBlock], input: SolverInput) -> list[Violation]:
         if n > 1 or lid in frozen_ids:
             where = f"{n} planned blocks" if n > 1 else "a planned block"
             also = " and a frozen block" if lid in frozen_ids else ""
+            participants: list[PlannedBlock | FrozenBlock] = [
+                *(b for b in blocks if b.lineage_id == lid),
+                *(f for f in frozen if f.lineage_id == lid),
+            ]
             add(
                 "duplicate_lineage",
                 f"lineage {lid} is used by {where}{also}",
                 [lid],
+                pinned_blocks=participants,
             )
 
     # Pairwise checks: planned vs planned, and planned vs frozen.
 
     def pair(
-        a_id: str, a_span: Interval, b_id: str, b_span: Interval, pinned: list[PlannedBlock]
+        a_id: str,
+        a_span: Interval,
+        b_id: str,
+        b_span: Interval,
+        pinned: list[PlannedBlock | FrozenBlock],
     ) -> None:
         ids = sorted([a_id, b_id])
         if a_span.overlaps(b_span):
@@ -278,13 +337,18 @@ def verify(plan: Sequence[PlannedBlock], input: SolverInput) -> list[Violation]:
         for b in blocks[i + 1 :]:
             pair(a.lineage_id, a.span, b.lineage_id, b.span, [a, b])
         for f in frozen:
-            pair(a.lineage_id, a.span, f.lineage_id, f.span, [a])
+            pair(a.lineage_id, a.span, f.lineage_id, f.span, [a, f])
 
     # Pins must be realized: a planned or frozen block with exactly the pin's project and span.
+    # An unrealizable pin (ARCH §3: invalidated by something above it) is reported by the
+    # solver as pin_invalidated, so leaving it out is not pin_missing.
+    anchors = [b.span for b in blocks if _realized_pin_ids(b, pins)] + [f.span for f in frozen]
     for p in pins:
         if p.kind != "pin" or p.project_id is None:
             continue
         if any(_realizes(b, p) for b in blocks) or any(_realizes(f, p) for f in frozen):
+            continue
+        if not _pin_realizable(p, input, projects, schedulable, preferred, anchors):
             continue
         add(
             "pin_missing",

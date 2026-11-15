@@ -472,3 +472,78 @@ def test_verify_is_deterministic_and_order_independent(data: st.DataObject) -> N
     assert verify(list(shuffled), inp) == first
     keys = [(v.kind, v.block_lineage_ids) for v in first]
     assert keys == sorted(keys)
+
+
+# ------------------------------------- pin attribution on identity/pairwise
+
+
+def test_duplicate_lineage_with_pin_realization_reports_pin_id() -> None:
+    inp, plan = _valid()
+    # The ordinary 10:30 block takes the pin block's lineage.
+    plan = [
+        b.model_copy(update={"lineage_id": "L-pin"}) if b.lineage_id == "L-b2" else b for b in plan
+    ]
+    [violation] = verify(plan, inp)
+    assert violation.kind == "duplicate_lineage"
+    assert violation.block_lineage_ids == ("L-pin",)
+    assert "pin-1" in violation.related_ids
+
+
+def test_duplicate_lineage_with_frozen_pin_realization_reports_pin_id() -> None:
+    inp, plan = _valid()
+    plan = [b for b in plan if b.lineage_id != "L-pin"]
+    frozen = FrozenBlock(
+        lineage_id="L-b3", project_id="P1", span=_span(9, 0, 10, 0), state="completed"
+    )
+    inp = inp.model_copy(update={"frozen": (frozen,)})
+    [violation] = verify(plan, inp)
+    assert violation.kind == "duplicate_lineage"
+    assert "pin-1" in violation.related_ids
+
+
+def test_frozen_pin_realization_overlapping_planned_block_lists_pin_id() -> None:
+    inp, plan = _valid()
+    plan = [b for b in plan if b.lineage_id != "L-pin"]
+    frozen = FrozenBlock(
+        lineage_id="F-pin", project_id="P1", span=_span(9, 0, 10, 0), state="completed"
+    )
+    inp = inp.model_copy(update={"frozen": (frozen,)})
+    clash = PlannedBlock(lineage_id="L-c", project_id="P2", span=_span(9, 30, 10, 0))
+    near = PlannedBlock(lineage_id="L-n", project_id="P2", span=_span(8, 0, 8, 55))
+    violations = verify([*plan, clash, near], inp)
+    by_kind = {v.kind: v for v in violations}
+    assert set(by_kind) >= {"overlap", "buffer"}
+    assert "pin-1" in by_kind["overlap"].related_ids
+    assert set(by_kind["overlap"].block_lineage_ids) == {"F-pin", "L-c"}
+    buf = next(v for v in violations if v.kind == "buffer" and "F-pin" in v.block_lineage_ids)
+    assert "pin-1" in buf.related_ids
+
+
+# ------------------------------------------- pin_missing only for realizable pins
+
+
+def test_unrealizable_pin_is_not_pin_missing() -> None:
+    """ARCH §3: a pin invalidated by calendar/exceptions is reported, not placed. A plan that
+    leaves it out must still verify, or no plan for that input could ever be persisted."""
+    inp, plan = _valid()
+    inp = inp.model_copy(update={"busy": (*inp.busy, _span(9, 30, 9, 45))})
+    assert verify([b for b in plan if b.lineage_id != "L-pin"], inp) == []
+
+
+def test_pin_conflicting_only_with_ordinary_block_is_still_missing() -> None:
+    inp, plan = _valid()
+    plan = [b for b in plan if b.lineage_id != "L-pin"]
+    squatter = PlannedBlock(lineage_id="L-sq", project_id="P2", span=_span(9, 0, 10, 0))
+    kinds = {v.kind for v in verify([*plan, squatter], inp)}
+    assert kinds == {"pin_missing"}
+
+
+def test_pin_conflicting_with_another_realized_pin_is_not_missing() -> None:
+    inp, plan = _valid()
+    rival = Pin(id="pin-2", kind="pin", span=_span(9, 30, 10, 30), project_id="P2")
+    inp = inp.model_copy(update={"pins": (*inp.pins, rival)})
+    assert verify(plan, inp) == []
+    # Neither placed: both are realizable on their own, so both are missing.
+    rest = [b for b in plan if b.lineage_id != "L-pin"]
+    missing = [v for v in verify(rest, inp) if v.kind == "pin_missing"]
+    assert {i for v in missing for i in v.related_ids} >= {"pin-1", "pin-2"}

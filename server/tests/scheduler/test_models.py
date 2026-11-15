@@ -35,7 +35,7 @@ def _base_input() -> dict[str, Any]:
     return load_case("valid_plan").input.model_dump(mode="json")
 
 
-@pytest.mark.parametrize("filename", ["models.py", "verify.py"])
+@pytest.mark.parametrize("filename", ["models.py", "verify.py", "pack.py"])
 def test_source_has_no_clock_env_tz_or_randomness(filename: str) -> None:
     source = (SCHEDULER_DIR / filename).read_text()
     found = [tok for tok in FORBIDDEN_TOKENS if tok in source]

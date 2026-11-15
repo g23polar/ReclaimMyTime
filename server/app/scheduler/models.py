@@ -10,7 +10,7 @@ integer number of minutes.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -124,6 +124,8 @@ class Pin(_Model):
     kind: Literal["pin", "forbid"]
     span: Interval
     project_id: Id | None = None  # None only for a blanket forbid
+    # Lineage of the block whose manual edit created this pin; the pinned block keeps it.
+    created_from_lineage_id: Id | None = None
 
     @model_validator(mode="after")
     def _pin_has_project(self) -> Pin:
@@ -141,6 +143,12 @@ class ProjectInput(_Model):
     preferred_windows: tuple[Interval, ...] = ()
     preferred_windows_strict: bool = False
     requirement_tags: tuple[str, ...] = ()
+    # Local target date of a deadline project (contracts D10); used only to phrase the
+    # extend_deadline proposal. Plain date arithmetic only, no tz math.
+    target_date: date | None = None
+    # Absolute instant the work is due: the end of `target_date`, projected through the user's
+    # tz by the caller. Bounds placement and drives deadline pressure (ARCH §4, 2026-11-14).
+    deadline: UtcDatetime | None = None
 
     @field_validator("requirement_tags")
     @classmethod
@@ -215,19 +223,124 @@ class Violation(_Model):
         return _sorted_unique(v)
 
 
+RelaxationKind = Literal[
+    "extend_deadline",
+    "reduce_estimate",
+    "reduce_weekly_target",
+    "raise_max_block_minutes",
+    "pause_project",
+    "remove_pin",
+    "remove_exception",
+]
+
+# The kind-specific fields each relaxation kind requires (contracts D17); all others stay None.
+_RELAXATION_FIELDS: dict[str, frozenset[str]] = {
+    "extend_deadline": frozenset({"project_id", "target_date"}),
+    "reduce_estimate": frozenset({"project_id", "remaining_minutes"}),
+    "reduce_weekly_target": frozenset({"project_id", "weekly_target_minutes"}),
+    "raise_max_block_minutes": frozenset({"project_id", "max_block_minutes"}),
+    "pause_project": frozenset({"project_id"}),
+    "remove_pin": frozenset({"pin_id"}),
+    "remove_exception": frozenset({"exception_id"}),
+}
+_RELAXATION_OPTIONAL = (
+    "project_id",
+    "pin_id",
+    "exception_id",
+    "target_date",
+    "remaining_minutes",
+    "weekly_target_minutes",
+    "max_block_minutes",
+)
+
+
 class Relaxation(_Model):
-    # TODO(ARCH §4 / contracts D17): the relaxation kind enum and typed parameters
-    # are a proposal for T1.2 to confirm; kept as an open string until then.
-    kind: str
+    """A candidate trade-off the user may pick (PRD Principle 2), never applied automatically.
+
+    Proposed values are in solver units (integer minutes, local date). The API layer maps
+    them onto the D17 PATCH body: remaining_minutes -> estimated_total_hours (adding the
+    project's completed minutes), weekly_target_minutes -> weekly_target_hours.
+    """
+
+    kind: RelaxationKind
     description: str
     affected_ids: tuple[str, ...] = ()
+    recovers_minutes: PositiveMinutes  # shortfall minutes this relaxation would eliminate
+    project_id: Id | None = None
+    pin_id: Id | None = None
+    exception_id: Id | None = None
+    target_date: date | None = None  # extend_deadline: proposed new target date
+    remaining_minutes: PositiveMinutes | None = None  # reduce_estimate: proposed remaining
+    weekly_target_minutes: PositiveMinutes | None = None  # reduce_weekly_target
+    max_block_minutes: PositiveMinutes | None = None  # raise_max_block_minutes
+
+    @model_validator(mode="after")
+    def _kind_fields(self) -> Relaxation:
+        required = _RELAXATION_FIELDS[self.kind]
+        for name in _RELAXATION_OPTIONAL:
+            present = getattr(self, name) is not None
+            if present != (name in required):
+                state = "requires" if name in required else "does not take"
+                raise ValueError(f"relaxation {self.kind} {state} {name}")
+        return self
+
+
+PinConflict = Literal[
+    "busy",
+    "exception",
+    "forbid",
+    "window",
+    "horizon",
+    "before_now",
+    "preferred_window",
+    "overlap",
+    "buffer",
+]
+
+
+class PinInvalidated(_Model):
+    """A pin that verify() rejects; reported, never dropped (ARCH §3 conflict order)."""
+
+    kind: Literal["pin_invalidated"] = "pin_invalidated"
+    pin_id: Id
+    pin_kind: Literal["pin", "forbid"]
+    project_id: Id | None
+    span: Interval
+    conflicts_with: PinConflict
+    exception_id: Id | None = None  # set when conflicts_with == "exception"
+    related_lineage_ids: tuple[str, ...] = ()  # other blocks, for overlap/buffer
+
+    @field_validator("related_lineage_ids")
+    @classmethod
+    def _normalize_ids(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        return _sorted_unique(v)
+
+
+class DemandShortfall(_Model):
+    """A project's required minutes in this horizon could not all be placed."""
+
+    kind: Literal["demand_shortfall"] = "demand_shortfall"
+    project_id: Id
+    required_minutes: Minutes
+    scheduled_minutes: Minutes
+    shortfall_minutes: PositiveMinutes
+
+    @model_validator(mode="after")
+    def _consistent(self) -> DemandShortfall:
+        if self.required_minutes - self.scheduled_minutes != self.shortfall_minutes:
+            raise ValueError("shortfall_minutes must equal required - scheduled")
+        return self
+
+
+InfeasibilityViolation = Annotated[DemandShortfall | PinInvalidated, Field(discriminator="kind")]
 
 
 class Infeasibility(_Model):
-    # TODO(ARCH §4 / contracts D17): D17 specifies demand_shortfall / pin_invalidated
-    # violations for the API; mapping verify() Violations onto them is T1.2's job.
-    violations: tuple[Violation, ...] = ()
+    violations: tuple[InfeasibilityViolation, ...] = ()
     relaxations: tuple[Relaxation, ...] = ()
+    # Raw verify() output behind the violations above (pin conflicts, pin_missing), so the
+    # mapping onto D17 kinds loses nothing.
+    verify_violations: tuple[Violation, ...] = ()
 
 
 class SolverOutput(_Model):
