@@ -12,3 +12,6 @@ xcuserdata/
 DerivedData/
 *.xcuserstate
 .agents/
+
+# local secrets (T6.1)
+server/.env
