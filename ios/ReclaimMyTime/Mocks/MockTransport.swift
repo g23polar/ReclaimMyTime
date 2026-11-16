@@ -81,9 +81,8 @@ actor MockTransport: HTTPTransport {
 
     /// The fixture a request would be served from (nil if unrouted).
     func resolve(_ request: URLRequest) -> Fixture? {
-        guard let operation = operation(for: request),
-              let candidates = fixturesByOperation[operation], !candidates.isEmpty
-        else { return nil }
+        guard let operation = operation(for: request) else { return nil }
+        guard let candidates = fixturesByOperation[operation], !candidates.isEmpty else { return nil }
 
         let wanted: String?
         if let override = overrides[operation] {

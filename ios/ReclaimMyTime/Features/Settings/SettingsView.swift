@@ -79,10 +79,7 @@ struct SettingsView: View {
             let session = webAuthenticationSession
             let usesMock = model.config.usesMock
             Task {
-                await model.calendar.connect { url, scheme in
-                    if usesMock { return MockWebAuthenticator.callbackURL() }
-                    return try await session.authenticate(using: url, callbackURLScheme: scheme)
-                }
+                await model.calendar.connect(using: GcalWebAuthenticator.make(session: session, usesMock: usesMock))
             }
         }
         .disabled(model.calendar.isConnecting)

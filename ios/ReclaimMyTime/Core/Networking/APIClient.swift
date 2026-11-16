@@ -51,6 +51,9 @@ protocol APIClient: Sendable {
     // gcal
     func getGcalConnectUrl() async throws -> GcalConnectUrl
     func getGcalStatus() async throws -> GcalStatus
+    /// `POST /gcal/complete`: finishes the connect flow with an `authorized` callback's code and
+    /// state. Errors: 400 `gcal_state_invalid`, 422 `gcal_scope_insufficient`, 502 `gcal_exchange_failed`.
+    func completeGcalConnect(_ request: GcalCompleteRequest) async throws -> GcalStatus
     func disconnectGcal() async throws
 }
 

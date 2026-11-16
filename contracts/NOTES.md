@@ -56,6 +56,7 @@ Every non-2xx/3xx JSON response uses this shape:
 |---|---|---|
 | 400 | `timezone_invalid` | X-Timezone missing or not an IANA name |
 | 400 | `bad_request` | malformed JSON or wrong content type |
+| 400 | `gcal_state_invalid` | `POST /gcal/complete`: the state is undecryptable, malformed, expired, or was issued to a different user (deliberately not distinguished). Start the connect flow again (D24; 2026-11-15, T4.1 review) |
 | 401 | `unauthenticated` | missing, invalid, expired, or revoked session |
 | 401 | `apple_token_invalid` | `details.reason`: `signature`\|`expired`\|`issuer`\|`audience`\|`nonce_mismatch`\|`authorization_code` (code rejected by Apple, or its id_token's `sub` ≠ the identity token's `sub` — added 2026-11-14, T2.2) |
 | 404 | `not_found` | unknown id or another user's resource; `details.resource`, `details.id` |
@@ -70,16 +71,20 @@ Every non-2xx/3xx JSON response uses this shape:
 | 409 | `project_archived` | PATCH/DELETE on an archived project |
 | 404 | `gcal_not_connected` | `DELETE /gcal` with no connection |
 | 422 | `validation_failed` | schema or semantic failure; `details.fields: [{path, message}]` |
+| 422 | `gcal_scope_insufficient` | `POST /gcal/complete`: the user did not grant both calendar scopes; the partial grant was discarded (D24; 2026-11-15, T4.1 review) |
 | 500 | `internal_error` | unexpected |
+| 502 | `gcal_exchange_failed` | `POST /gcal/complete`: Google rejected or did not answer the code exchange, or returned no refresh token or an unusable id_token (D24; 2026-11-15, T4.1 review) |
 | 503 | `agent_unavailable` | LLM upstream down, before the stream starts (otherwise sent as an SSE `error` event) |
 | 503 | `apple_unavailable` | Apple JWKS or token endpoint unreachable and no cached keys usable (T2.2, 2026-11-14) |
 | 503 | `apple_revocation_failed` | `DELETE /me` could not revoke the stored Apple credential; nothing is deleted. `details.reason`: `undecryptable_credential` (with `details.key_id`) \| `apple_error` (T2.2, 2026-11-14) |
+| 503 | `gcal_revocation_failed` | `DELETE /gcal` or `DELETE /me` could not revoke the Google grant. The connection row (and account) are kept; an earlier credential replaced by a concurrent reconnect may already have been revoked. `details.reason`: `undecryptable_credential` (with `details.key_id`) \| `google_error` (T4.1, 2026-11-15; wording 2026-11-15, T4.1 review) |
 
-Codes in the `GET /gcal/callback` redirect (`reclaimmytime://gcal/callback?result=error&code=…`):
-- `gcal_access_denied`
-- `gcal_state_invalid`
-- `gcal_exchange_failed`
-- `gcal_scope_insufficient`
+Codes in the `GET /gcal/callback` redirect (`reclaimmytime://gcal/callback?result=error&code=…`; updated 2026-11-15, T4.1 review, D24):
+- `gcal_access_denied`: Google `error=access_denied`
+- `gcal_state_invalid`: state missing, undecryptable, or expired
+- `gcal_exchange_failed`: any other Google `error` value, or no `code`
+
+On success the redirect is `reclaimmytime://gcal/callback?result=authorized&auth_code=<URL-encoded code>&state=<URL-encoded state>`; nothing is connected until the app calls `POST /gcal/complete` (scope, exchange and state-ownership errors come back from there as JSON).
 
 **Two outcomes are not errors.**
 - **Infeasibility:** the response is still 202 (or 200 for a plan). The best partial plan comes back with `plan.infeasibility` = `{violations, relaxations}`. The UI shows the trade-off (Principle 2). Choosing a relaxation is a new staged write (e.g. `PATCH /projects/{id}` with the proposed `target_date`); it is never applied automatically.
@@ -182,7 +187,7 @@ Block ids are uuid5 of `(plan version, lineage)`, which gives new rows per versi
   - A refusal is a `done` with `outcome: refused`, not a separate event or an error.
   - No resume.
 - **D14 Transcript format:** text only (no tool blocks), plus an optional `changeset_id` on assistant turns. Limits are 200 × 8000 characters.
-- **D15 `GET /gcal/connect` returns JSON `{authorization_url}`** rather than a 302, because ASWebAuthenticationSession can't send the bearer header. The callback always 302s to `reclaimmytime://gcal/callback?result=…`. That custom scheme is a placeholder until iOS picks a bundle scheme or universal link.
+- **D15 `GET /gcal/connect` returns JSON `{authorization_url}`** rather than a 302, because ASWebAuthenticationSession can't send the bearer header. The callback always 302s to `reclaimmytime://gcal/callback?result=…`. That custom scheme is a placeholder until iOS picks a bundle scheme or universal link. *Updated 2026-11-15 (T4.1 review):* the callback no longer connects anything; it returns `result=authorized` with the code and state, and the app completes via `POST /gcal/complete` (D24).
 - **D16 Additions beyond ARCH §7:**
   - `GET /preferences`: the client needs the timezone and the edit form.
   - `GET /gcal/status`: shows the reconnect prompt after `invalid_grant`.
@@ -203,6 +208,7 @@ Block ids are uuid5 of `(plan version, lineage)`, which gives new rows per versi
 - **D21 `POST /auth/apple` always returns 200** with `is_new_user`, never 201.
 - **D22 `GET /plans/current` returns 404 `no_live_plan`** when there is no plan, rather than 200 with `null`.
 - **D23 Staged projects are invisible to reads (2026-11-14, M0 gate):** `ProjectStatus` gains `staged`; `GET /projects` excludes staged rows and `GET /projects/{id}` returns 404 `not_found` for one. A staged project is observable only inside its pending Changeset (`project_created` payload + the proposal's blocks). Confirm flips it to `active`; reject/expire deletes it (O1).
+- **D24 Google connect completes as the bearer holder (2026-11-15, T4.1 review; user decision).** *Problem:* the callback was unauthenticated and the state was bound only to the user who called `GET /gcal/connect`. Anyone could request a connect URL with their own bearer and forward it; a victim who consented would have their Google grant stored under the attacker's account (login-CSRF-style account binding). *Decision:* `GET /gcal/callback` exchanges and stores nothing; it 302s `result=authorized&auth_code=…&state=…` into the app, and the app sends both to **`POST /gcal/complete`** (bearer + X-Timezone). The server requires the state's user id to equal the bearer user, then exchanges (PKCE), checks scopes/refresh token/id_token, persists, and returns `200 GcalStatus`. Only the device that holds the session can complete, and only for its own state. Errors: 400 `gcal_state_invalid` (bad, expired, or another user's — not distinguished), 422 `gcal_scope_insufficient`, 502 `gcal_exchange_failed`. *Alternative rejected:* a server-side single-use state table bound to a cookie set at connect — ASWebAuthenticationSession cookies are not reliable and it adds a table. *Numbering:* requested as D18, which was already taken.
 
 ## Open questions (spec gaps found while writing the contract; not decided here)
 - **O1 DDL FK vs staged projects — RESOLVED 2026-11-13:** option 1 chosen; `project_status` gains `'staged'`, the row is inserted at staging, confirm → `active`, reject/expire → deleted (ARCH §3 DDL + Semantics updated). Original text kept for context:** A proposed plan for a staged `project_created` holds blocks whose `project_id` has no `projects` row yet. That violates `blocks (project_id, user_id) → projects`, and `block_pins` has the same problem. T2.1 must choose an option and record it in ARCH:

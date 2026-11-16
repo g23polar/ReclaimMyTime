@@ -241,6 +241,10 @@ final class URLSessionAPIClient: APIClient {
         try await send(Endpoint(method: .get, path: "/gcal/status"))
     }
 
+    func completeGcalConnect(_ request: GcalCompleteRequest) async throws -> GcalStatus {
+        try await send(Endpoint(method: .post, path: "/gcal/complete", body: try encode(request)))
+    }
+
     func disconnectGcal() async throws {
         try await sendExpectingNoContent(Endpoint(method: .delete, path: "/gcal"))
     }

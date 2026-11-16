@@ -91,12 +91,7 @@ struct GoogleCalendarConsentView: View {
     private func connect() async {
         let session = webAuthenticationSession
         let usesMock = model.config.usesMock
-        let connected = await model.calendar.connect { url, scheme in
-            if usesMock { return MockWebAuthenticator.callbackURL() }
-            // TODO(D15): `reclaimmytime` is a placeholder scheme until a bundle scheme or universal
-            // link is chosen; ASWebAuthenticationSession needs no Info.plist registration for it.
-            return try await session.authenticate(using: url, callbackURLScheme: scheme)
-        }
+        let connected = await model.calendar.connect(using: GcalWebAuthenticator.make(session: session, usesMock: usesMock))
         if connected { finish() }
     }
 

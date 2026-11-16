@@ -146,3 +146,25 @@ def test_default_runtime_with_injected_apple_client_skips_credentials(
         default_runtime()
     runtime = default_runtime(apple_client=FakeAppleClient(tokens))
     assert isinstance(runtime.apple, FakeAppleClient)
+
+
+def test_bad_google_consent_config_never_blocks_the_auth_runtime(
+    monkeypatch: pytest.MonkeyPatch, tokens
+) -> None:
+    """DELETE /me only needs Google's revoke endpoint; a broken consent config (callback
+    URL, state key, missing client credentials) must not stop auth from installing."""
+    from app.auth.dependencies import default_runtime
+    from app.gcal.client import HttpGoogleRevoker
+    from tests.auth.fixtures import FakeAppleClient
+
+    for name, value in _base_env().items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:p@localhost:1/db")
+    monkeypatch.setenv("GCAL_APP_CALLBACK_URL", "myapp://cb?broken=1#frag")
+    monkeypatch.setenv("GCAL_STATE_KEY", "not-a-fernet-key")
+    monkeypatch.setenv("GOOGLE_REVOKE_URL", "https://revoke.test/r")
+    for name in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI"):
+        monkeypatch.delenv(name, raising=False)
+    runtime = default_runtime(apple_client=FakeAppleClient(tokens))
+    assert isinstance(runtime.google, HttpGoogleRevoker)
+    assert runtime.google._url == "https://revoke.test/r"

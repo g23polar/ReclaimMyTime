@@ -84,6 +84,7 @@ paths:
         '204': {description: Account deleted; all sessions are invalid.}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
         default: {$ref: '#/components/responses/InternalError'}
 
   /sessions:
@@ -521,8 +522,13 @@ paths:
       tags: [gcal]
       summary: Google OAuth redirect target (hit by the browser, not the app's API client).
       description: |
-        Unauthenticated; the user is identified by the signed `state`. Always answers with a
-        302 to the app callback URL, carrying `result=connected` or `result=error&code=<code>`.
+        Unauthenticated; always answers with a 302 to the app callback URL. Exchanges nothing
+        and persists nothing (D24, 2026-11-15 T4.1 review): on success it hands Google's code
+        and the state back to the app (`result=authorized&auth_code=…&state=…`, both
+        URL-encoded), and the app finishes with its bearer via POST /gcal/complete.
+        `error=access_denied` → `gcal_access_denied`; any other Google `error`, or no `code` →
+        `gcal_exchange_failed`; a missing, undecryptable or expired `state` →
+        `gcal_state_invalid` (state is decrypted and its expiry checked; no DB access).
       security: []
       parameters:
         - {name: state, in: query, required: true, schema: {type: string, minLength: 1}}
@@ -537,7 +543,37 @@ paths:
               required: true
               schema:
                 type: string
-                pattern: '^reclaimmytime://gcal/callback\?result=(connected|error&code=[a-z_]+)$'
+                pattern: '^reclaimmytime://gcal/callback\?result=(authorized&auth_code=[^&#]+&state=[^&#]+|error&code=[a-z_]+)$'
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /gcal/complete:
+    post:
+      operationId: completeGcalConnect
+      tags: [gcal]
+      summary: Finish the Google connect flow as the bearer holder (D24, 2026-11-15 T4.1 review).
+      description: |
+        Body carries the `auth_code` and `state` from the `result=authorized` callback
+        redirect. The state must decrypt, be unexpired, and have been issued to this same
+        bearer user; then the server exchanges the code (PKCE), checks the granted scopes,
+        the refresh token and the id_token, and stores the connection. Errors:
+        400 `gcal_state_invalid` (bad, expired, or another user's state — not distinguished),
+        422 `gcal_scope_insufficient`, 502 `gcal_exchange_failed`.
+      parameters: [{$ref: '#/components/parameters/XTimezone'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GcalCompleteRequest'}
+      responses:
+        '200':
+          description: Connected; the stored connection.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GcalStatus'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/BadGateway'}
         default: {$ref: '#/components/responses/InternalError'}
 
   /gcal/status:
@@ -567,6 +603,7 @@ paths:
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
         default: {$ref: '#/components/responses/InternalError'}
 
 components:
@@ -624,6 +661,11 @@ components:
           schema: {$ref: '#/components/schemas/Error'}
     ValidationFailed:
       description: Body failed schema or semantic validation.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    BadGateway:
+      description: An upstream (Google) answered with an error or could not be reached (e.g. gcal_exchange_failed).
       content:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
@@ -1533,6 +1575,14 @@ components:
       additionalProperties: false
       properties:
         authorization_url: {type: string, format: uri}
+    GcalCompleteRequest:
+      type: object
+      description: From the `result=authorized` callback redirect, URL-decoded (D24).
+      required: [auth_code, state]
+      additionalProperties: false
+      properties:
+        auth_code: {type: string, minLength: 1}
+        state: {type: string, minLength: 1}
     GoogleConnection:
       type: object
       description: google_connections row minus secrets (user_id, refresh_token_enc, key_id omitted).

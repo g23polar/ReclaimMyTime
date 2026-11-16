@@ -49,6 +49,10 @@ ROUTES = [
     ("GET", f"/plans/{uuid.uuid4()}/diff?against={uuid.uuid4()}"),
     ("POST", f"/changesets/{uuid.uuid4()}/confirm"),
     ("POST", f"/changesets/{uuid.uuid4()}/reject"),
+    ("GET", "/gcal/connect"),
+    ("POST", "/gcal/complete"),
+    ("GET", "/gcal/status"),
+    ("DELETE", "/gcal"),
 ]
 
 

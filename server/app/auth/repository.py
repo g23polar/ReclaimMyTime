@@ -19,7 +19,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -42,6 +42,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.auth import Identity, User, UserSession
+from app.db.models.google import GoogleConnection
 
 
 class EmailConflictError(Exception):
@@ -76,6 +77,16 @@ class SessionRecord:
     created_at: datetime
     expires_at: datetime
     last_seen_at: datetime | None
+
+
+@dataclass(frozen=True)
+class GoogleCredentialRecord:
+    """The slice of google_connections account deletion needs (T4.1)."""
+
+    refresh_token_enc: bytes = field(repr=False)
+    key_id: int
+    status: str  # 'active' | 'revoked'
+    google_email: str
 
 
 class AuthRepository(Protocol):
@@ -151,6 +162,14 @@ class AuthRepository(Protocol):
 
     async def delete_sessions_for_user(self, user_id: uuid.UUID) -> None: ...
 
+    async def get_google_credential(self, user_id: uuid.UUID) -> GoogleCredentialRecord | None:
+        """The user's google_connections credential, or None (T4.1, DELETE /me)."""
+        ...
+
+    async def mark_google_revoked(self, user_id: uuid.UUID, at: datetime) -> None:
+        """status='revoked', revoked_at=`at`; the caller holds the owner's lock."""
+        ...
+
 
 # Yields a repository inside one transaction (commit on success, rollback on error).
 RepositoryProvider = Callable[[], AbstractAsyncContextManager[AuthRepository]]
@@ -176,6 +195,8 @@ class InMemoryAuthRepository:
         self.users: dict[uuid.UUID, UserRecord] = {}
         self.identities: dict[tuple[str, str], IdentityRecord] = {}
         self.sessions: dict[uuid.UUID, SessionRecord] = {}
+        self.google: dict[uuid.UUID, GoogleCredentialRecord] = {}  # google_connections
+        self.google_revoked_at: dict[uuid.UUID, datetime] = {}
         self.open_transactions = 0
         self.lock_log: list[uuid.UUID] = []  # every lock_user call, in order
         self._user_locks: dict[uuid.UUID, asyncio.Lock] = {}
@@ -229,6 +250,8 @@ class InMemoryAuthRepository:
         self.users.pop(user_id, None)
         self.identities = {k: v for k, v in self.identities.items() if v.user_id != user_id}
         self.sessions = {k: v for k, v in self.sessions.items() if v.user_id != user_id}
+        self.google.pop(user_id, None)
+        self.google_revoked_at.pop(user_id, None)
 
     async def get_identity(self, provider: str, subject: str) -> IdentityRecord | None:
         return self.identities.get((provider, subject))
@@ -303,6 +326,15 @@ class InMemoryAuthRepository:
     async def delete_sessions_for_user(self, user_id: uuid.UUID) -> None:
         self.sessions = {k: v for k, v in self.sessions.items() if v.user_id != user_id}
 
+    async def get_google_credential(self, user_id: uuid.UUID) -> GoogleCredentialRecord | None:
+        return self.google.get(user_id)
+
+    async def mark_google_revoked(self, user_id: uuid.UUID, at: datetime) -> None:
+        stored = self.google.get(user_id)
+        if stored is not None:
+            self.google[user_id] = replace(stored, status="revoked")
+            self.google_revoked_at[user_id] = at
+
 
 class _InMemoryTransaction:
     """One transaction over an `InMemoryAuthRepository`: holds user locks until exit and
@@ -326,6 +358,10 @@ class _InMemoryTransaction:
             # Mirrors the service contract: credentials are written under the owner lock.
             assert stored.user_id in self._held, "update_identity without the owner lock"
         await self._store.update_identity(provider, subject, **kw)
+
+    async def mark_google_revoked(self, user_id: uuid.UUID, at: datetime) -> None:
+        assert user_id in self._held, "mark_google_revoked without the owner lock"
+        await self._store.mark_google_revoked(user_id, at)
 
     def release_locks(self) -> None:
         for lock in self._held.values():
@@ -550,3 +586,24 @@ class SqlAlchemyAuthRepository:
 
     async def delete_sessions_for_user(self, user_id: uuid.UUID) -> None:
         await self._s.execute(delete(UserSession).where(UserSession.user_id == user_id))
+
+    async def get_google_credential(self, user_id: uuid.UUID) -> GoogleCredentialRecord | None:
+        stmt = select(
+            GoogleConnection.refresh_token_enc,
+            GoogleConnection.key_id,
+            GoogleConnection.status,
+            GoogleConnection.google_email,
+        ).where(GoogleConnection.user_id == user_id)
+        row = (await self._s.execute(stmt)).first()
+        if row is None:
+            return None
+        return GoogleCredentialRecord(
+            refresh_token_enc=row[0], key_id=row[1], status=row[2], google_email=row[3]
+        )
+
+    async def mark_google_revoked(self, user_id: uuid.UUID, at: datetime) -> None:
+        await self._s.execute(
+            update(GoogleConnection)
+            .where(GoogleConnection.user_id == user_id)
+            .values(status="revoked", revoked_at=at)
+        )

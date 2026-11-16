@@ -159,3 +159,19 @@ class FakeAppleClient:
         if self.revoke_error is not None:
             raise self.revoke_error
         self.revoked.append(refresh_token)
+
+
+class FakeGoogleRevoker:
+    """GoogleRevoker double for DELETE /me. Appends "google" to the shared `events` list
+    (pass FakeAppleClient.events) so tests can assert Google-before-Apple ordering."""
+
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+        self.revoked: list[str] = []
+        self.revoke_error: Exception | None = None
+
+    async def revoke_token(self, token: str) -> None:
+        self.events.append("google")
+        if self.revoke_error is not None:
+            raise self.revoke_error
+        self.revoked.append(token)

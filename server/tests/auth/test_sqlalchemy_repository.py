@@ -26,6 +26,7 @@ from app.auth.repository import (
 from app.db.base import Base
 from app.db.models import auth as _models  # noqa: F401  (registers tables)
 from tests.auth.conftest import T0
+from tests.auth.fixtures import FrozenClock
 
 DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="TEST_DATABASE_URL not set")
@@ -317,8 +318,14 @@ async def test_delete_account_with_per_step_transactions(
                 in_tx_during_revoke.append(not got.scalar_one())
             self.revoked.append(token)
 
+    class NoGoogle:  # no google_connections row: never called
+        async def revoke_token(self, token: str) -> None:
+            raise AssertionError("no Google connection to revoke")
+
     apple = Apple()
-    await AccountDeletionService(provider, apple=apple, cipher=cipher).delete_account(user.id)
+    await AccountDeletionService(
+        provider, apple=apple, cipher=cipher, google=NoGoogle(), clock=FrozenClock(T0)
+    ).delete_account(user.id)
     assert apple.revoked == ["rt-1"] and in_tx_during_revoke == [False]
     async with provider() as repo:
         assert await repo.get_user(user.id) is None

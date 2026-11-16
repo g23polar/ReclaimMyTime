@@ -52,10 +52,7 @@ struct GcalRevokedBanner: View {
         let calendar = model.calendar
         calendar.dismissRevokedBanner()
         Task {
-            await calendar.connect { url, scheme in
-                if usesMock { return MockWebAuthenticator.callbackURL() }
-                return try await session.authenticate(using: url, callbackURLScheme: scheme)
-            }
+            await calendar.connect(using: GcalWebAuthenticator.make(session: session, usesMock: usesMock))
         }
     }
 }

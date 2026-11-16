@@ -61,11 +61,12 @@ final class T52ReviewFindingsTests: XCTestCase {
         XCTAssertNil(h.model.calendar.connectedEmail)
     }
 
-    func testPersistedCalendarStatusIsScopedPerAccount() throws {
+    func testPersistedCalendarStatusIsScopedPerAccount() async throws {
         let h = try T52Harness()
         let userA = UUID(), userB = UUID()
         h.model.calendar.activate(userId: userA)
-        h.model.calendar.apply(.connected)
+        await h.model.calendar.refreshStatus()
+        XCTAssertEqual(h.model.calendar.status, .connected)
         let other = CalendarConnectionModel(api: h.model.api, defaults: h.defaults, scope: h.model.calendar.scope)
         other.activate(userId: userB)
         XCTAssertEqual(other.status, .unknown)

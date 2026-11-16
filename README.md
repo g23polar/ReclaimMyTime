@@ -124,8 +124,8 @@ server/
 | Auth: Sign in with Apple, sessions, account deletion with Apple token revocation | Done |
 | Conversational agent: strict tool schemas, staging, streaming turn loop, refusal handling | Done (tested against a recorded/fake model transport) |
 | iOS app: onboarding chat, timetable week/day views, drag/resize/delete as staged edits, diff review, trade-off sheet, notifications | Done, running against a fixture-backed mock transport |
-| Google Calendar: OAuth connect | In progress |
-| Google Calendar: free/busy reads, app calendar, write-back, drift detection | Next |
+| Google Calendar: OAuth connect (PKCE, bearer-bound completion), status, disconnect with revocation | Done |
+| Google Calendar: free/busy reads, app calendar, write-back, drift detection | In progress |
 | Live end-to-end integration (iOS app against the real server) | Not started |
 | Onboarding intent-narrative illustrations | Placeholder in the app |
 
@@ -180,6 +180,9 @@ not at import:
 | `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` | Apple REST client (authorization-code exchange, revocation) |
 | `ANTHROPIC_API_KEY` | Read by the Anthropic SDK for `/agent/message` |
 | `AGENT_MODEL` | Optional model id override |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | Google OAuth web client; the redirect URI points at `/gcal/callback` |
+| `GCAL_STATE_KEY` | Fernet key that encrypts the OAuth `state` (must differ from every `AUTH_FERNET_KEYS` entry) |
+| `GCAL_APP_CALLBACK_URL` | Optional; app redirect target, default `reclaimmytime://gcal/callback` |
 
 Authenticated routes need real Sign in with Apple credentials, so running the full API
 locally is currently only practical for the authors. The test suite needs none of these

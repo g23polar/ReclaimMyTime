@@ -23,7 +23,8 @@ final class CalendarConnectionModel {
         case revoked
     }
 
-    /// Inline callouts mapped from the callback's `code` (onboarding.md §3).
+    /// Inline callouts mapped from an error `code` — the callback redirect's or `POST /gcal/complete`'s
+    /// (onboarding.md §3). The same code shows the same callout whichever path reported it.
     enum Callout: Hashable, Sendable {
         case accessDenied
         case scopeInsufficient
@@ -107,7 +108,8 @@ final class CalendarConnectionModel {
         setStatus(.notConnected)
     }
 
-    /// Runs the OAuth hand-off. Returns true when the callback reports `connected`.
+    /// Runs the OAuth hand-off: `GET /gcal/connect` → browser → `authorized` callback →
+    /// client-side state check → `POST /gcal/complete`. Returns true once connected.
     @discardableResult
     func connect(using authenticate: Authenticator) async -> Bool {
         guard !isConnecting else { return false }
@@ -125,30 +127,45 @@ final class CalendarConnectionModel {
                 callout = .failed
                 return false
             }
-            return apply(result)
+            switch result {
+            case .error(let code):
+                applyError(code: code)
+                return false
+            case .authorized(let authCode, let state):
+                // The callback must answer the authorization URL this app opened. A mismatch means
+                // the code was minted for some other flow; never forward it to the server.
+                guard let expected = connect.state, !expected.isEmpty, state == expected else {
+                    logger.error("gcal callback state mismatch")
+                    applyError(code: GcalCallbackResult.stateInvalidCode)
+                    return false
+                }
+                let remote = try await api.completeGcalConnect(GcalCompleteRequest(authCode: authCode, state: state))
+                guard started == epoch else { return false }
+                applyRemote(remote)
+                guard status == .connected else {
+                    logger.error("gcal complete returned no active connection")
+                    callout = .failed
+                    return false
+                }
+                callout = nil
+                return true
+            }
         } catch {
             if Self.isCancellation(error) || started != epoch { return false }
             logger.error("Google connect failed")
-            callout = .failed
+            // `POST /gcal/complete` errors carry the same codes (and callouts) as the redirect.
+            if let code = (error as? APIError)?.serverCode {
+                applyError(code: code)
+            } else {
+                callout = .failed
+            }
             return false
         }
     }
 
-    /// Applies a callback result (also the deep-link entry point if the app is opened via the
-    /// scheme). Returns true when connected.
-    @discardableResult
-    func apply(_ result: GcalCallbackResult) -> Bool {
-        switch result {
-        case .connected:
-            callout = nil
-            setStatus(.connected)
-            clearRevokedBannerMarker()
-            return true
-        case .error(let code):
-            callout = Self.callout(forCode: code)
-            if code == "gcal_access_denied", status != .connected { setStatus(.notConnected) }
-            return false
-        }
+    private func applyError(code: String) {
+        callout = Self.callout(forCode: code)
+        if code == "gcal_access_denied", status != .connected { setStatus(.notConnected) }
     }
 
     static func callout(forCode code: String) -> Callout {
@@ -165,20 +182,25 @@ final class CalendarConnectionModel {
         do {
             let remote = try await api.getGcalStatus()
             guard started == epoch else { return }
-            if let connection = remote.connection {
-                connectedEmail = connection.googleEmail
-                setStatus(connection.status == .active ? .connected : .revoked)
-                if connection.status == .active {
-                    clearRevokedBannerMarker()
-                } else {
-                    raiseRevokedBannerOnce(revokedAt: connection.revokedAt)
-                }
-            } else {
-                connectedEmail = nil
-                setStatus(.notConnected)
-            }
+            applyRemote(remote)
         } catch {
             logger.notice("Couldn't refresh calendar status")
+        }
+    }
+
+    /// Applies a server `GcalStatus` (from `GET /gcal/status` or `POST /gcal/complete`).
+    private func applyRemote(_ remote: GcalStatus) {
+        if let connection = remote.connection {
+            connectedEmail = connection.googleEmail
+            setStatus(connection.status == .active ? .connected : .revoked)
+            if connection.status == .active {
+                clearRevokedBannerMarker()
+            } else {
+                raiseRevokedBannerOnce(revokedAt: connection.revokedAt)
+            }
+        } else {
+            connectedEmail = nil
+            setStatus(.notConnected)
         }
     }
 

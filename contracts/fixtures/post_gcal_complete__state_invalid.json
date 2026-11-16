@@ -1,0 +1,26 @@
+{
+  "operation": "completeGcalConnect",
+  "method": "POST",
+  "path": "/gcal/complete",
+  "case": "state_invalid",
+  "description": "State expired, undecryptable, or issued to a different user (not distinguished).",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "auth_code": "4/0AeanS0aExampleAuthCode",
+      "state": "eyJ1IjoiMGI2ZTJmMWEiLCJuIjoiN2YzYSJ9.Qm9ndXNTaWduYXR1cmVGb3JGaXh0dXJlcw"
+    }
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "gcal_state_invalid",
+        "message": "This Google connection attempt is invalid or has expired. Please start again."
+      }
+    }
+  }
+}

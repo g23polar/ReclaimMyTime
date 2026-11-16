@@ -9,6 +9,7 @@ own short transactions so no connection or lock is held while Apple is called.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
@@ -35,11 +36,16 @@ from app.auth.repository import (
     UserRecord,
 )
 from app.auth.sessions import SessionPolicy, hash_token, mint_token
+from app.gcal.client import GoogleRevocationError, GoogleRevoker
+from app.gcal.errors import GcalRevocationFailedError
 
 logger = logging.getLogger(__name__)
 
 APPLE = "apple"
 MAX_EXTRA_REVOCATION_PASSES = 2
+MARK_REVOKED_TIMEOUT_S = 5.0
+# Strong refs to shielded mark tasks so a cancelled caller cannot let them be GC'd.
+_BACKGROUND: set[asyncio.Task[None]] = set()
 _LOCK_ATTEMPTS = 3
 
 
@@ -291,48 +297,169 @@ class AuthService:
 # --------------------------------------------------------------------------- account deletion
 
 
-class AccountDeletionService:
-    """DELETE /me: revoke every stored Apple refresh token, then delete the user
-    (identities and sessions cascade).
+class _RevokedGoogle:
+    """Google grants revoked during one deletion: plaintext tokens and (casefolded) emails."""
 
-    1. tx A, under the per-user lock: read and decrypt every stored credential; commit.
-    2. Revoke each with Apple, outside any transaction.
+    def __init__(self) -> None:
+        self.tokens: set[str] = set()
+        self.emails: set[str] = set()
+
+    def add(self, token: str, email: str) -> None:
+        self.tokens.add(token)
+        self.emails.add(email.casefold())
+
+    def __bool__(self) -> bool:
+        return bool(self.tokens)
+
+
+class AccountDeletionService:
+    """DELETE /me: revoke the Google grant (if connected) and every stored Apple refresh
+    token, then delete the user (identities, sessions and google_connections cascade).
+
+    1. tx A, under the per-user lock: read and decrypt every stored credential (Google and
+       Apple) before anything is revoked; commit.
+    2. Revoke Google first, then each Apple token, outside any transaction.
     3. tx B, under the per-user lock: re-read. A credential not yet revoked (stored by a
-       concurrent sign-in) is revoked in another pass, at most
-       `MAX_EXTRA_REVOCATION_PASSES` times, then 503 apple_revocation_failed
-       (reason apple_error). Otherwise delete the user in tx B.
+       concurrent sign-in or Google reconnect) is revoked in another pass, at most
+       `MAX_EXTRA_REVOCATION_PASSES` times, then 503 (`gcal_revocation_failed` or
+       `apple_revocation_failed`, reason google_error / apple_error). Otherwise delete the
+       user in tx B.
+
+    Fail closed: an undecryptable credential blocks deletion (503, reason
+    undecryptable_credential) before anything is revoked; a Google revoke failure is 503
+    `gcal_revocation_failed` and an Apple one propagates (503 apple_unavailable). Nothing is
+    deleted either way. If Google was revoked but a later step fails or the request is
+    cancelled, the Google row is marked `revoked` (revoked_at = now; bounded and shielded)
+    before the error propagates, so its status never claims a grant that no longer exists
+    (decision T4.1 #8). That includes a row whose token changed but whose account is one we
+    revoked, since Google revocation is grant-wide.
 
     Credentials are compared by plaintext, so re-encryption under a rotated key is not a
-    change. An undecryptable credential blocks deletion (reason undecryptable_credential)
-    and a revoke failure propagates (503 apple_unavailable); nothing is deleted either way.
-    TODO(T4.1): also revoke the Google connection here.
+    change.
     """
 
     def __init__(
-        self, provider: RepositoryProvider, *, apple: AppleClient, cipher: TokenCipher
+        self,
+        provider: RepositoryProvider,
+        *,
+        apple: AppleClient,
+        cipher: TokenCipher,
+        google: GoogleRevoker,
+        clock: Clock,
     ) -> None:
         self._provider = provider
         self._apple = apple
         self._cipher = cipher
+        self._google = google
+        self._clock = clock
 
     async def delete_account(self, user_id: uuid.UUID) -> None:
         async with self._provider() as repo:  # tx A
             await repo.lock_user(user_id)
+            google = await self._google_credential(repo, user_id)
             pending = await self._credentials(repo, user_id)
+        revoked_google = _RevokedGoogle()
         revoked: set[str] = set()
-        for _ in range(1 + MAX_EXTRA_REVOCATION_PASSES):
-            for refresh_token in pending:
-                await self._apple.revoke_refresh_token(refresh_token)
-                revoked.add(refresh_token)
-            async with self._provider() as repo:  # tx B
+        try:
+            for _ in range(1 + MAX_EXTRA_REVOCATION_PASSES):
+                if google is not None:
+                    await self._revoke_google(google[0])
+                    revoked_google.add(*google)
+                for refresh_token in pending:
+                    await self._apple.revoke_refresh_token(refresh_token)
+                    revoked.add(refresh_token)
+                async with self._provider() as repo:  # tx B
+                    await repo.lock_user(user_id)
+                    current = await self._google_credential(repo, user_id)
+                    google = (
+                        current
+                        if current is not None and current[0] not in revoked_google.tokens
+                        else None
+                    )
+                    pending = [
+                        t for t in await self._credentials(repo, user_id) if t not in revoked
+                    ]
+                    if google is None and not pending:
+                        await repo.delete_user(user_id)
+                        return
+                logger.info("credential changed during account deletion; revoking again")
+            logger.error("credential kept changing during account deletion; deletion blocked")
+            if google is not None:
+                raise GcalRevocationFailedError("google_error")
+            raise AppleRevocationFailedError("apple_error")
+        except BaseException:
+            # Includes CancelledError: once Google confirmed revocation, the row must say so
+            # even if the request is abandoned (T4.1 review).
+            if revoked_google:
+                await self._mark_google_revoked_shielded(user_id, revoked_google)
+            raise
+
+    async def _revoke_google(self, token: str) -> None:
+        try:
+            await self._google.revoke_token(token)
+        except GoogleRevocationError:
+            raise GcalRevocationFailedError("google_error") from None
+
+    async def _mark_google_revoked_shielded(
+        self, user_id: uuid.UUID, revoked: _RevokedGoogle
+    ) -> None:
+        """Run the mark in its own task, bounded by MARK_REVOKED_TIMEOUT_S and shielded, so
+        a cancellation (the first, which got us here, or a second one) cannot abort it."""
+        task = asyncio.ensure_future(
+            asyncio.wait_for(self._mark_google_revoked(user_id, revoked), MARK_REVOKED_TIMEOUT_S)
+        )
+        _BACKGROUND.add(task)
+        task.add_done_callback(_BACKGROUND.discard)
+        try:
+            await asyncio.shield(task)
+        except TimeoutError:
+            logger.error("marking the google connection revoked timed out")
+        # A second CancelledError propagates; the shielded task keeps running.
+
+    async def _mark_google_revoked(self, user_id: uuid.UUID, revoked: _RevokedGoogle) -> None:
+        """Best effort: the original error is what the client must see.
+
+        Marks the row when its token is one we revoked, or when its account is one whose
+        grant we revoked: Google revocation is grant-wide, so a same-account token stored
+        by a concurrent reconnect died with it.
+        """
+        try:
+            async with self._provider() as repo:
                 await repo.lock_user(user_id)
-                pending = [t for t in await self._credentials(repo, user_id) if t not in revoked]
-                if not pending:
-                    await repo.delete_user(user_id)
+                stored = await repo.get_google_credential(user_id)
+                if stored is None or stored.status != "active":
                     return
-            logger.info("apple credential changed during account deletion; revoking again")
-        logger.error("apple credential kept changing during account deletion; deletion blocked")
-        raise AppleRevocationFailedError("apple_error")
+                if stored.google_email.casefold() not in revoked.emails:
+                    try:
+                        plaintext = self._cipher.decrypt(stored.refresh_token_enc)
+                    except DecryptionError:
+                        return
+                    if plaintext not in revoked.tokens:
+                        return
+                await repo.mark_google_revoked(user_id, self._clock.now())
+        except Exception as exc:
+            logger.error(
+                "could not mark revoked google connection after failed deletion: %s",
+                type(exc).__name__,
+            )
+
+    async def _google_credential(
+        self, repo: AuthRepository, user_id: uuid.UUID
+    ) -> tuple[str, str] | None:
+        """(plaintext refresh token, google_email), or None when not connected."""
+        stored = await repo.get_google_credential(user_id)
+        if stored is None:
+            return None
+        try:
+            return self._cipher.decrypt(stored.refresh_token_enc), stored.google_email
+        except DecryptionError:
+            logger.error(
+                "google refresh token undecryptable at deletion (key_id=%s); deletion blocked",
+                stored.key_id,
+            )
+            raise GcalRevocationFailedError(
+                "undecryptable_credential", key_id=stored.key_id
+            ) from None
 
     async def _credentials(self, repo: AuthRepository, user_id: uuid.UUID) -> list[str]:
         """Plaintext Apple refresh tokens, deduplicated, in identity order."""

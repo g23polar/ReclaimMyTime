@@ -1,7 +1,7 @@
 """FastAPI wiring: the auth runtime, a request-scoped repository, and bearer dependencies.
 
-`AuthRuntime` holds the long-lived collaborators (JWKS cache, Apple client, cipher, clock,
-nonce guard) plus a `repository_provider` — an async context manager that yields an
+`AuthRuntime` holds the long-lived collaborators (JWKS cache, Apple client, Google revoker,
+cipher, clock, nonce guard) plus a `repository_provider` — an async context manager that yields an
 `AuthRepository` inside one transaction (commit on success, rollback on error).
 It lives on `app.state.auth_runtime`; tests install one with in-memory parts. If none is
 installed, `default_runtime()` builds the production one lazily from env on first use.
@@ -51,6 +51,8 @@ from app.auth.repository import (
 from app.auth.service import AccountDeletionService, Authenticated, AuthService
 from app.auth.sessions import SessionPolicy
 from app.auth.settings import AuthSettings
+from app.gcal.client import GoogleRevoker, HttpGoogleRevoker
+from app.gcal.settings import GcalSettings
 
 _IANA_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_+\-]*(/[A-Za-z0-9_+\-]+)*$")  # openapi IanaTimezone
 
@@ -65,6 +67,7 @@ class AuthRuntime:
     cipher: TokenCipher
     policy: SessionPolicy
     repository_provider: RepositoryProvider
+    google: GoogleRevoker  # DELETE /me revokes the Google grant too (T4.1)
 
     def service(self, repo: AuthRepository) -> AuthService:
         return AuthService(
@@ -79,7 +82,11 @@ class AuthRuntime:
 
     def deletion_service(self) -> AccountDeletionService:
         return AccountDeletionService(
-            self.repository_provider, apple=self.apple, cipher=self.cipher
+            self.repository_provider,
+            apple=self.apple,
+            cipher=self.cipher,
+            google=self.google,
+            clock=self.clock,
         )
 
 
@@ -91,9 +98,12 @@ def build_runtime(
     jwks_fetcher: JwksFetcher | None = None,
     apple_client: AppleClient | None = None,
     nonce_guard: NonceGuard | None = None,
+    google_revoker: GoogleRevoker | None = None,
 ) -> AuthRuntime:
     """AuthConfigError if no `apple_client` is injected and the APPLE_TEAM_ID /
-    APPLE_KEY_ID / APPLE_PRIVATE_KEY credentials the HTTP client needs are missing."""
+    APPLE_KEY_ID / APPLE_PRIVATE_KEY credentials the HTTP client needs are missing.
+    Without `google_revoker`, Google's default revoke endpoint is used (it needs no
+    client credentials)."""
     if apple_client is None:
         settings.require_apple_credentials()
     clock = clock or SystemClock()
@@ -118,6 +128,7 @@ def build_runtime(
             last_seen_interval=settings.last_seen_interval,
         ),
         repository_provider=repository_provider,
+        google=google_revoker or HttpGoogleRevoker(),
     )
 
 
@@ -151,10 +162,12 @@ def default_runtime(*, apple_client: AppleClient | None = None) -> AuthRuntime:
         raise RuntimeError("DATABASE_URL must be set")
     engine = create_async_engine(database_url, pool_pre_ping=True)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    gcal = GcalSettings.from_env(require_oauth=False)  # revoke endpoint/timeout only
     return build_runtime(
         settings,
         repository_provider=sqlalchemy_repository_provider(sessionmaker),
         apple_client=apple_client,
+        google_revoker=HttpGoogleRevoker.from_settings(gcal),
     )
 
 

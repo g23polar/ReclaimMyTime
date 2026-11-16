@@ -144,7 +144,7 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 - [x] M3 architect gate — Tessl lens; 3 majors (reply vs persisted solve) fixed
 
 **M4 — Google Calendar**
-- [ ] T4.1 OAuth + connection lifecycle
+- [x] T4.1 OAuth + connection lifecycle — T4.1 commit (2 Tessl rounds + final majors fixed; two-step completion, D24)
 - [ ] T4.2 freeBusy + app calendar
 - [ ] T4.3 Write-back outbox + drift
 

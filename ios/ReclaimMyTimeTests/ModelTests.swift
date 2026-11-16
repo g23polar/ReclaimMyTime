@@ -127,10 +127,45 @@ final class ModelTests: XCTestCase {
     }
 
     func testGcalCallbackURLParsing() throws {
-        XCTAssertEqual(GcalCallbackResult(url: try XCTUnwrap(URL(string: "reclaimmytime://gcal/callback?result=connected"))), .connected)
-        XCTAssertEqual(GcalCallbackResult(url: try XCTUnwrap(URL(string: "reclaimmytime://gcal/callback?result=error&code=gcal_access_denied"))), .error(code: "gcal_access_denied"))
-        XCTAssertNil(GcalCallbackResult(url: try XCTUnwrap(URL(string: "https://example.com/gcal/callback?result=connected"))))
-        XCTAssertNil(GcalCallbackResult(url: try XCTUnwrap(URL(string: "reclaimmytime://gcal/callback?result=error"))))
+        func parse(_ string: String) throws -> GcalCallbackResult? {
+            GcalCallbackResult(url: try XCTUnwrap(URL(string: string)))
+        }
+        // authorized: both params, percent-decoded.
+        XCTAssertEqual(try parse("reclaimmytime://gcal/callback?result=authorized&auth_code=4%2F0AeanS0a%2Bx&state=eyJ1.Qm9n%3D"),
+                       .authorized(authCode: "4/0AeanS0a+x", state: "eyJ1.Qm9n="))
+        // authorized but unusable → gcal_state_invalid (never forwarded to the server).
+        for url in [
+            "reclaimmytime://gcal/callback?result=authorized&state=abc",
+            "reclaimmytime://gcal/callback?result=authorized&auth_code=code",
+            "reclaimmytime://gcal/callback?result=authorized&auth_code=&state=abc",
+            "reclaimmytime://gcal/callback?result=authorized&auth_code=code&state=",
+            "reclaimmytime://gcal/callback?result=authorized",
+        ] {
+            XCTAssertEqual(try parse(url), .error(code: "gcal_state_invalid"), url)
+        }
+        // error codes pass through.
+        for code in ["gcal_access_denied", "gcal_exchange_failed", "gcal_state_invalid"] {
+            XCTAssertEqual(try parse("reclaimmytime://gcal/callback?result=error&code=\(code)"), .error(code: code))
+        }
+        XCTAssertNil(try parse("reclaimmytime://gcal/callback?result=error"))
+        // unknown results, including the retired `connected`.
+        XCTAssertNil(try parse("reclaimmytime://gcal/callback?result=connected"))
+        XCTAssertNil(try parse("reclaimmytime://gcal/callback?result=surprise&auth_code=a&state=b"))
+        XCTAssertNil(try parse("reclaimmytime://gcal/callback"))
+        // wrong scheme / route.
+        XCTAssertNil(try parse("https://example.com/gcal/callback?result=authorized&auth_code=a&state=b"))
+        XCTAssertNil(try parse("reclaimmytime://gcal/other?result=authorized&auth_code=a&state=b"))
+    }
+
+    func testGcalConnectUrlExposesState() throws {
+        let connect = try JSONCoding.makeDecoder().decode(GcalConnectUrl.self, from: XCTUnwrap(TestFixtures.named("get_gcal_connect__ok.json").responseBody))
+        XCTAssertEqual(connect.state, "eyJ1IjoiMGI2ZTJmMWEiLCJuIjoiN2YzYSJ9.Qm9ndXNTaWduYXR1cmVGb3JGaXh0dXJlcw")
+        XCTAssertNil(GcalConnectUrl(authorizationUrl: try XCTUnwrap(URL(string: "https://accounts.google.com/o/oauth2/v2/auth?client_id=x"))).state)
+    }
+
+    func testGcalCompleteRequestEncodesContractKeys() throws {
+        let body = try JSONCoding.makeEncoder().encode(GcalCompleteRequest(authCode: "c", state: "s"))
+        assertJSONEqual(body, Data(#"{"auth_code":"c","state":"s"}"#.utf8), "POST /gcal/complete body")
     }
 
     func testValidationFieldsTolerateMissingDetails() {

@@ -38,6 +38,37 @@ final class APIClientTests: XCTestCase {
 
     // MARK: headers
 
+    func testCompleteGcalConnectPostsContractBodyWithStandardHeaders() async throws {
+        let auth = try await signIn()
+        let fixture = try TestFixtures.named("get_gcal_status__connected.json")
+        StubURLProtocol.install { _, _ in Self.reply(fixture) }
+
+        let status = try await makeClient().completeGcalConnect(GcalCompleteRequest(authCode: "4/0Aean+x", state: "s.t="))
+
+        XCTAssertEqual(status.connection?.status, .active)
+        let (sent, body) = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(sent.url?.absoluteString, "https://api.example.test/v1/gcal/complete")
+        XCTAssertEqual(sent.httpMethod, "POST")
+        XCTAssertEqual(sent.value(forHTTPHeaderField: "Authorization"), "Bearer \(auth.token)")
+        XCTAssertEqual(sent.value(forHTTPHeaderField: "X-Timezone"), "Europe/Berlin")
+        XCTAssertEqual(sent.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        assertJSONEqual(try XCTUnwrap(body), Data(#"{"auth_code":"4/0Aean+x","state":"s.t="}"#.utf8), "POST /gcal/complete body")
+    }
+
+    func testCompleteGcalConnectErrorEnvelopeSurfacesCode() async throws {
+        _ = try await signIn()
+        for (status, code) in [(400, "gcal_state_invalid"), (422, "gcal_scope_insufficient"), (502, "gcal_exchange_failed")] {
+            let body = try JSONCoding.makeEncoder().encode(ErrorEnvelope(error: ErrorBody(code: code, message: "m")))
+            StubURLProtocol.install { _, _ in StubURLProtocol.Reply(status: status, chunks: [body]) }
+            do {
+                _ = try await makeClient().completeGcalConnect(GcalCompleteRequest(authCode: "c", state: "s"))
+                XCTFail("expected \(code)")
+            } catch let error as APIError {
+                XCTAssertEqual(error.serverCode, code)
+            }
+        }
+    }
+
     func testAuthenticatedRequestCarriesBearerTimezoneAndAccept() async throws {
         let auth = try await signIn()
         let fixture = try TestFixtures.named("get_me__ok.json")

@@ -1,0 +1,20 @@
+{
+  "operation": "gcalCallback",
+  "method": "GET",
+  "path": "/gcal/callback",
+  "case": "authorized",
+  "description": "Google redirects the browser here after consent; the server stores nothing and hands the code + state back to the app, which completes via POST /gcal/complete (D24). Filename kept from the former 'connected' case (no file deletion); rename to get_gcal_callback__authorized.json pending.",
+  "request": {
+    "query": {
+      "state": "eyJ1IjoiMGI2ZTJmMWEiLCJuIjoiN2YzYSJ9.Qm9ndXNTaWduYXR1cmVGb3JGaXh0dXJlcw",
+      "code": "4/0AeanS0aExampleAuthCode",
+      "scope": "https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/calendar.app.created openid email"
+    }
+  },
+  "response": {
+    "status": 302,
+    "headers": {
+      "Location": "reclaimmytime://gcal/callback?result=authorized&auth_code=4%2F0AeanS0aExampleAuthCode&state=eyJ1IjoiMGI2ZTJmMWEiLCJuIjoiN2YzYSJ9.Qm9ndXNTaWduYXR1cmVGb3JGaXh0dXJlcw"
+    }
+  }
+}

@@ -15,7 +15,7 @@ final class FixtureContractTests: XCTestCase {
         "listPins", "deletePin",
         "postAgentMessage",
         "confirmChangeset", "rejectChangeset",
-        "getGcalConnectUrl", "gcalCallback", "getGcalStatus", "disconnectGcal",
+        "getGcalConnectUrl", "gcalCallback", "completeGcalConnect", "getGcalStatus", "disconnectGcal",
     ]
 
     private let decoder = JSONCoding.makeDecoder()
@@ -142,6 +142,8 @@ final class FixtureContractTests: XCTestCase {
         case "listPins": _ = try decoder.decode(PinList.self, from: body)
         case "getGcalConnectUrl": _ = try decoder.decode(GcalConnectUrl.self, from: body)
         case "getGcalStatus": _ = try decoder.decode(GcalStatus.self, from: body)
+        case "completeGcalConnect":
+            XCTAssertNotNil(try decoder.decode(GcalStatus.self, from: body).connection, "\(fixture.fileName): 200 means connected")
         case "patchBlock" where fixture.status == 200: _ = try decoder.decode(Block.self, from: body)
         case "patchBlock", "createProject", "updateProject", "archiveProject", "putPreferences",
              "createException", "deleteException", "deletePin", "confirmChangeset", "rejectChangeset":
@@ -164,6 +166,7 @@ final class FixtureContractTests: XCTestCase {
         case "createException": try roundTrip(ExceptionDraft.self, body, name)
         case "patchBlock": try roundTrip(BlockAction.self, body, name)
         case "postAgentMessage": try roundTrip(AgentMessageRequest.self, body, name)
+        case "completeGcalConnect": try roundTrip(GcalCompleteRequest.self, body, name)
         default: XCTFail("\(name): no request type registered for \(operation)")
         }
     }

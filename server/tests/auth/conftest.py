@@ -19,6 +19,7 @@ from app.auth.settings import AuthSettings
 from tests.auth.fixtures import (
     BUNDLE_ID,
     FakeAppleClient,
+    FakeGoogleRevoker,
     FakeJwksFetcher,
     FrozenClock,
     SigningKey,
@@ -65,6 +66,11 @@ def apple(tokens: TokenFactory) -> FakeAppleClient:
 
 
 @pytest.fixture
+def google(apple: FakeAppleClient) -> FakeGoogleRevoker:
+    return FakeGoogleRevoker(apple.events)
+
+
+@pytest.fixture
 def repo() -> InMemoryAuthRepository:
     return InMemoryAuthRepository()
 
@@ -75,6 +81,7 @@ def runtime(
     clock: FrozenClock,
     jwks_fetcher: FakeJwksFetcher,
     apple: FakeAppleClient,
+    google: FakeGoogleRevoker,
     repo: InMemoryAuthRepository,
 ) -> AuthRuntime:
     @asynccontextmanager
@@ -88,6 +95,7 @@ def runtime(
         clock=clock,
         jwks_fetcher=jwks_fetcher,
         apple_client=apple,
+        google_revoker=google,
     )
 
 
