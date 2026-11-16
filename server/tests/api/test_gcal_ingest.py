@@ -380,10 +380,25 @@ async def test_delete_without_room_to_replace_stages_nothing(
     target = future[0]
     cal.user_delete(CAL1, eid(target))
 
+    short_before = await workout_shortfall(maker)
     assert (await sync(client))["pending_changeset"] is None
     assert target.lineage_id not in {b.lineage_id for b in await live_blocks(maker, who.user_id)}
     assert [r[0] for r in await rows(maker, "SELECT kind::text FROM block_pins")] == ["forbid"]
     assert [c for c in await changesets(maker) if c[0] == "google_edit"] == []
+    # M4 gate: the live plan's infeasibility is the solver's verdict on the plan after the
+    # delete (60 more minutes short), not the previous plan's, copied.
+    assert await workout_shortfall(maker) == short_before + 60
+
+
+async def workout_shortfall(maker: Any) -> int:
+    [(infeasibility,)] = await rows(
+        maker, "SELECT infeasibility FROM week_plans WHERE status = 'live'"
+    )
+    return sum(
+        v["shortfall_minutes"]
+        for v in (infeasibility or {}).get("violations", [])
+        if v["kind"] == "demand_shortfall" and v["project_id"] == str(WORKOUT)
+    )
 
 
 # ---------------------------------------------------------------- pending changeset, batching
@@ -758,6 +773,50 @@ async def test_state_changed_between_list_and_lock_skips_the_edit(
     assert (await sync(client))["pending_changeset"] is None
     assert await rows(maker, "SELECT count(*) FROM block_pins") == [(0,)]
     assert [c for c in await changesets(maker) if c[0] == "google_edit"] == []
+
+
+@pytest.mark.parametrize("edit", ["delete", "move"])
+async def test_a_block_that_starts_during_the_google_read_is_immutable(
+    stable, client, maker, cal: FakeCalendar, clock, monkeypatch, edit
+):
+    """M4 gate: the locked phase decides at the instant of the write, not at the request's
+    start. Wednesday's Workout starts while the sync awaits Google: its edit is ignored."""
+    wed = await block_at(maker, stable, 2, "08:00")
+    if edit == "delete":
+        cal.user_delete(CAL1, eid(wed))
+    else:
+        cal.user_move(CAL1, eid(wed), at(3, "10:00"), at(3, "11:00"))
+    original = gcal_sync.fetch_window
+
+    async def time_passes(*args: Any, **kwargs: Any) -> Any:
+        clock.current = at(2, "08:05")  # after the listing, before the lock
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(gcal_sync, "fetch_window", time_passes)
+    plan = await live_plan_id(maker)
+    assert (await sync(client))["pending_changeset"] is None
+    assert await live_plan_id(maker) == plan
+    assert await rows(maker, "SELECT count(*) FROM block_pins") == [(0,)]
+
+
+async def test_a_week_rollover_during_the_google_read_skips_ingest_and_drift(
+    stable, client, maker, cal: FakeCalendar, clock, monkeypatch
+):
+    thu = await block_at(maker, stable, 3, "08:00")
+    cal.user_move(CAL1, eid(thu), at(3, "10:00"), at(3, "11:00"))
+    cal.busy = [(at(4, "07:30"), at(4, "09:00"))]  # drift on Friday, never proposed here
+    original = gcal_sync.fetch_window
+
+    async def week_ends(*args: Any, **kwargs: Any) -> Any:
+        clock.current = at(7, "09:00")  # next Monday: another solve horizon
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(gcal_sync, "fetch_window", week_ends)
+    plan = await live_plan_id(maker)
+    assert (await sync(client))["pending_changeset"] is None
+    assert await live_plan_id(maker) == plan
+    assert await rows(maker, "SELECT count(*) FROM block_pins") == [(0,)]
+    assert len(await changesets(maker)) == 2  # the two setup changesets only
 
 
 async def test_a_slow_drain_skips_the_ingest_but_still_answers(

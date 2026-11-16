@@ -146,7 +146,8 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 **M4 — Google Calendar**
 - [x] T4.1 OAuth + connection lifecycle — T4.1 commit (2 Tessl rounds + final majors fixed; two-step completion, D24)
 - [x] T4.2 freeBusy + app calendar — T4.2 commit (primary calendar only; fail closed 503/409; 2 Tessl rounds)
-- [x] T4.3 Write-back outbox + drift — (a) 95580da; (b) Google-edit ingestion (hybrid) + drift + iOS sync: T4.3b commit
+- [x] T4.3 Write-back outbox + drift — (a) 95580da; (b) Google-edit ingestion (hybrid) + drift + iOS sync: d176af8
+- [x] M4 architect gate — pass with conditions (Tessl lens; 2 majors: stale clock in locked sync phase, hidden shortfall after Google delete) fixed in the M4 gate commit
 
 **M5 — iOS**
 - [x] T5.0 Visual design spec — `927bb08` (intent panels: product owner)

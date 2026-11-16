@@ -9,7 +9,9 @@ connection checked out (the T4.2 deadlock lesson; tests/api/test_gcal_ingest_poo
    the listing), then ONE fresh primary freeBusy read over the solve horizon, shared by the
    edit re-solves and the drift check (user decision 2026-11-16: a busy failure applies no
    edit and answers 503/409; what the drain wrote stays written);
-3. one transaction under the lock: `ensure_covers` (the horizon has not moved), then
+3. one transaction under the lock, at the instant of that write (`clock()`, not the request's
+   start): if the busy window no longer covers the solve horizon (week rollover), ingest and
+   drift are skipped for this sync; otherwise
    `apply_google_edits` (re-validates every edit; state that changed since phase 2 is skipped
    and re-evaluated by the next sync), then `propose_drift`.
 """
@@ -22,7 +24,7 @@ from datetime import datetime
 
 from fastapi import FastAPI
 
-from app.api.busy import ensure_covers, fetch_window
+from app.api.busy import fetch_window
 from app.api.deps import clock_for_app, maker_for_app, transaction
 from app.api.gcal import runtime_for_app
 from app.api.outbox import kick_outbox
@@ -59,18 +61,27 @@ async def ingest_and_check_drift(
         return
     window = await fetch_window(busy, user_id, horizon)
 
+    clock = clock_for_app(app)
     async with transaction(maker) as tx:
         await lock_user(tx, user_id)
-        ensure_covers(window, await solve_horizon(tx, user_id, [], now))
+        # M4 gate: `now` (request start) predates the outbox wait and the Google reads. Every
+        # eligibility, frozen-state and solve decision uses the instant of the locked write,
+        # so a block that started meanwhile is immutable here.
+        now_locked = clock.now()
+        if not window.covers(await solve_horizon(tx, user_id, [], now_locked)):
+            # The week rolled over (or preferences moved it) since the busy read: skip ingest
+            # and drift this time; the next sync redoes both against the new week.
+            logger.info("gcal sync: solve horizon moved since the busy read; ingest skipped")
+            return
         outcome = await apply_google_edits(
             tx,
             user_id,
             ingest.edits,
-            now=now,
+            now=now_locked,
             busy=window.intervals,
-            clock=clock_for_app(app).now,  # stamps a restaged changeset at write time
+            clock=clock.now,  # stamps a restaged changeset at write time
         )
-        drift = await propose_drift(tx, user_id, now=now, busy=window.intervals)
+        drift = await propose_drift(tx, user_id, now=now_locked, busy=window.intervals)
     if ingest.edits:
         logger.info(
             "gcal ingest: %d applied, %d staged, %d skipped%s",

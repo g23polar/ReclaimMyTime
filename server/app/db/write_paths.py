@@ -1694,6 +1694,7 @@ async def apply_google_edits(
     skipped = len(edits) - len(valid)
     staged_all: list[StagedMutation] = []
     replaced_pins: set[uuid.UUID] = set()  # pins the direct applies removed (review round 2)
+    promoted: uuid.UUID | None = None  # the last directly promoted live plan
     applied = staged_edits = 0
     need_proposal = False
 
@@ -1743,7 +1744,7 @@ async def apply_google_edits(
             continue
         if e.kind == "delete":
             need_proposal = True
-        plan_id = await _promote_direct(
+        plan_id = promoted = await _promote_direct(
             tx, user_id, inp, direct, mutations, now=now, timezone=tz, week_start=week_start
         )
         replaced_pins.update(m.payload.pin_id for m in mutations if isinstance(m, PinRemoved))
@@ -1793,6 +1794,20 @@ async def apply_google_edits(
                 timezone=tz,
                 source="system",
                 reason="google_edit",
+            )
+        elif promoted is not None:
+            # No proposal: the follow-up solve reproduces the promoted plan, so its
+            # infeasibility is the solver's verdict on exactly that plan (rule 3; M4 gate). A
+            # delete that took a project's last slot surfaces its new demand_shortfall here
+            # instead of inheriting the previous plan's verdict.
+            await tx.execute(
+                update(WeekPlan)
+                .where(WeekPlan.id == promoted, WeekPlan.status == "live")
+                .values(
+                    infeasibility=None
+                    if out.infeasibility is None
+                    else out.infeasibility.model_dump(mode="json")
+                )
             )
     return GoogleEditOutcome(
         applied=applied, staged=staged_edits, skipped=skipped, changeset_id=changeset_id
