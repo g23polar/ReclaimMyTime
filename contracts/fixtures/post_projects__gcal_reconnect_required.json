@@ -1,0 +1,33 @@
+{
+  "operation": "createProject",
+  "method": "POST",
+  "path": "/projects",
+  "case": "gcal_reconnect_required",
+  "description": "The Google connection is revoked (Google answered invalid_grant when minting an access token), so busy time cannot be read. Nothing staged; the app prompts a reconnect (T4.2, 2026-11-15).",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "name": "Grant application",
+      "kind": "deadline",
+      "target_date": "2026-11-30",
+      "estimated_total_hours": 20.0,
+      "max_block_minutes": 120,
+      "min_block_minutes": 30,
+      "requirements": [
+        "laptop"
+      ]
+    }
+  },
+  "response": {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "gcal_reconnect_required",
+        "message": "Google Calendar access was revoked, so nothing was changed. Please reconnect your calendar."
+      }
+    }
+  }
+}

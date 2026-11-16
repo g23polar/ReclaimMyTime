@@ -39,6 +39,8 @@ class GcalSettings:
     auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
     token_url: str = "https://oauth2.googleapis.com/token"
     revoke_url: str = "https://oauth2.googleapis.com/revoke"
+    # Calendar REST base (T4.2): freeBusy and app-calendar create/delete hang off it.
+    calendar_api_url: str = "https://www.googleapis.com/calendar/v3"
     http_timeout_s: float = 10.0
     state_ttl: timedelta = timedelta(minutes=10)
     id_token_leeway: timedelta = timedelta(seconds=30)
@@ -95,6 +97,7 @@ class GcalSettings:
             app_callback_url=get("GCAL_APP_CALLBACK_URL", cls.app_callback_url),
             auth_url=get("GOOGLE_AUTH_URL", cls.auth_url),
             token_url=get("GOOGLE_TOKEN_URL", cls.token_url),
+            calendar_api_url=get("GOOGLE_CALENDAR_API_URL", cls.calendar_api_url).rstrip("/"),
         )
         settings.require_oauth_settings()
         validate_state_key(settings.state_key, env.get("AUTH_FERNET_KEYS", ""))

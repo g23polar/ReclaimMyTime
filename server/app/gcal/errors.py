@@ -2,9 +2,10 @@
 
 HTTP-facing (`AppError`): `gcal_not_connected` (404), `gcal_revocation_failed` (503), and
 the POST /gcal/complete codes `gcal_state_invalid` (400), `gcal_scope_insufficient` (422),
-`gcal_exchange_failed` (502) (contracts/NOTES.md, T4.1 + review 2026-11-15). Domain errors raised by
-`GcalService.access_token` for T4.2/T4.3 callers are plain exceptions; those callers decide
-how to surface them.
+`gcal_exchange_failed` (502) (contracts/NOTES.md, T4.1 + review 2026-11-15), and the
+solve-time busy codes `gcal_unavailable` (503) / `gcal_reconnect_required` (409) (T4.2).
+Domain errors raised by `GcalService.access_token` for T4.2/T4.3 callers are plain
+exceptions; those callers decide how to surface them.
 """
 
 from __future__ import annotations
@@ -70,6 +71,31 @@ class GcalRevocationFailedError(AppError):
             "Your Google Calendar authorization could not be revoked, so nothing was "
             "changed. Please try again later.",
             details=details,
+        )
+
+
+class GcalUnavailableError(AppError):
+    """Busy time could not be read (Google 5xx/timeout/unexpected answer, or a stored credential
+    no key decrypts). Fail closed: nothing is staged or applied (decision T4.2 #3)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            503,
+            "gcal_unavailable",
+            "Google Calendar could not be reached, so nothing was changed. Please try again.",
+        )
+
+
+class GcalReconnectRequiredError(AppError):
+    """The Google connection is revoked (stored status, or invalid_grant just now): reconnect
+    via GET /gcal/connect. Nothing is staged or applied (decision T4.2 #3)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            409,
+            "gcal_reconnect_required",
+            "Google Calendar access was revoked, so nothing was changed. Please reconnect "
+            "your calendar.",
         )
 
 

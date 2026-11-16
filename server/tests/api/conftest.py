@@ -18,8 +18,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api import install
 from app.api.deps import current_user_id
+from app.auth.crypto import TokenCipher
 from app.db.models import Block, User, WeekPlan
 from app.errors import register_error_handlers
+from app.gcal.runtime import GcalRuntime
 from tests.db.conftest import (  # noqa: F401  (pytest fixtures re-used from tests/db)
     T0,
     bootstrap,
@@ -28,6 +30,9 @@ from tests.db.conftest import (  # noqa: F401  (pytest fixtures re-used from tes
     schema,
     user_id,
 )
+from tests.gcal.calendar_fakes import FakeCalendar, new_cipher
+from tests.gcal.calendar_fakes import install as install_gcal
+from tests.gcal.fakes import FakeGoogle
 
 TZ_HEADERS = {"X-Timezone": "America/Los_Angeles"}
 NOW = datetime(2026, 11, 17, 18, 30, tzinfo=UTC)  # Tue 10:30 local (the fixtures' story)
@@ -121,3 +126,29 @@ async def world(
     plan_id = await bootstrap(maker, user_id)
     clock.current = NOW
     return plan_id
+
+
+# ---------------------------------------------------------------- Google (T4.2, recorded HTTP)
+
+
+@pytest.fixture
+def google() -> FakeGoogle:
+    return FakeGoogle(now=NOW)
+
+
+@pytest.fixture
+def cal() -> FakeCalendar:
+    return FakeCalendar()
+
+
+@pytest.fixture
+def cipher() -> TokenCipher:
+    return new_cipher()
+
+
+@pytest.fixture
+def gcal(
+    app: FastAPI, google: FakeGoogle, cal: FakeCalendar, cipher: TokenCipher, clock: SettableClock
+) -> GcalRuntime:
+    """A gcal runtime on `app` whose OAuth and Calendar clients hit the fakes."""
+    return install_gcal(app, google, cal, cipher, clock)

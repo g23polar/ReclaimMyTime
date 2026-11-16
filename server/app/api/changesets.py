@@ -1,5 +1,10 @@
 """Changesets (`changesets` tag): confirm / reject, both idempotent on their own terminal state.
 
+Confirm reads fresh calendar busy time first (T4.2), outside any transaction or lock: a
+transient Google failure is 503 `gcal_unavailable`, a revoked grant 409
+`gcal_reconnect_required`, nothing applied. A future proposed block overlapping fresh busy
+time is O8-stale (see `confirm_changeset`).
+
 Confirm owns its transactions: an O8 `ChangesetStale` rolls the confirm back, then a NEW
 transaction stages the fresh re-solve via `stage_changeset` (expiring the stale changeset)
 and the client gets 409 `changeset_stale` with `details.changeset_id`.
@@ -13,13 +18,15 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.api.busy import Busy, BusyWindow, fetch_window
 from app.api.deps import Maker, Now, Tx, UserId, transaction
 from app.api.views import changeset_view
 from app.auth.dependencies import require_timezone
-from app.db.models import Changeset
+from app.db.models import Changeset, WeekPlan
 from app.db.models.staged import parse_staged
+from app.db.solver_io import to_interval
 from app.db.write_paths import (
     ChangesetNotPending,
     ChangesetStale,
@@ -28,25 +35,38 @@ from app.db.write_paths import (
     lock_user,
     propose_changeset,
     reject_changeset,
+    solve_horizon,
     stage_changeset,
 )
 from app.errors import AppError
+from app.gcal.busy import BusyProvider
+from app.scheduler import Interval
 
 router = APIRouter(tags=["changesets"], dependencies=[Depends(require_timezone)])
 
 
 @router.post("/changesets/{changeset_id}/confirm", operation_id="confirmChangeset")
 async def confirm(
-    user_id: UserId, maker: Maker, now: Now, changeset_id: uuid.UUID
+    user_id: UserId, maker: Maker, now: Now, busy: Busy, changeset_id: uuid.UUID
 ) -> dict[str, Any]:
+    # T4.2: fresh busy time, read before the confirm transaction and its advisory lock, with
+    # no pooled connection held across the Google call (review round 1).
+    fresh = await _fresh_busy(maker, user_id, changeset_id, now=now, provider=busy)
     try:
         async with transaction(maker) as tx:
-            # TODO(T4.2): pass fresh freeBusy as `busy`; None reuses the proposal's.
-            await confirm_changeset(tx, user_id, changeset_id, now=now)
+            busy_now = None if fresh is None else fresh.intervals
+            await confirm_changeset(tx, user_id, changeset_id, now=now, busy=busy_now)
             return await changeset_view(tx, user_id, changeset_id)
     except ChangesetStale as stale:  # the confirm transaction has rolled back
         async with transaction(maker) as tx:
-            outcome = await _restage(tx, user_id, changeset_id, stale, now=now)
+            outcome = await _restage(
+                tx,
+                user_id,
+                changeset_id,
+                stale,
+                now=now,
+                busy=() if fresh is None else fresh.intervals,
+            )
             if isinstance(outcome, dict):  # confirmed by a concurrent request: idempotent 200
                 return outcome
         raise AppError(
@@ -57,6 +77,35 @@ async def confirm(
         ) from None
 
 
+async def _fresh_busy(
+    maker: async_sessionmaker[AsyncSession],
+    user_id: uuid.UUID,
+    changeset_id: uuid.UUID,
+    *,
+    now: datetime,
+    provider: BusyProvider,
+) -> BusyWindow | None:
+    """Busy time for confirming a pending, planned changeset; None when confirm will not
+    solve (unknown id, not pending, onboarding changeset without a plan). The window covers
+    the proposal's week and the current preference week (they differ after a rollover, when
+    confirm re-solves over the current week). Fails closed (503/409) before anything runs."""
+    async with transaction(maker) as tx:
+        row = (
+            await tx.execute(
+                select(Changeset.status, Changeset.staged, WeekPlan.horizon)
+                .join(WeekPlan, WeekPlan.id == Changeset.plan_id)
+                .where(Changeset.id == changeset_id, Changeset.user_id == user_id)
+            )
+        ).one_or_none()
+        if row is None or row.status != "pending":
+            return None
+        window = to_interval(row.horizon)
+        current = await solve_horizon(tx, user_id, parse_staged(row.staged), now)
+    if current is not None and current != window:
+        window = Interval(start=min(window.start, current.start), end=max(window.end, current.end))
+    return await fetch_window(provider, user_id, window)
+
+
 async def _restage(
     tx: AsyncSession,
     user_id: uuid.UUID,
@@ -64,12 +113,14 @@ async def _restage(
     stale: ChangesetStale,
     *,
     now: datetime,
+    busy: tuple[Interval, ...],
 ) -> uuid.UUID | dict[str, Any]:
     """Stage the fresh re-solve, but only if the stale changeset is still the user's current
     pending one. Between the rollback and this transaction another request may have rejected
     it, or staged a newer proposal (which expired it): re-staging then would revive rejected
     changes or expire the newer proposal (deleting its staged projects). Eligibility is
-    re-checked under the per-user lock, which every write path also takes."""
+    re-checked under the per-user lock, which every write path also takes. `busy` is the
+    fresh busy time read before confirm (T4.2)."""
     await lock_user(tx, user_id)
     rows = (
         await tx.execute(
@@ -98,7 +149,7 @@ async def _restage(
     except InvalidMutation:
         # The stale proposal's week is no longer the current one (or the live plan moved):
         # solve the same staged list afresh over the current week instead.
-        return await propose_changeset(tx, user_id, staged, now=now, source=source)
+        return await propose_changeset(tx, user_id, staged, now=now, busy=busy, source=source)
 
 
 @router.post("/changesets/{changeset_id}/reject", operation_id="rejectChangeset")

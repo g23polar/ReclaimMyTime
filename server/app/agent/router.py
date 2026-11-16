@@ -24,11 +24,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.context import load_turn
-from app.agent.loop import AgentTurn, DryRun, Event, Solve, StaleBase
+from app.agent.loop import AgentTurn, DryRun, Event, Solve, StaleBase, TurnAborted
 from app.agent.narration import narrate, project_names
 from app.agent.prompt import render_snapshot
 from app.agent.settings import AgentSettings
 from app.agent.staging import ToolError
+from app.api.busy import Busy, BusyWindow, fetch_window
 from app.api.deps import (
     DeviceTz,
     Maker,
@@ -42,8 +43,17 @@ from app.api.deps import (
 from app.api.views import changeset_view
 from app.db.models import Changeset
 from app.db.models.staged import InvalidMutation, StagedMutation, dump_staged
-from app.db.write_paths import WritePathError, lock_user, propose_changeset, reject_changeset
+from app.db.write_paths import (
+    WritePathError,
+    lock_user,
+    propose_changeset,
+    reject_changeset,
+    solve_horizon,
+)
 from app.errors import AppError
+from app.gcal.busy import BusyProvider
+from app.gcal.errors import GcalReconnectRequiredError, GcalUnavailableError
+from app.scheduler import Interval
 
 router = APIRouter(tags=["agent"])
 
@@ -67,7 +77,13 @@ _REQUEST: TypeAdapter[_Request] = TypeAdapter(_Request)
 
 @router.post("/agent/message")
 async def post_agent_message(
-    request: Request, user_id: UserId, maker: Maker, now: Now, tz: DeviceTz, body: RawBody
+    request: Request,
+    user_id: UserId,
+    maker: Maker,
+    now: Now,
+    tz: DeviceTz,
+    busy: Busy,
+    body: RawBody,
 ) -> StreamingResponse:
     req = parse_body(_REQUEST, body)
     last = len(req.messages) - 1
@@ -92,6 +108,7 @@ async def post_agent_message(
             device_tz=tz.key,
             committed_names=ctx.committed_names,
             pending_id=ctx.pending_id,
+            busy=busy,
         ),
     )
     try:
@@ -177,6 +194,7 @@ class DbProposer:
         device_tz: str,
         committed_names: dict[str, str],
         pending_id: uuid.UUID | None,
+        busy: BusyProvider,
     ) -> None:
         self._maker = maker
         self._user_id = user_id
@@ -184,14 +202,22 @@ class DbProposer:
         self._device_tz = device_tz
         self._names = committed_names
         self._pending_id = pending_id
+        self._busy = busy
+        # T4.2: one freeBusy read per horizon per turn, so the dry run and the commit solve
+        # against identical busy time (their fingerprints must match).
+        self._windows: dict[Interval, BusyWindow] = {}
 
     async def dry_run(self, staged: Sequence[StagedMutation]) -> DryRun:
         if not staged:
             raise ToolError("nothing is staged, so there is nothing to propose")
+        try:
+            window = await self._window(staged)  # no session open across the Google call
+        except (InvalidMutation, WritePathError) as exc:
+            raise ToolError(f"cannot propose: {exc}") from None
         async with self._maker() as session:
             tx = await session.begin()
             try:
-                view, narration = await self._propose(session, staged)
+                view, narration = await self._propose(session, staged, window)
             except (InvalidMutation, WritePathError) as exc:
                 raise ToolError(f"cannot propose: {exc}") from None
             finally:
@@ -201,6 +227,7 @@ class DbProposer:
         return DryRun(text, _fingerprint(staged, view))
 
     async def commit(self, staged: Sequence[StagedMutation]) -> Solve:
+        window = await self._window(staged)  # before the lock and the write session (T4.2)
         async with transaction(self._maker) as tx:
             await lock_user(tx, self._user_id)
             if await _pending_id(tx, self._user_id) != self._pending_id:
@@ -210,7 +237,7 @@ class DbProposer:
                 if self._pending_id is not None:
                     await reject_changeset(tx, self._user_id, self._pending_id, now=self._now)
                 return Solve(None, None, None)
-            view, narration = await self._propose(tx, staged)
+            view, narration = await self._propose(tx, staged, window)
         return Solve(view, narration, _fingerprint(staged, view))
 
     async def reshow(self, staged: Sequence[StagedMutation], expected: str | None) -> Solve:
@@ -226,11 +253,33 @@ class DbProposer:
                 return Solve(view, self._narrate(staged, view), fingerprint)
         return await self.commit(staged)
 
+    async def _window(self, staged: Sequence[StagedMutation]) -> BusyWindow:
+        """Busy time for solving `staged`, read before any lock and with no session open
+        across the Google call (T4.2 + review): the horizon comes from a short transaction
+        closed before the fetch. A Google failure ends the turn with an in-stream error
+        carrying the REST code; nothing is committed."""
+        if not staged:
+            return BusyWindow()
+        async with transaction(self._maker) as tx:
+            horizon = await solve_horizon(tx, self._user_id, staged, self._now)
+        if horizon is None:
+            return BusyWindow()
+        if horizon not in self._windows:
+            try:
+                self._windows[horizon] = await fetch_window(self._busy, self._user_id, horizon)
+            except (GcalUnavailableError, GcalReconnectRequiredError) as exc:
+                raise TurnAborted(exc.code, exc.message) from None
+        return self._windows[horizon]
+
     async def _propose(
-        self, tx: AsyncSession, staged: Sequence[StagedMutation]
+        self, tx: AsyncSession, staged: Sequence[StagedMutation], window: BusyWindow
     ) -> tuple[dict[str, Any], str]:
-        # TODO(T4.2): pass freeBusy intervals; agent solves run with busy=[] until then.
-        changeset_id = await propose_changeset(tx, self._user_id, staged, now=self._now)
+        await lock_user(tx, self._user_id)
+        if not window.covers(await solve_horizon(tx, self._user_id, staged, self._now)):
+            raise StaleBase()  # preferences changed elsewhere since the busy read
+        changeset_id = await propose_changeset(
+            tx, self._user_id, staged, now=self._now, busy=window.intervals
+        )
         view = await changeset_view(tx, self._user_id, changeset_id)
         return view, self._narrate(staged, view)
 

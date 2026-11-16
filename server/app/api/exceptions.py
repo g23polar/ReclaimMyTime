@@ -12,8 +12,10 @@ from pydantic import TypeAdapter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.busy import Busy
 from app.api.deps import (
     DeviceTz,
+    Maker,
     Now,
     RawBody,
     Tx,
@@ -24,10 +26,10 @@ from app.api.deps import (
 )
 from app.api.mappers import exception_out, ts
 from app.api.schemas import ExceptionDraft
-from app.api.staging import accepted, manual, stage
+from app.api.staging import manual, stage_request
 from app.auth.dependencies import require_timezone
 from app.db.models import AvailabilityException
-from app.db.models.staged import hhmm_to_minute
+from app.db.models.staged import StagedMutation, hhmm_to_minute
 from app.db.solver_io import local_to_utc
 from app.db.write_paths import sweep_past_blocks
 
@@ -63,7 +65,7 @@ async def list_exceptions(
 
 @router.post("/exceptions", operation_id="createException", status_code=202)
 async def create_exception(
-    user_id: UserId, tx: Tx, now: Now, tz: DeviceTz, body: RawBody
+    user_id: UserId, maker: Maker, now: Now, tz: DeviceTz, busy: Busy, body: RawBody
 ) -> JSONResponse:
     draft = parse_body(_DRAFT, body)
     if not draft.blocks_all and not draft.blocks_tags:
@@ -89,7 +91,12 @@ async def create_exception(
         "blocks_tags": list(draft.blocks_tags),
         "reason": draft.reason,
     }
-    return accepted(await stage(tx, user_id, [manual("exception_added", payload)], now=now))
+    mutation = manual("exception_added", payload)
+
+    async def build(tx: AsyncSession) -> list[StagedMutation]:
+        return [mutation]
+
+    return await stage_request(maker, user_id, build, now=now, busy=busy)
 
 
 @router.get("/exceptions/{exception_id}", operation_id="getException")
@@ -105,9 +112,13 @@ async def get_exception(
 
 @router.delete("/exceptions/{exception_id}", operation_id="deleteException", status_code=202)
 async def delete_exception(
-    user_id: UserId, tx: Tx, now: Now, exception_id: uuid.UUID
+    user_id: UserId, maker: Maker, now: Now, busy: Busy, exception_id: uuid.UUID
 ) -> JSONResponse:
-    if await _get(tx, user_id, exception_id) is None:
-        raise not_found("exception", exception_id)
     mutation = manual("exception_removed", {"exception_id": str(exception_id)})
-    return accepted(await stage(tx, user_id, [mutation], now=now))
+
+    async def build(tx: AsyncSession) -> list[StagedMutation]:
+        if await _get(tx, user_id, exception_id) is None:
+            raise not_found("exception", exception_id)
+        return [mutation]
+
+    return await stage_request(maker, user_id, build, now=now, busy=busy)

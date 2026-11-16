@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tests.api.conftest import NOW, SettableClock, future_block, started_block
@@ -27,7 +28,10 @@ from tests.db.conftest import (
     propose,
     reject,
     requires_db,
+    rows,
 )
+from tests.gcal.calendar_fakes import FakeCalendar, install, new_cipher, seed_connection
+from tests.gcal.fakes import FakeGoogle, Reply
 
 DEAD = "00000000-0000-4000-8000-00000000dead"
 LAPTOP_EXC = uuid.UUID("e7c2a9d4-3f1b-4e6a-8d20-5b9c1a7e3f01")
@@ -40,6 +44,7 @@ class Ctx:
     uid: uuid.UUID
     clock: SettableClock
     fixture: dict[str, Any]
+    app: FastAPI | None = None
     checked: list[int] = field(default_factory=list)
 
     @property
@@ -203,6 +208,38 @@ async def _(ctx: Ctx) -> None:
     assert assert_staged(body, "project_archived") == {"project_id": str(WORKOUT)}
     future = [b for b in body["plan"]["blocks"] if b["span"]["start"] > "2026-11-17T18:30:00Z"]
     assert future and all(b["project_id"] != str(WORKOUT) for b in future)
+
+
+async def connected_to_google(ctx: Ctx, google: FakeGoogle, cal: FakeCalendar) -> None:
+    """T4.2: the user has a Google connection; Google answers per the fakes."""
+    assert ctx.app is not None
+    cipher = new_cipher()
+    install(ctx.app, google, cal, cipher, ctx.clock)
+    await seed_connection(ctx.maker, ctx.uid, cipher, now=NOW)
+
+
+async def nothing_staged(ctx: Ctx) -> None:
+    pending = await rows(ctx.maker, "SELECT count(*) FROM changesets WHERE status = 'pending'")
+    staged_projects = await rows(ctx.maker, "SELECT count(*) FROM projects WHERE status = 'staged'")
+    assert (pending, staged_projects) == ([(0,)], [(0,)])
+
+
+@case("post_projects__gcal_unavailable.json")
+async def _(ctx: Ctx) -> None:
+    await onboarded(ctx)
+    cal = FakeCalendar(freebusy=Reply(raise_exc=httpx.ReadTimeout("slow")))
+    await connected_to_google(ctx, FakeGoogle(now=NOW), cal)
+    await ctx.call("POST", "/projects", ctx.body)
+    await nothing_staged(ctx)
+
+
+@case("post_projects__gcal_reconnect_required.json")
+async def _(ctx: Ctx) -> None:
+    await onboarded(ctx)
+    google = FakeGoogle(now=NOW, refresh=Reply(status=400, json={"error": "invalid_grant"}))
+    await connected_to_google(ctx, google, FakeCalendar())
+    await ctx.call("POST", "/projects", ctx.body)
+    await nothing_staged(ctx)
 
 
 # ---------------------------------------------------------------- preferences
@@ -460,7 +497,8 @@ async def test_fixture(
     maker: async_sessionmaker[AsyncSession],
     user_id: uuid.UUID,
     clock: SettableClock,
+    app: FastAPI,
 ) -> None:
-    ctx = Ctx(client, maker, user_id, clock, load_fixture(name))
+    ctx = Ctx(client, maker, user_id, clock, load_fixture(name), app)
     await CASES[name](ctx)
     assert ctx.checked, "the case never checked a response against the fixture"

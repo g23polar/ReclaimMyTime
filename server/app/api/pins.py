@@ -9,12 +9,15 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import Now, Tx, UserId, not_found
+from app.api.busy import Busy
+from app.api.deps import Maker, Now, Tx, UserId, not_found
 from app.api.mappers import pin_out
-from app.api.staging import accepted, manual, stage
+from app.api.staging import manual, stage_request
 from app.auth.dependencies import require_timezone
 from app.db.models import BlockPin
+from app.db.models.staged import StagedMutation
 from app.db.write_paths import sweep_past_blocks
 
 router = APIRouter(tags=["pins"], dependencies=[Depends(require_timezone)])
@@ -33,13 +36,19 @@ async def list_pins(
 
 
 @router.delete("/pins/{pin_id}", operation_id="deletePin", status_code=202)
-async def delete_pin(user_id: UserId, tx: Tx, now: Now, pin_id: uuid.UUID) -> JSONResponse:
-    found = (
-        await tx.execute(
-            select(BlockPin.id).where(BlockPin.id == pin_id, BlockPin.user_id == user_id)
-        )
-    ).scalar_one_or_none()
-    if found is None:
-        raise not_found("pin", pin_id)
+async def delete_pin(
+    user_id: UserId, maker: Maker, now: Now, busy: Busy, pin_id: uuid.UUID
+) -> JSONResponse:
     mutation = manual("pin_removed", {"pin_id": str(pin_id)})
-    return accepted(await stage(tx, user_id, [mutation], now=now))
+
+    async def build(tx: AsyncSession) -> list[StagedMutation]:
+        found = (
+            await tx.execute(
+                select(BlockPin.id).where(BlockPin.id == pin_id, BlockPin.user_id == user_id)
+            )
+        ).scalar_one_or_none()
+        if found is None:
+            raise not_found("pin", pin_id)
+        return [mutation]
+
+    return await stage_request(maker, user_id, build, now=now, busy=busy)

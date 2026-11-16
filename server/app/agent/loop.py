@@ -60,6 +60,16 @@ class TranscriptMessage(Protocol):
     content: str
 
 
+class TurnAborted(Exception):
+    """Ends the turn with an in-stream `error` event carrying `code` (T4.2: busy time could
+    not be read — `gcal_unavailable` / `gcal_reconnect_required`). Nothing was committed."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(code)
+        self.code = code
+        self.message = message
+
+
 class StaleBase(Exception):
     """The pending changeset this turn built on was confirmed, rejected or replaced while
     the model was generating; committing would overwrite or resurrect it."""
@@ -154,6 +164,8 @@ class AgentTurn:
             await queue.put(_error("agent_unavailable", UNAVAILABLE))
         except StaleBase:
             await queue.put(_error("changeset_stale", STALE))
+        except TurnAborted as exc:
+            await queue.put(_error(exc.code, exc.message))
         except Exception as exc:
             # Exception text (driver errors included) can quote user data: log types and
             # frames only. The engine also hides SQL parameters (session.py).

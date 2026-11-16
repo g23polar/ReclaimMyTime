@@ -62,6 +62,7 @@ from app.db.solver_io import (
     SourceBlock,
     block_rows,
     build_solver_input,
+    clip_intervals,
     load_constraint_state,
     load_previous,
     overlay,
@@ -91,8 +92,10 @@ __all__ = [
     "lock_user",
     "mark_block_state",
     "persist_plan",
+    "preview_carry_forward",
     "propose_changeset",
     "reject_changeset",
+    "solve_horizon",
     "stage_changeset",
     "sweep_past_blocks",
     "user_lock_statement",
@@ -848,6 +851,22 @@ async def stage_changeset(
     return changeset_id
 
 
+def _carried(
+    pending_staged: Sequence[StagedMutation] | None, new: list[StagedMutation]
+) -> list[StagedMutation]:
+    if not pending_staged:
+        return new
+    old = list(pending_staged)
+    creating = set(created_project_ids(old))
+    targets: set[uuid.UUID] = set()
+    for m in new:
+        if isinstance(m, ProjectUpdated | ProjectArchived):
+            targets.add(m.payload.project_id)
+        elif isinstance(m, PinAdded) and m.payload.project_id is not None:
+            targets.add(m.payload.project_id)
+    return [*old, *new] if targets & creating else new
+
+
 async def carry_forward(
     tx: AsyncSession,
     user_id: uuid.UUID,
@@ -861,17 +880,36 @@ async def carry_forward(
     await lock_user(tx, user_id)
     new = parse_staged(new_mutations)
     pending = await _pending(tx, user_id)
-    if not pending:
-        return new
-    old = parse_staged(pending[-1].staged)
-    creating = set(created_project_ids(old))
-    targets: set[uuid.UUID] = set()
-    for m in new:
-        if isinstance(m, ProjectUpdated | ProjectArchived):
-            targets.add(m.payload.project_id)
-        elif isinstance(m, PinAdded) and m.payload.project_id is not None:
-            targets.add(m.payload.project_id)
-    return [*old, *new] if targets & creating else new
+    return _carried(parse_staged(pending[-1].staged) if pending else None, new)
+
+
+async def preview_carry_forward(
+    tx: AsyncSession,
+    user_id: uuid.UUID,
+    new_mutations: Sequence[StagedMutation | Mapping[str, Any]],
+) -> list[StagedMutation]:
+    """`carry_forward` WITHOUT the lock or row locks: a best-effort preview used to decide the
+    busy-time window before locking (T4.2: no Google call under the per-user lock). Callers
+    re-derive the list under the lock and compare horizons (`solve_horizon`)."""
+    new = parse_staged(new_mutations)
+    latest = (
+        await tx.execute(
+            select(Changeset.staged)
+            .where(Changeset.user_id == user_id, Changeset.status == "pending")
+            .order_by(Changeset.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return _carried(parse_staged(latest) if latest is not None else None, new)
+
+
+async def solve_horizon(
+    tx: AsyncSession, user_id: uuid.UUID, staged: Sequence[StagedMutation], now: datetime
+) -> Interval | None:
+    """The horizon `propose_changeset` would solve `staged` over at `now` (the overlaid
+    preference week), or None when no preferences exist yet (no solve, so no busy time)."""
+    week = await _preference_week(tx, user_id, staged)
+    return None if week is None else expected_horizon(now, *week)
 
 
 async def propose_changeset(
@@ -952,9 +990,16 @@ async def _stale_check(
     `previous`, for maximal stability). Stale if the frozen set (lineage, project, span)
     changed — promoting would drop or move a started block — or if the new blocks differ in
     (project, span). Lineage ids and infeasibility text are not compared: the user reviewed
-    the schedule, and the stored proposal (with its lineages) is what gets promoted."""
+    the schedule, and the stored proposal (with its lineages) is what gets promoted.
+
+    `busy` (T4.2) is FRESH freeBusy, or None (no fresh read: the proposal's busy is reused).
+    With fresh busy: a future proposed block that overlaps it is stale outright (decision
+    T4.2 #4); otherwise the comparison re-solves against the proposal's own busy (busy that
+    merely changed elsewhere does not invalidate what the user reviewed). Every replacement
+    proposal carried by ChangesetStale is solved against the fresh busy."""
     stored_input = SolverInput.model_validate(plan.solver_input)
     frozen_lineages = {f.lineage_id for f in stored_input.frozen}
+    horizon = to_interval(plan.horizon)
     rows = (
         await tx.execute(
             select(Block).where(Block.plan_id == plan.id).execution_options(populate_existing=True)
@@ -967,26 +1012,35 @@ async def _stale_check(
         for b in rows
         if str(b.lineage_id) not in frozen_lineages
     ]
-    fresh_input = await build_solver_input(
-        tx,
-        user_id,
-        to_interval(plan.horizon),
-        now,
-        plan.timezone,
-        staged=staged,
-        busy=stored_input.busy if busy is None else busy,
-    )
-    fresh_output = pack(fresh_input, stored_new)
+
+    async def solve(with_busy: Sequence[Interval]) -> tuple[SolverInput, SolverOutput]:
+        inp = await build_solver_input(
+            tx, user_id, horizon, now, plan.timezone, staged=staged, busy=with_busy
+        )
+        return inp, pack(inp, stored_new)
+
+    fresh_busy = None if busy is None else clip_intervals(busy, horizon)
+    if fresh_busy is not None and any(
+        b.span.start >= now and any(iv.overlaps(b.span) for iv in fresh_busy) for b in stored_new
+    ):
+        raise ChangesetStale(*await solve(fresh_busy), "calendar busy time overlaps the proposal")
+
+    fresh_input, fresh_output = await solve(stored_input.busy)
 
     def frozen_key(inp: SolverInput) -> list[tuple[str, str, Any, Any]]:
         return sorted((f.lineage_id, f.project_id, f.span.start, f.span.end) for f in inp.frozen)
 
+    reason: str | None = None
     if frozen_key(fresh_input) != frozen_key(stored_input):
-        raise ChangesetStale(fresh_input, fresh_output, "started blocks changed since proposal")
-    if _schedule_key([(b.project_id, b.span) for b in fresh_output.blocks]) != _schedule_key(
+        reason = "started blocks changed since proposal"
+    elif _schedule_key([(b.project_id, b.span) for b in fresh_output.blocks]) != _schedule_key(
         [(b.project_id, b.span) for b in stored_new]
     ):
-        raise ChangesetStale(fresh_input, fresh_output, "re-solve differs from the proposal")
+        reason = "re-solve differs from the proposal"
+    if reason is not None:
+        if fresh_busy is not None and fresh_busy != stored_input.busy:
+            fresh_input, fresh_output = await solve(fresh_busy)
+        raise ChangesetStale(fresh_input, fresh_output, reason)
     return stored_input
 
 
@@ -1085,7 +1139,9 @@ async def confirm_changeset(
     6. inherit lineage outbox fields / refresh frozen copies; changed blocks → `pending`;
     7. changeset → confirmed + `plan_confirmed` trace row.
 
-    `busy`: fresh freeBusy for the stale check (T4.2); None reuses the proposal's busy.
+    `busy`: FRESH freeBusy (T4.2), fetched by the caller before this transaction; it may span
+    more than one week (it is clipped per solve). It drives the week-rollover re-solve and the
+    busy-overlap rule in `_stale_check`. None (no fresh read) reuses the proposal's busy.
     """
     await lock_user(tx, user_id)
     cs = await _get_changeset(tx, user_id, changeset_id)

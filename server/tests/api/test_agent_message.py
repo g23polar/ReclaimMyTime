@@ -17,6 +17,7 @@ from app.agent.loop import StaleBase
 from app.agent.router import DbProposer
 from app.agent.router import router as agent_router
 from app.agent.settings import AgentSettings
+from app.gcal.busy import GcalBusy
 from tests.agent.fake_anthropic import Call, Failure, FakeAnthropic, Hang, Text, Tool
 from tests.api.conftest import NOW, new_user
 from tests.api.contract import _FORMATS, _REGISTRY, BASE, assert_conforms, load_fixture
@@ -292,8 +293,12 @@ async def test_open_timeout_is_503(agent_app, client, fake):
 def _proposer(maker, uid, pending_id):
     return DbProposer(
         maker, uid, now=NOW, device_tz="America/Los_Angeles", committed_names={},
-        pending_id=pending_id,
+        pending_id=pending_id, busy=GcalBusy(maker, _no_google),
     )  # fmt: skip
+
+
+def _no_google() -> Any:
+    raise AssertionError("no Google connection: the runtime must not be built")
 
 
 EXTRA = exception_added(at(3, "09:00"), at(3, "10:00"), uuid.uuid4())

@@ -15,12 +15,22 @@ from pydantic import TypeAdapter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import Now, RawBody, Tx, UserId, not_found, parse_body, validation_failed
+from app.api.busy import Busy
+from app.api.deps import (
+    Maker,
+    Now,
+    RawBody,
+    Tx,
+    UserId,
+    not_found,
+    parse_body,
+    validation_failed,
+)
 from app.api.mappers import project_out
-from app.api.staging import accepted, manual, stage
+from app.api.staging import manual, stage_request
 from app.auth.dependencies import require_timezone
 from app.db.models import Project
-from app.db.models.staged import ProjectDraft, ProjectPatch
+from app.db.models.staged import ProjectDraft, ProjectPatch, StagedMutation
 from app.db.write_paths import apply_mutation, sweep_past_blocks
 from app.errors import AppError
 
@@ -69,10 +79,17 @@ async def list_projects(
 
 
 @router.post("/projects", operation_id="createProject", status_code=202)
-async def create_project(user_id: UserId, tx: Tx, now: Now, body: RawBody) -> JSONResponse:
+async def create_project(
+    user_id: UserId, maker: Maker, now: Now, busy: Busy, body: RawBody
+) -> JSONResponse:
     draft = parse_body(_DRAFT, body, union_tags=frozenset({"deadline", "perennial"}))
     payload = {"project_id": str(uuid.uuid4()), "project": draft.model_dump(mode="json")}
-    return accepted(await stage(tx, user_id, [manual("project_created", payload)], now=now))
+    mutation = manual("project_created", payload)
+
+    async def build(tx: AsyncSession) -> list[StagedMutation]:
+        return [mutation]
+
+    return await stage_request(maker, user_id, build, now=now, busy=busy)
 
 
 @router.get("/projects/{project_id}", operation_id="getProject")
@@ -86,36 +103,46 @@ async def get_project(user_id: UserId, tx: Tx, now: Now, project_id: uuid.UUID) 
 
 @router.patch("/projects/{project_id}", operation_id="updateProject", status_code=202)
 async def update_project(
-    user_id: UserId, tx: Tx, now: Now, project_id: uuid.UUID, body: RawBody
+    user_id: UserId, maker: Maker, now: Now, busy: Busy, project_id: uuid.UUID, body: RawBody
 ) -> JSONResponse:
     patch = parse_body(_PATCH, body)
-    row = await _writable(tx, user_id, project_id)
-    wrong = [f for f in _OTHER_KIND_FIELDS[row.kind] if f in patch.model_fields_set]
-    if wrong:
-        other = "perennial" if row.kind == "deadline" else "deadline"
-        raise validation_failed(
-            [{"path": f, "message": f"only valid when kind is '{other}'"} for f in wrong],
-            f"Field not allowed for a {row.kind} project.",
-        )
     payload = {
         "project_id": str(project_id),
         "changes": patch.model_dump(mode="json", exclude_unset=True),
     }
     mutation = manual("project_updated", payload)
-    if patch.model_fields_set == {"name"} and row.status != "staged":
-        # D2 softer option: name is not a scheduling input → applied directly, 200 + Project
-        # (updateProject 200, contracts 9679c03).
-        await apply_mutation(tx, user_id, mutation, now=now)
-        updated = await _get(tx, user_id, project_id)
-        assert updated is not None
-        return JSONResponse(status_code=200, content=project_out(updated))
-    return accepted(await stage(tx, user_id, [mutation], now=now))
+
+    async def build(tx: AsyncSession) -> list[StagedMutation] | JSONResponse:
+        row = await _writable(tx, user_id, project_id)
+        wrong = [f for f in _OTHER_KIND_FIELDS[row.kind] if f in patch.model_fields_set]
+        if wrong:
+            other = "perennial" if row.kind == "deadline" else "deadline"
+            raise validation_failed(
+                [{"path": f, "message": f"only valid when kind is '{other}'"} for f in wrong],
+                f"Field not allowed for a {row.kind} project.",
+            )
+        if patch.model_fields_set == {"name"} and row.status != "staged":
+            # D2 softer option: name is not a scheduling input → applied directly, 200 +
+            # Project (updateProject 200, contracts 9679c03). No solve, so no busy read.
+            await apply_mutation(tx, user_id, mutation, now=now)
+            updated = await _get(tx, user_id, project_id)
+            assert updated is not None
+            return JSONResponse(status_code=200, content=project_out(updated))
+        return [mutation]
+
+    return await stage_request(maker, user_id, build, now=now, busy=busy)
 
 
 @router.delete("/projects/{project_id}", operation_id="archiveProject", status_code=202)
-async def archive_project(user_id: UserId, tx: Tx, now: Now, project_id: uuid.UUID) -> JSONResponse:
+async def archive_project(
+    user_id: UserId, maker: Maker, now: Now, busy: Busy, project_id: uuid.UUID
+) -> JSONResponse:
     # TODO(contract): archiving a project whose creation is still pending is carried forward
     # (creation + archive confirm together) rather than dropping the creation.
-    await _writable(tx, user_id, project_id)
     mutation = manual("project_archived", {"project_id": str(project_id)})
-    return accepted(await stage(tx, user_id, [mutation], now=now))
+
+    async def build(tx: AsyncSession) -> list[StagedMutation]:
+        await _writable(tx, user_id, project_id)
+        return [mutation]
+
+    return await stage_request(maker, user_id, build, now=now, busy=busy)

@@ -8,13 +8,15 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import Now, RawBody, Tx, UserId, parse_body
+from app.api.busy import Busy
+from app.api.deps import Maker, Now, RawBody, Tx, UserId, parse_body
 from app.api.mappers import preferences_out
-from app.api.staging import accepted, manual, stage
+from app.api.staging import manual, stage_request
 from app.auth.dependencies import require_timezone
 from app.db.models import UserPreferences
-from app.db.models.staged import Preferences
+from app.db.models.staged import Preferences, StagedMutation
 from app.db.write_paths import sweep_past_blocks
 from app.errors import AppError
 
@@ -35,7 +37,13 @@ async def get_preferences(user_id: UserId, tx: Tx, now: Now) -> dict[str, Any]:
 
 
 @router.put("/preferences", operation_id="putPreferences", status_code=202)
-async def put_preferences(user_id: UserId, tx: Tx, now: Now, body: RawBody) -> JSONResponse:
+async def put_preferences(
+    user_id: UserId, maker: Maker, now: Now, busy: Busy, body: RawBody
+) -> JSONResponse:
     prefs = parse_body(_PREFS, body)
     mutation = manual("preferences_updated", {"preferences": prefs.model_dump(mode="json")})
-    return accepted(await stage(tx, user_id, [mutation], now=now))
+
+    async def build(tx: AsyncSession) -> list[StagedMutation]:
+        return [mutation]
+
+    return await stage_request(maker, user_id, build, now=now, busy=busy)

@@ -598,8 +598,9 @@ async def build_solver_input(
     `staged` mutations (the changeset being solved). `tz` defaults to the (overlaid)
     preferences timezone (contracts D10: windows and target dates use preferences.timezone).
 
-    `busy`: TODO(T4.2) — the caller passes freeBusy intervals (app calendar excluded); this
-    module never talks to Google. Until T4.2 lands every solve runs with busy=[].
+    `busy`: freeBusy intervals fetched by the caller BEFORE taking the per-user lock
+    (app.gcal.busy; primary calendar only, so the app calendar is excluded). This module never
+    talks to Google. Clipped to `horizon` here, so a caller may pass a wider window.
     """
     state = overlay(await load_constraint_state(tx, user_id), staged)
     if state.preferences is None:
@@ -614,8 +615,18 @@ async def build_solver_input(
         frozen=await load_frozen(tx, user_id, horizon, now),
         completed_minutes=await completed_minutes(tx, user_id),
         lineage_by_block=await lineages_for_blocks(tx, user_id, provenance),
-        busy=busy,
+        busy=clip_intervals(busy, horizon),
     )
+
+
+def clip_intervals(intervals: Iterable[Interval], horizon: Interval) -> tuple[Interval, ...]:
+    """`intervals` ∩ `horizon`, empties dropped, sorted (pure; no merging)."""
+    out = []
+    for iv in intervals:
+        start, end = max(iv.start, horizon.start), min(iv.end, horizon.end)
+        if start < end:
+            out.append(Interval(start=start, end=end))
+    return tuple(sorted(out, key=lambda i: (i.start, i.end)))
 
 
 # ---------------------------------------------------------------- SolverOutput → block rows

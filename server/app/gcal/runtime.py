@@ -16,6 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.auth.clock import Clock, SystemClock
 from app.auth.crypto import TokenCipher
 from app.auth.settings import parse_fernet_keys
+from app.gcal.app_calendar import AppCalendarService
+from app.gcal.busy import GcalBusy
+from app.gcal.calendar import GoogleCalendarClient, HttpGoogleCalendarClient
 from app.gcal.client import GoogleOAuthClient, HttpGoogleOAuthClient
 from app.gcal.service import GcalService
 from app.gcal.settings import GcalConfigError, GcalSettings
@@ -29,6 +32,7 @@ class GcalRuntime:
     cipher: TokenCipher
     state: StateCodec
     clock: Clock
+    calendar: GoogleCalendarClient  # Calendar REST (T4.2): freeBusy + app calendar
 
     def service(self, maker: async_sessionmaker[AsyncSession]) -> GcalService:
         return GcalService(
@@ -40,12 +44,19 @@ class GcalRuntime:
             clock=self.clock,
         )
 
+    def busy(self, maker: async_sessionmaker[AsyncSession]) -> GcalBusy:
+        return GcalBusy(maker, lambda: self)
+
+    def app_calendar(self, maker: async_sessionmaker[AsyncSession]) -> AppCalendarService:
+        return AppCalendarService(maker, service=self.service(maker), calendar=self.calendar)
+
 
 def build_gcal_runtime(
     settings: GcalSettings,
     *,
     cipher: TokenCipher,
     client: GoogleOAuthClient | None = None,
+    calendar: GoogleCalendarClient | None = None,
     clock: Clock | None = None,
 ) -> GcalRuntime:
     settings.require_oauth_settings()
@@ -55,6 +66,7 @@ def build_gcal_runtime(
         cipher=cipher,
         state=StateCodec(settings.state_key, settings.state_ttl),
         clock=clock or SystemClock(),
+        calendar=calendar or HttpGoogleCalendarClient(settings),
     )
 
 

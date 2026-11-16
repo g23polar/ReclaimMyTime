@@ -20,11 +20,13 @@ from app.db.write_paths import lock_user
 
 __all__ = [
     "ConnectionRecord",
+    "clear_app_calendar_id",
     "delete_connection",
     "get_connection",
     "lock_user",
     "mark_revoked",
     "same_account",
+    "set_app_calendar_id",
     "upsert_connection",
     "user_exists",
 ]
@@ -132,3 +134,33 @@ async def mark_revoked(
 
 async def delete_connection(s: AsyncSession, user_id: uuid.UUID) -> None:
     await s.execute(delete(GoogleConnection).where(GoogleConnection.user_id == user_id))
+
+
+async def set_app_calendar_id(s: AsyncSession, user_id: uuid.UUID, calendar_id: str) -> bool:
+    """Store the app calendar id only while none is stored and the row is active (T4.2).
+    Callers hold the per-user lock and have re-read the row; the predicate is belt and braces
+    against a second calendar ever being recorded."""
+    result = await s.execute(
+        update(GoogleConnection)
+        .where(
+            GoogleConnection.user_id == user_id,
+            GoogleConnection.app_calendar_id.is_(None),
+            GoogleConnection.status == "active",
+        )
+        .values(app_calendar_id=calendar_id)
+    )
+    return bool(result.rowcount)  # type: ignore[attr-defined]
+
+
+async def clear_app_calendar_id(s: AsyncSession, user_id: uuid.UUID, calendar_id: str) -> bool:
+    """Forget `calendar_id` (Google said 404) — only if it is still the stored one, so a
+    calendar recreated concurrently is never forgotten by a late report about the old one."""
+    result = await s.execute(
+        update(GoogleConnection)
+        .where(
+            GoogleConnection.user_id == user_id,
+            GoogleConnection.app_calendar_id == calendar_id,
+        )
+        .values(app_calendar_id=None)
+    )
+    return bool(result.rowcount)  # type: ignore[attr-defined]

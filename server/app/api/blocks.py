@@ -9,19 +9,32 @@ If the block currently realizes a pin, `pin_removed` for it is staged first (M1+
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 from sqlalchemy import and_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import Now, RawBody, Tx, UserId, not_found, parse_body, validation_failed
+from app.api.busy import Busy
+from app.api.deps import (
+    Maker,
+    Now,
+    RawBody,
+    UserId,
+    not_found,
+    parse_body,
+    transaction,
+    validation_failed,
+)
 from app.api.mappers import block_out, ts
 from app.api.schemas import BLOCK_ACTION_TAGS, BlockAction, BlockComplete, BlockEdit, BlockSkip
-from app.api.staging import accepted, manual, stage
+from app.api.staging import manual, stage_request
 from app.auth.dependencies import require_timezone
 from app.db.models import Block, BlockPin, WeekPlan
+from app.db.models.staged import StagedMutation
 from app.db.write_paths import lock_user, mark_block_state
 from app.errors import AppError
 
@@ -32,21 +45,37 @@ _ACTION: TypeAdapter[Any] = TypeAdapter(BlockAction)
 
 @router.patch("/blocks/{block_id}", operation_id="patchBlock")
 async def patch_block(
-    user_id: UserId, tx: Tx, now: Now, block_id: uuid.UUID, body: RawBody
+    user_id: UserId, maker: Maker, now: Now, busy: Busy, block_id: uuid.UUID, body: RawBody
 ) -> JSONResponse:
     action = parse_body(_ACTION, body, union_tags=BLOCK_ACTION_TAGS)
-    await lock_user(tx, user_id)
 
     if isinstance(action, BlockComplete | BlockSkip):
-        state = "completed" if isinstance(action, BlockComplete) else "skipped"
-        await mark_block_state(tx, user_id, block_id, state, now=now)
-        block = (
-            await tx.execute(
-                select(Block).where(Block.id == block_id).execution_options(populate_existing=True)
-            )
-        ).scalar_one()
-        return JSONResponse(status_code=200, content=block_out(block))
+        async with transaction(maker) as tx:
+            await lock_user(tx, user_id)
+            state = "completed" if isinstance(action, BlockComplete) else "skipped"
+            await mark_block_state(tx, user_id, block_id, state, now=now)
+            block = (
+                await tx.execute(
+                    select(Block)
+                    .where(Block.id == block_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one()
+            return JSONResponse(status_code=200, content=block_out(block))
 
+    async def build(tx: AsyncSession) -> list[StagedMutation]:
+        # Locked as before T4.2; the validation pass and the authoritative pass each run in
+        # their own transaction, with the busy read between them (stage_request).
+        await lock_user(tx, user_id)
+        return await _pin_mutations(tx, user_id, block_id, action, now)
+
+    return await stage_request(maker, user_id, build, now=now, busy=busy)
+
+
+async def _pin_mutations(
+    tx: AsyncSession, user_id: uuid.UUID, block_id: uuid.UUID, action: Any, now: datetime
+) -> list[StagedMutation]:
+    """edit → pin, delete → forbid (D6/D7), after the live/immutable/span checks."""
     row = (
         await tx.execute(
             select(Block, WeekPlan)
@@ -95,7 +124,7 @@ async def patch_block(
     ).scalars()
     mutations = [manual("pin_removed", {"pin_id": str(pin_id)}) for pin_id in realized]
     mutations.append(manual("pin_added", payload))
-    return accepted(await stage(tx, user_id, mutations, now=now))
+    return mutations
 
 
 def _check_edit_span(action: BlockEdit, plan: WeekPlan, now: Any) -> None:

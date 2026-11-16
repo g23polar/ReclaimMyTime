@@ -160,7 +160,10 @@ async def load_turn(
         pins={p.id: p for p in pins},
         completed_minutes=await completed_minutes(tx, user_id),
         live_blocks=live,
-        busy=(),  # TODO(T4.2): freeBusy intervals
+        # Deliberately empty (T4.2): busy time reaches the solver, not the model. Filling it
+        # would put a freeBusy call before every turn, chit-chat included, and let plain
+        # chat fail on a Google outage; extraction doesn't need it.
+        busy=(),
     )
     return TurnContext(
         staging=staging, snapshot=snapshot, committed_names=names, pending_id=pending_id
