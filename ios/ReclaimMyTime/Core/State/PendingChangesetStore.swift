@@ -3,8 +3,8 @@ import Observation
 import OSLog
 
 /// The one pending changeset the user can confirm (contracts/NOTES.md "Staging model": at most one
-/// per user; a newer one expires the older). Held in memory only: there is no route to recover it
-/// after relaunch (design gap G3 / O2).
+/// per user; a newer one expires the older). Held in memory; after a relaunch `POST /gcal/sync`
+/// returns the pending changeset and `AppModel` stages it here (O2, resolved by D25).
 ///
 /// Every staged write (agent turn, PATCH, PUT, …) funnels its 202 body through `stage(_:)`.
 /// Confirm/reject are the only writes this store makes; nothing is applied client-side.
@@ -43,12 +43,20 @@ final class PendingChangesetStore {
     /// Bumped whenever live state changed or may have changed (confirm, 409), so plan readers
     /// (T5.3 Week) know to refetch.
     private(set) var liveStateRevision = 0
+    /// Bumped whenever `stage` adopts or refreshes a changeset. A sync captures it at request start
+    /// so an empty answer only retires a proposal it actually saw (`retireIfUnchanged`).
+    private(set) var stagingSequence = 0
+
+    static let staleMessage = "Your week changed since this was proposed, so nothing was applied. Fetching an updated proposal…"
 
     /// Called after a successful confirm with the confirmed changeset.
     var onConfirmed: (@MainActor (Changeset) -> Void)?
     /// Called when a changeset is discarded (rejected, superseded, out of date); the second
     /// argument is its replacement, if any.
     var onDiscarded: (@MainActor (Changeset, Changeset?) -> Void)?
+    /// Confirm answered 409 `changeset_stale`: the server staged a fresh proposal
+    /// (`details.changeset_id`) that only `POST /gcal/sync` can fetch. Its 202 arrives via `stage`.
+    var onStale: (@MainActor (Changeset) -> Void)?
 
     private var outcomes: [UUID: Lifecycle] = [:]
     /// High-water mark of adopted `created_at`s; survives resolution so ordering holds after it.
@@ -73,7 +81,10 @@ final class PendingChangesetStore {
     func stage(_ changeset: Changeset) -> Bool {
         guard changeset.status == .pending else { return false }
         if let current = pending, current.id == changeset.id {
+            stagingSequence += 1
             pending = changeset
+            // A stale-confirm recovery that found this same changeset still pending is done.
+            if actionError == Self.staleMessage { actionError = nil }
             return true
         }
         if outcomes[changeset.id] != nil {
@@ -85,6 +96,7 @@ final class PendingChangesetStore {
             return false
         }
         newestCreatedAt = changeset.createdAt
+        stagingSequence += 1
         if let current = pending {
             outcomes[current.id] = .superseded
             pending = changeset
@@ -148,6 +160,22 @@ final class PendingChangesetStore {
         }
     }
 
+    /// `POST /gcal/sync` answered `pending_changeset: null`: the server holds no pending changeset,
+    /// so the local one (if nothing was staged since `sequence`) was resolved or expired elsewhere.
+    /// Clears it and the banner, and resets the `created_at` high-water mark, since the server's
+    /// ordering no longer constrains what comes next. Left alone while a confirm/reject is in
+    /// flight: that answer settles it.
+    func retireIfUnchanged(since sequence: Int) {
+        guard let current = pending, stagingSequence == sequence, !isResolving else { return }
+        logger.notice("Retiring a changeset the server no longer holds")
+        outcomes[current.id] = .outOfDate
+        pending = nil
+        newestCreatedAt = nil
+        actionError = nil
+        liveStateRevision += 1
+        onDiscarded?(current, nil)
+    }
+
     func dismissNotice() {
         notice = nil
     }
@@ -185,12 +213,26 @@ final class PendingChangesetStore {
             return
         }
         if error is CancellationError || !stillCurrent { return }
+        if let gcal = GcalSolveFailure(error) {
+            // Fails closed (nothing applied); the client hook raised the reconnect banner.
+            logger.notice("Changeset \(verb, privacy: .public) refused by Google Calendar")
+            actionError = gcal.message
+            return
+        }
+        if (error as? APIError)?.serverCode == KnownErrorCode.changesetStale {
+            // Kept on screen until the fresh proposal replaces it (stage clears this message).
+            logger.notice("Changeset stale on \(verb, privacy: .public)")
+            actionError = Self.staleMessage
+            onStale?(failed)
+            return
+        }
         logger.error("Changeset \(verb, privacy: .public) failed")
         actionError = "Couldn't reach the server. Nothing changed; try again."
     }
 }
 
-/// The banner's one-line summary (timetable.md §6), from the diff counts only.
+/// The banner's one-line summary (timetable.md §6): the reason headline for drift/google_edit,
+/// otherwise the diff counts.
 enum ProposalSummary {
     struct Text: Hashable, Sendable {
         let summary: String
@@ -198,6 +240,10 @@ enum ProposalSummary {
     }
 
     static func make(_ changeset: Changeset) -> Text {
+        // Server-initiated proposals lead with why (design/notifications.md §4; D25).
+        if let headline = ChangesetReasonCopy.headline(changeset.reason) {
+            return Text(summary: headline, doesNotFit: changeset.plan?.infeasibility != nil)
+        }
         guard changeset.planId != nil, let diff = changeset.diff else {
             return Text(summary: "Ready to confirm your projects", doesNotFit: false)
         }

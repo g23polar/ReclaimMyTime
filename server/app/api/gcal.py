@@ -3,8 +3,8 @@ app.gcal.service. The callback is the only unauthenticated route and the only on
 skips X-Timezone (the browser, not the API client, hits it); it only hands Google's code
 back to the app, which finishes with its bearer via POST /gcal/complete (D24).
 
-`POST /gcal/sync` (T4.3, contract D25) is the single sync entry point: write-back now (a);
-Google-side edit ingestion and the drift check slot in after it (b)."""
+`POST /gcal/sync` (T4.3, contract D25) is the single sync entry point: write-back (a), then
+Google-side edit ingestion and the drift check (b, app.api.gcal_sync)."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from app.auth.schemas import UtcDateTime
 from app.db import outbox
 from app.db.models import Changeset
 from app.errors import AppError
+from app.gcal.busy import BusyProvider, GcalBusy
 from app.gcal.repository import ConnectionRecord
 from app.gcal.runtime import GcalRuntime, default_gcal_runtime
 from app.gcal.service import GcalService
@@ -162,6 +163,14 @@ async def disconnect(user_id: UserId, service: Service) -> Response:
 
 # ---------------------------------------------------------------- sync (T4.3, D25)
 
+
+def _busy_provider(request: Request, maker: Maker) -> BusyProvider:
+    # Same provider as app.api.busy.get_busy_provider (which imports this module).
+    return GcalBusy(maker, lambda: get_gcal_runtime(request))
+
+
+SyncBusy = Annotated[BusyProvider, Depends(_busy_provider)]
+
 SYNC_BUDGET_S = 10.0  # overall wait for the write-back; the rest stays pending
 
 
@@ -171,7 +180,9 @@ SYNC_BUDGET_S = 10.0  # overall wait for the write-back; the rest stays pending
     response_model=None,
     dependencies=[Depends(require_timezone)],
 )
-async def sync(user_id: UserId, request: Request, maker: Maker, now: Now) -> dict[str, Any]:
+async def sync(
+    user_id: UserId, request: Request, maker: Maker, now: Now, busy: SyncBusy
+) -> dict[str, Any]:
     """Drain this user's write-back outbox (bounded), then answer with the outbox state and the
     user's current pending changeset (O2/G3). No request transaction is held while Google is
     called: the drain opens its own short sessions, and the read below runs after it."""
@@ -189,12 +200,18 @@ async def sync(user_id: UserId, request: Request, maker: Maker, now: Now) -> dic
         raise AppError(
             503, "gcal_unavailable", "Google Calendar could not be reached. Please try again."
         )
-    # T4.3 part (b) slots in HERE, after the write-back (so Google holds our latest writes):
-    # ingest edits made to our events inside Google (→ pins, a `google_edit` changeset), then
-    # the drift check (live blocks ∩ fresh busy → a `drift` changeset). Both stage through the
-    # normal write paths (busy read before the lock, no Google call under it).
-    # Deferred to (b), review round 1: an app calendar deleted while every block is synced
-    # triggers no write here; (b)'s event listing hits the 404 and recreates it.
+    if result is None or result.status is not DrainStatus.NOT_CONNECTED:
+        # T4.3b, after the write-back (so Google holds our latest writes): ingest edits made
+        # to our events inside Google (hybrid: direct applies + a `google_edit` proposal),
+        # then the drift check (live blocks ∩ fresh busy → a `drift` proposal). Google is
+        # read before the lock; see app.api.gcal_sync. The listing's 404 also recreates an
+        # app calendar deleted while every block was synced (deferred from part (a)).
+        from app.api.gcal_sync import ingest_and_check_drift  # imports this module
+
+        # A drain still running past the budget (result None): drift only, no ingest.
+        await ingest_and_check_drift(
+            request.app, user_id, now=now, busy=busy, ingest_edits=result is not None
+        )
     async with transaction(maker) as tx:
         counts = (
             outbox.OutboxCounts()

@@ -159,7 +159,7 @@ final class T52ReviewFindingsTests: XCTestCase {
         guard case .preferencesUpdated(let prefs) = try XCTUnwrap(submitted.staged.first).change else { return XCTFail("fixture shape") }
 
         let carried = Changeset(
-            id: UUID(), status: .pending, planId: nil,
+            id: UUID(), status: .pending, reason: .agent, planId: nil,
             staged: [StagedMutation(source: .agent, interpretation: nil, change: .preferencesUpdated(prefs))],
             createdAt: submitted.createdAt.addingTimeInterval(10), resolvedAt: nil, plan: nil, diff: nil, narration: nil)
         XCTAssertTrue(h.pending.stage(carried))

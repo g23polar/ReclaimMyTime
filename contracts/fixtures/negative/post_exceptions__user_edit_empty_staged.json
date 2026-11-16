@@ -3,7 +3,7 @@
   "method": "POST",
   "path": "/exceptions",
   "case": "user_edit_empty_staged",
-  "description": "NEGATIVE (2026-11-16, T4.3): a user_edit changeset with an empty staged list. Only a drift re-solve may stage nothing (D25). Must be rejected.",
+  "description": "NEGATIVE (2026-11-16, T4.3): a user_edit changeset with an empty staged list. Only a drift re-solve, or a google_edit knock-on re-solve (2026-11-16, T4.3b), may stage nothing (D25). Must be rejected.",
   "response_valid": false,
   "expected_error": "staged may be empty only when reason is drift",
   "request": {

@@ -16,6 +16,7 @@ final class FixtureContractTests: XCTestCase {
         "postAgentMessage",
         "confirmChangeset", "rejectChangeset",
         "getGcalConnectUrl", "gcalCallback", "completeGcalConnect", "getGcalStatus", "disconnectGcal",
+        "syncGcal",
     ]
 
     private let decoder = JSONCoding.makeDecoder()
@@ -142,6 +143,11 @@ final class FixtureContractTests: XCTestCase {
         case "listPins": _ = try decoder.decode(PinList.self, from: body)
         case "getGcalConnectUrl": _ = try decoder.decode(GcalConnectUrl.self, from: body)
         case "getGcalStatus": _ = try decoder.decode(GcalStatus.self, from: body)
+        case "syncGcal":
+            let result = try decoder.decode(GcalSyncResult.self, from: body)
+            if let changeset = result.pendingChangeset {
+                XCTAssertEqual(changeset.status, .pending, "\(fixture.fileName): sync returns only the pending changeset")
+            }
         case "completeGcalConnect":
             XCTAssertNotNil(try decoder.decode(GcalStatus.self, from: body).connection, "\(fixture.fileName): 200 means connected")
         case "patchBlock" where fixture.status == 200: _ = try decoder.decode(Block.self, from: body)

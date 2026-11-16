@@ -30,6 +30,17 @@ final class AppModel {
     private let defaults: UserDefaults
     private let backgroundScheduler: any BackgroundRefreshScheduling
     private let driftSource: any DriftSource
+    /// The `POST /gcal/sync` in flight, shared by concurrent callers (foreground, background, tap).
+    private var syncTask: Task<DriftCheckResult?, Never>?
+    /// Bumped by `resetSessionState()` (sign-out). With the bearer it identifies the session a
+    /// sync, foreground or background pass started in; side effects for an older one are dropped,
+    /// even if the same user signed back in meanwhile.
+    private var sessionGeneration = 0
+    /// Whether the scene is in the foreground (`.active`/`.inactive`), so a sign-in that lands
+    /// after activation (cold start before bootstrap finished) still runs the foreground pass.
+    private var sceneIsActive = false
+    /// The session generation the foreground pass last ran for (de-dupes auth + scene triggers).
+    private var foregroundRanForGeneration: Int?
     /// Retained here: `UNUserNotificationCenter.delegate` is weak.
     private var responder: NotificationResponder?
     private let logger = Logger(subsystem: "com.reclaimmytime.app", category: "app")
@@ -49,17 +60,19 @@ final class AppModel {
         self.config = config
         self.defaults = defaults
         self.backgroundScheduler = backgroundScheduler ?? SystemBackgroundRefreshScheduler()
-        self.driftSource = driftSource ?? UnavailableDriftSource()
         let transport: any HTTPTransport = transport ?? Self.defaultTransport(config: config)
         let sessionStore = sessionStore ?? SessionStore.forBackend(config.backend)
         let relay = SessionInvalidationRelay()
+        let gcalRelay = GcalReconnectRelay()
         let api = URLSessionAPIClient(
             baseURL: config.baseURL,
             transport: transport,
             sessionStore: sessionStore,
-            onUnauthenticated: { token in await relay.notify(token: token) }
+            onUnauthenticated: { token in await relay.notify(token: token) },
+            onGcalReconnectRequired: { token in await gcalRelay.notify(token: token) }
         )
         self.api = api
+        self.driftSource = driftSource ?? GcalSyncDriftSource(api: api)
         let auth = AuthState(api: api, sessionStore: sessionStore)
         self.auth = auth
         let palette = ProjectPaletteStore(defaults: defaults)
@@ -70,7 +83,10 @@ final class AppModel {
         self.pending = pending
         let projects = ProjectDirectory(api: api)
         self.projects = projects
-        calendar = CalendarConnectionModel(api: api, defaults: defaults, scope: SessionStore.service(for: config.backend, prefix: "gcal"))
+        let calendar = CalendarConnectionModel(api: api, defaults: defaults, scope: SessionStore.service(for: config.backend, prefix: "gcal"))
+        self.calendar = calendar
+        gcalRelay.calendar = calendar
+        gcalRelay.auth = auth
         let chat = ChatModel(api: api, pendingStore: pending, navigation: navigation, directory: projects)
         self.chat = chat
         let timetable = TimetableModel(api: api, pending: pending, navigation: navigation, directory: projects)
@@ -101,6 +117,11 @@ final class AppModel {
             for id in Self.createdProjectIds(changeset) where !kept.contains(id) {
                 palette?.release(id)
             }
+        }
+        pending.onStale = { [weak self] _ in
+            // The fresh proposal is only reachable through sync (D25); its stage() replaces this one.
+            // A fresh request: a sync already in flight predates the stale answer.
+            Task { await self?.syncGcal(forceNew: true) }
         }
         wirePlanObservers()
     }
@@ -142,24 +163,101 @@ final class AppModel {
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            sceneIsActive = true
             Task { await handleForeground() }
         case .background:
+            sceneIsActive = false
             scheduleBackgroundRefresh()
         default:
             break
         }
     }
 
-    /// Every foreground: refresh the week (which rebuilds the window on publish), rebuild anyway
-    /// (offline keeps the last plan, and the 48-hour window has moved), compare time zones, and
-    /// re-read the Google connection (§5).
+    /// Every foreground: sync with Google (D25) alongside refreshing the week (which rebuilds the
+    /// window on publish), rebuild anyway (offline keeps the last plan, and the 48-hour window has
+    /// moved), compare time zones, and re-read the Google connection (§5). The sync runs
+    /// concurrently: its drain can take ~10 s and must never hold up the timetable. A successful
+    /// sync reloads the week itself; that load takes a newer ticket, so this earlier one can't
+    /// overwrite it even if it finishes last.
     func handleForeground() async {
         guard case .signedIn = auth.phase else { return }
+        foregroundRanForGeneration = sessionGeneration
+        async let synced = syncGcal()
         await notifications.refreshAuthorization()
         await timetable.load()
         await notifications.rebuild(notificationSnapshot())
         timezone.check(plan: timetable.plan)
         await calendar.refreshStatus()
+        _ = await synced
+    }
+
+    /// `POST /gcal/sync` (D25): drains the write-back outbox and recovers the pending changeset
+    /// (any reason) into the store, where the banner shows it. Never applies anything.
+    /// - 409 `gcal_reconnect_required`: the reconnect banner, once per revocation.
+    /// - 503 `gcal_unavailable` (and any other failure): silent; the next foreground retries.
+    /// - 200: reload the live plan and rebuild reminders, whatever `pending_changeset` is: sync may
+    ///   have applied a Google-side move or delete directly (T4.3b) with no proposal at all.
+    /// Concurrent callers share one request unless `forceNew` (a caller that needs an answer newer
+    /// than anything in flight). Returns nil on failure or if the account changed.
+    @discardableResult
+    func syncGcal(forceNew: Bool = false) async -> DriftCheckResult? {
+        if !forceNew, let syncTask { return await syncTask.value }
+        let task = Task { await self.performSync() }
+        syncTask = task
+        let result = await task.value
+        if syncTask == task { syncTask = nil }
+        return result
+    }
+
+    private func performSync() async -> DriftCheckResult? {
+        guard let epoch = currentEpoch() else { return nil }
+        // Anything adopted after this point is newer than the server's answer.
+        let stagedBefore = pending.stagingSequence
+        do {
+            let result = try await driftSource.check()
+            guard isCurrent(epoch) else { return nil }
+            calendar.noteSyncSucceeded()
+            if let changeset = result.pendingChangeset {
+                projects.register(changeset)
+                pending.stage(changeset)
+            } else {
+                // Nothing pending server-side: a proposal held since before this request is dead
+                // (confirmed, rejected or expired elsewhere). One adopted since is kept.
+                pending.retireIfUnchanged(since: stagedBefore)
+            }
+            // Issued after the sync answered, so its ticket beats any load started before it.
+            await timetable.load()
+            guard isCurrent(epoch) else { return nil }
+            await notifications.rebuild(notificationSnapshot())
+            guard isCurrent(epoch) else { return nil }
+            return result
+        } catch {
+            guard isCurrent(epoch) else { return nil }
+            switch GcalSolveFailure(error) {
+            case .reconnectRequired?:
+                calendar.noteReconnectRequired(.oncePerRevocation)
+            case .unavailable?:
+                logger.notice("Google sync unavailable; retrying on the next foreground")
+            case nil:
+                logger.notice("Google sync failed")
+            }
+            return nil
+        }
+    }
+
+    /// The session a pass started in: generation + bearer.
+    private struct SessionEpoch: Equatable {
+        let generation: Int
+        let token: String
+    }
+
+    private func currentEpoch() -> SessionEpoch? {
+        guard case .signedIn(let session) = auth.phase else { return nil }
+        return SessionEpoch(generation: sessionGeneration, token: session.token)
+    }
+
+    private func isCurrent(_ epoch: SessionEpoch) -> Bool {
+        currentEpoch() == epoch
     }
 
     /// Asks for the next `BGAppRefreshTask` (on entering the background, and from the task itself).
@@ -176,20 +274,27 @@ final class AppModel {
         }
     }
 
-    /// The `BGAppRefreshTask` handler: refetch `GET /plans/current` (keeping the window rolling)
-    /// and, if the server has a new drift proposal, post the §4 notification. Never applies it.
+    /// The `BGAppRefreshTask` handler: sync with Google first (it may apply Google-side edits),
+    /// then the live plan and the reminder window (a successful sync reloads both; a failed one
+    /// still refetches so the window keeps rolling), and, if the pending changeset is a new
+    /// `drift` or `google_edit` proposal, post the §4 notification once. Never applies it.
     func handleBackgroundRefresh() async {
         if case .loading = auth.phase { await auth.bootstrap() }
-        guard case .signedIn = auth.phase else { return }
+        guard let epoch = currentEpoch() else { return }
         scheduleBackgroundRefresh()
-        await timetable.load()
-        await notifications.rebuild(notificationSnapshot())
-        guard let plan = timetable.plan,
-              let alert = try? await driftSource.pendingDrift(livePlan: plan),
+        let result = await syncGcal()
+        guard isCurrent(epoch) else { return }
+        if result == nil {
+            await timetable.load()
+            guard isCurrent(epoch) else { return }
+            await notifications.rebuild(notificationSnapshot())
+        }
+        guard isCurrent(epoch),
+              let alert = result?.alert,
               defaults.string(forKey: Self.lastDriftNotifiedKey) != alert.changesetId.pathComponent
         else { return }
         defaults.set(alert.changesetId.pathComponent, forKey: Self.lastDriftNotifiedKey)
-        let request = DriftNotification.request(alert, projectName: timetable.projectName(alert.projectId), time: timetable.timeText)
+        let request = DriftNotification.request(alert, projectName: alert.projectId.map(timetable.projectName) ?? "", time: timetable.timeText)
         await notifications.post(request)
     }
 
@@ -206,10 +311,12 @@ final class AppModel {
             }
         case let .skipBlock(lineageId, blockId):
             await timetable.skip(lineageId: lineageId, fallbackBlockId: blockId)
-        case .drift:
-            // TODO(O2/T4.3): open review for `changesetId` once a pending changeset can be fetched.
-            // Until then this opens the Week tab, where the pending banner shows any proposal.
+        case .drift(let changesetId):
             navigation.selectedTab = .week
+            // Cold start (or a newer proposal since): recover it through sync (O2, D25).
+            if !pending.hasPending || (changesetId != nil && pending.pending?.id != changesetId) {
+                await syncGcal()
+            }
             if pending.hasPending { navigation.presentReview() }
         }
     }
@@ -220,6 +327,13 @@ final class AppModel {
         switch phase {
         case .signedIn(let session):
             calendar.activate(userId: session.userId)
+            // Activated before bootstrap finished (cold start) or a fresh sign-in while open: run
+            // the foreground pass once for this session. A scene-phase pass that already ran is
+            // not repeated; a concurrent one shares the sync request.
+            if sceneIsActive, foregroundRanForGeneration != sessionGeneration {
+                foregroundRanForGeneration = sessionGeneration
+                Task { await handleForeground() }
+            }
         case .signedOut:
             resetSessionState()
         case .loading, .sessionUnavailable:
@@ -229,6 +343,9 @@ final class AppModel {
 
     /// Clears per-user in-memory state on sign-out.
     func resetSessionState() {
+        sessionGeneration += 1
+        syncTask?.cancel()
+        syncTask = nil
         chat.reset()
         pending.reset()
         projects.reset()
@@ -250,7 +367,17 @@ final class AppModel {
 
     private static func defaultTransport(config: AppConfig) -> any HTTPTransport {
         guard config.usesMock else { return URLSessionTransport() }
-        let mock = MockTransport.bundled()
+        var variants: [String: String] = [:]
+        #if DEBUG
+        // `-MockGcalSync <case>` serves `post_gcal_sync__<case>.json` for every sync, e.g.
+        // `pending_drift` (a drift proposal: banner in the foreground, notification from a
+        // background refresh), `reconnect_required`, `unavailable`.
+        let arguments = ProcessInfo.processInfo.arguments
+        if let flag = arguments.firstIndex(of: "-MockGcalSync"), arguments.indices.contains(flag + 1) {
+            variants["syncGcal"] = arguments[flag + 1]
+        }
+        #endif
+        let mock = MockTransport.bundled(variants: variants)
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-DemoScenario") { return DemoTransport(inner: mock) }
         #endif
@@ -326,6 +453,21 @@ final class AppModel {
         return try JSONCoding.makeDecoder().decode(Changeset.self, from: body)
     }
     #endif
+}
+
+/// Routes the client's 409 `gcal_reconnect_required` (any solving route, HTTP or in-stream) to the
+/// reconnect banner. A refused change always shows it; `/gcal/sync` opts out and announces itself.
+/// Like the 401 path, a late answer for a session that is no longer current is ignored, so it can
+/// never mark another account revoked.
+@MainActor
+final class GcalReconnectRelay {
+    weak var calendar: CalendarConnectionModel?
+    weak var auth: AuthState?
+
+    func notify(token: String?) {
+        guard let token, case .signedIn(let session)? = auth?.phase, session.token == token else { return }
+        calendar?.noteReconnectRequired(.always)
+    }
 }
 
 /// Breaks the client ↔ auth construction cycle without a strong reference.

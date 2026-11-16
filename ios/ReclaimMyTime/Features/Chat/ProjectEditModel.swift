@@ -121,6 +121,8 @@ final class ProjectEditModel {
                 errorMessage = "This project was archived, so it can't be edited."
             case KnownErrorCode.notFound:
                 errorMessage = "This project is no longer in your plan."
+            case KnownErrorCode.gcalReconnectRequired, KnownErrorCode.gcalUnavailable:
+                errorMessage = GcalSolveFailure(error)?.message
             default:
                 errorMessage = "Couldn't save that. Nothing changed; try again."
             }

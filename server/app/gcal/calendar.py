@@ -1,6 +1,8 @@
 """Google Calendar REST client (T4.2): freeBusy on the primary calendar, and create/delete of
 the app-owned secondary calendar (both allowed under our two narrow scopes). T4.3 adds
-insert/update/delete of events in that app calendar (the write-back outbox).
+insert/update/delete of events in that app calendar (the write-back outbox), and T4.3b reads
+them back (events.list / events.get, restricted to times, status, etag and our private
+extended properties) to ingest edits made inside Google.
 
 Same discipline as app.gcal.client: the access token is passed in per call, held in memory
 only, and never logged; neither are response bodies. Log lines carry the HTTP status or the
@@ -13,7 +15,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -89,6 +91,21 @@ class GoogleCalendarClient(Protocol):
         self, access_token: str, calendar_id: str, event_id: str, event: dict[str, Any]
     ) -> str:
         """events.update (full replace); returns the new etag. EventNotFoundError (404/410) |
+        EventRejectedError | GoogleUnavailableError."""
+        ...
+
+    async def list_events(
+        self, access_token: str, calendar_id: str, *, time_min: datetime, time_max: datetime
+    ) -> list[EventSnapshot]:
+        """events.list (showDeleted, singleEvents, every page) over [time_min, time_max),
+        restricted by `fields` to id/etag/status/start/end/private extended properties.
+        CalendarNotFoundError (404/410) | GoogleUnavailableError."""
+        ...
+
+    async def get_event(
+        self, access_token: str, calendar_id: str, event_id: str
+    ) -> EventSnapshot | None:
+        """events.get, same `fields`; None when the event is gone (404/410).
         EventRejectedError | GoogleUnavailableError."""
         ...
 
@@ -271,3 +288,108 @@ class HttpGoogleCalendarClient:
         if response.status_code in (200, 204, 404, 410):
             return
         raise self._fail(response, "events.delete")
+
+    # ------------------------------------------------------------- events read (T4.3b ingest)
+    # Only id, etag, status, start, end and our private extended properties are requested
+    # (`fields=`), so Google never sends summaries or descriptions to us at all.
+
+    async def list_events(
+        self, access_token: str, calendar_id: str, *, time_min: datetime, time_max: datetime
+    ) -> list[EventSnapshot]:
+        snapshots: list[EventSnapshot] = []
+        page_token: str | None = None
+        for _ in range(_MAX_LIST_PAGES):
+            params = {
+                "showDeleted": "true",
+                "singleEvents": "true",
+                "timeMin": _rfc3339(time_min),
+                "timeMax": _rfc3339(time_max),
+                "maxResults": str(_LIST_PAGE_SIZE),
+                "fields": _LIST_FIELDS,
+            }
+            if page_token is not None:
+                params["pageToken"] = page_token
+            path = f"{self._events_path(calendar_id)}?{urlencode(params)}"
+            response = await self._request("GET", path, access_token)
+            if response.status_code in (404, 410):
+                raise CalendarNotFoundError()
+            body = self._json(response, "events.list")
+            items = body.get("items", []) if isinstance(body, dict) else None
+            if not isinstance(items, list):
+                logger.warning("google events.list returned an unexpected body")
+                raise GoogleUnavailableError()
+            snapshots.extend(s for s in map(parse_event, items) if s is not None)
+            token = body.get("nextPageToken")
+            if not token:
+                return snapshots
+            if not isinstance(token, str):
+                logger.warning("google events.list returned an unexpected page token")
+                raise GoogleUnavailableError()
+            page_token = token
+        logger.warning("google events.list exceeded %d pages", _MAX_LIST_PAGES)
+        raise GoogleUnavailableError()
+
+    async def get_event(
+        self, access_token: str, calendar_id: str, event_id: str
+    ) -> EventSnapshot | None:
+        path = f"{self._events_path(calendar_id, event_id)}?{urlencode({'fields': _GET_FIELDS})}"
+        response = await self._request("GET", path, access_token)
+        if response.status_code in (404, 410):
+            return None
+        if response.status_code != 200:
+            raise self._fail(response, "events.get")
+        snapshot = parse_event(self._json(response, "events.get"))
+        if snapshot is None:
+            logger.warning("google events.get returned an unexpected body")
+            raise GoogleUnavailableError()
+        return snapshot
+
+
+_LIST_PAGE_SIZE = 250
+_MAX_LIST_PAGES = 40  # 10,000 events in a week window: anything more is not our calendar
+_EVENT_FIELDS = "id,etag,status,start,end,extendedProperties/private"
+_GET_FIELDS = _EVENT_FIELDS
+_LIST_FIELDS = f"items({_EVENT_FIELDS}),nextPageToken"
+
+
+@dataclass(frozen=True)
+class EventSnapshot:
+    """The parts of an event the ingest reads (T4.3b). Never a summary or a description.
+    `start`/`end` are None for an all-day or unparseable time (the ingest ignores those)."""
+
+    id: str
+    etag: str
+    status: str
+    start: datetime | None
+    end: datetime | None
+    lineage_id: str | None
+
+
+def _event_time(value: Any) -> datetime | None:
+    if not isinstance(value, dict) or "dateTime" not in value:
+        return None  # all-day ({"date": ...}) or absent (e.g. some cancelled answers)
+    try:
+        return _parse_instant(value["dateTime"])
+    except ValueError:
+        return None
+
+
+def parse_event(item: Any) -> EventSnapshot | None:
+    """One events.list item → snapshot; None when it has no usable id. Pure."""
+    if not isinstance(item, dict):
+        return None
+    event_id = item.get("id")
+    if not isinstance(event_id, str) or not event_id:
+        return None
+    etag = item.get("etag")
+    status = item.get("status")
+    private = (item.get("extendedProperties") or {}).get("private") or {}
+    lineage = private.get("lineage_id") if isinstance(private, dict) else None
+    return EventSnapshot(
+        id=event_id,
+        etag=etag if isinstance(etag, str) else "",
+        status=status if isinstance(status, str) else "confirmed",
+        start=_event_time(item.get("start")),
+        end=_event_time(item.get("end")),
+        lineage_id=lineage if isinstance(lineage, str) else None,
+    )

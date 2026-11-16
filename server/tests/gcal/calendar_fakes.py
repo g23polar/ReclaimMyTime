@@ -4,7 +4,11 @@ that seed a Google connection row and install a gcal runtime. Nothing here talks
 T4.3a adds an in-memory event store for the write-back (events.insert/update/delete), with
 Google's semantics as far as the worker relies on them: a client-supplied id that exists
 (even cancelled) → 409 on insert; update of a cancelled event revives it; delete of a cancelled
-event → 410; any event call on a calendar in `gone_calendars` → 404."""
+event → 410; any event call on a calendar in `gone_calendars` → 404.
+
+T4.3b adds events.list (showDeleted, time window, pagination via `list_page_size`) and
+events.get, answering only the `fields` the ingest asks for, plus `user_*` helpers that
+simulate edits made inside Google (each bumps the etag, as Google does)."""
 
 from __future__ import annotations
 
@@ -76,6 +80,7 @@ class FakeCalendar:
     # Every event call waits on this when set (concurrency tests hold the drain mid-flight).
     event_gate: asyncio.Event | None = None
     event_started: asyncio.Event = field(default_factory=asyncio.Event)
+    list_page_size: int = 250
     _etags: int = 0
 
     @property
@@ -104,9 +109,74 @@ class FakeCalendar:
             path = httpx.URL(url).path
             if "/events" not in path:
                 continue
+            if m == "GET":
+                continue  # reads (T4.3b ingest) are in `event_reads`
             tail = path.split("/events", 1)[1].lstrip("/")
             out.append((m, tail or (body or {}).get("id", "")))
         return out
+
+    @property
+    def event_reads(self) -> list[tuple[str, dict[str, str]]]:
+        """(event id or "" for events.list, query params) of every events.list/get call."""
+        out = []
+        for m, url, _, _ in self.requests:
+            u = httpx.URL(url)
+            if m != "GET" or "/events" not in u.path:
+                continue
+            out.append((u.path.split("/events", 1)[1].lstrip("/"), dict(u.params)))
+        return out
+
+    # ---- simulated edits made by the user inside Google (T4.3b)
+
+    def _bump(self, event: dict[str, Any]) -> None:
+        self._etags += 1
+        event["etag"] = f'"{self._etags:06d}"'
+
+    def user_move(self, calendar_id: str, event_id: str, start: datetime, end: datetime) -> str:
+        ev = self.events[(calendar_id, event_id)]
+        ev["start"], ev["end"] = {"dateTime": z(start)}, {"dateTime": z(end)}
+        self._bump(ev)
+        return str(ev["etag"])
+
+    def user_retitle(self, calendar_id: str, event_id: str, summary: str) -> None:
+        ev = self.events[(calendar_id, event_id)]
+        ev["summary"] = summary
+        self._bump(ev)
+
+    def user_delete(self, calendar_id: str, event_id: str) -> None:
+        ev = self.events[(calendar_id, event_id)]
+        ev["status"] = "cancelled"
+        self._bump(ev)
+
+    def user_purge(self, calendar_id: str, event_id: str) -> None:
+        """Gone without a trace: neither listed nor found (404 on events.get)."""
+        self.events.pop((calendar_id, event_id))
+
+    def _read(self, request: httpx.Request, calendar_id: str, event_id: str) -> httpx.Response:
+        params = request.url.params
+        fields = params.get("fields", "")
+        # The ingest must never ask for summaries or descriptions (privacy, rule 4).
+        assert "summary" not in fields and "description" not in fields and fields, fields
+        if calendar_id in self.gone_calendars:
+            return httpx.Response(404, json={"error": {"code": 404, "message": "Not Found"}})
+        if event_id:
+            ev = self.events.get((calendar_id, event_id))
+            if ev is None:
+                return httpx.Response(404, json={"error": {"code": 404}})
+            return httpx.Response(200, json=_project_fields(ev))
+        assert params.get("showDeleted") == "true" and params.get("singleEvents") == "true"
+        lo, hi = params["timeMin"], params["timeMax"]
+        items = [
+            _project_fields(ev)
+            for (cal, _), ev in sorted(self.events.items())
+            if cal == calendar_id and ev["end"]["dateTime"] > lo and ev["start"]["dateTime"] < hi
+        ]
+        start = int(params.get("pageToken", "0"))
+        page = items[start : start + self.list_page_size]
+        body: dict[str, Any] = {"kind": "calendar#events", "items": page}
+        if start + self.list_page_size < len(items):
+            body["nextPageToken"] = str(start + self.list_page_size)
+        return httpx.Response(200, json=body)
 
     def calendar_events(self, calendar_id: str, *, include_cancelled: bool = False) -> dict:
         return {
@@ -127,6 +197,8 @@ class FakeCalendar:
                 return httpx.Response(reply.status, json=reply.json)
         if calendar_id in self.gone_calendars:
             return httpx.Response(404, json={"error": {"code": 404, "message": "Not Found"}})
+        if request.method == "GET":
+            return self._read(request, calendar_id, event_id)
         key = (calendar_id, event_id)
         existing = self.events.get(key)
         if request.method == "POST":
@@ -182,6 +254,15 @@ class FakeCalendar:
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handler)
+
+
+def _project_fields(ev: dict[str, Any]) -> dict[str, Any]:
+    """What `fields=id,etag,status,start,end,extendedProperties/private` returns."""
+    out = {k: ev[k] for k in ("id", "etag", "status", "start", "end") if k in ev}
+    private = (ev.get("extendedProperties") or {}).get("private")
+    if private is not None:
+        out["extendedProperties"] = {"private": private}
+    return out
 
 
 def new_cipher() -> TokenCipher:

@@ -82,7 +82,7 @@ async def test_a_stale_re_proposal_keeps_the_agent_reason(
     assert await stored_reason(maker, fresh) == "agent"
 
 
-async def test_only_drift_may_stage_nothing(maker, who):
+async def test_only_drift_or_google_edit_may_stage_nothing(maker, who):
     async with maker() as s, s.begin():
         cs = await propose_changeset(s, who.user_id, [], now=NOW, source="system", reason="drift")
         view = await changeset_view(s, who.user_id, cs)
@@ -92,10 +92,21 @@ async def test_only_drift_may_stage_nothing(maker, who):
         "syncGcal", 200, {"pending_changeset": view, "outbox": {"pending": 0, "synced": 0}}
     )
 
-    for kwargs in ({"source": "manual"}, {"source": "system", "reason": "google_edit"}):
+    for kwargs in ({"source": "manual"}, {"source": "agent"}):
         with pytest.raises(InvalidMutation):
             async with maker() as s, s.begin():
                 await propose_changeset(s, who.user_id, [], now=NOW, **kwargs)  # type: ignore[arg-type]
+
+    # 2026-11-16 (T4.3b): a google_edit knock-on re-solve (its pin already applied) is empty.
+    async with maker() as s, s.begin():
+        cs = await propose_changeset(
+            s, who.user_id, [], now=NOW, source="system", reason="google_edit"
+        )
+        view = await changeset_view(s, who.user_id, cs)
+    assert (view["reason"], view["staged"]) == ("google_edit", [])
+    assert_conforms(
+        "syncGcal", 200, {"pending_changeset": view, "outbox": {"pending": 0, "synced": 0}}
+    )
 
 
 async def test_a_system_changeset_must_name_its_reason(maker, who):

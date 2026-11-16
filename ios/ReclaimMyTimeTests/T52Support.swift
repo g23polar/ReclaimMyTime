@@ -60,6 +60,12 @@ enum T52Fixtures {
         try decoder.decode(Changeset.self, from: XCTUnwrap(TestFixtures.named(file).responseBody))
     }
 
+    /// The non-null `pending_changeset` of a `syncGcal` fixture.
+    static func syncChangeset(_ file: String) throws -> Changeset {
+        let result = try decoder.decode(GcalSyncResult.self, from: XCTUnwrap(TestFixtures.named(file).responseBody))
+        return try XCTUnwrap(result.pendingChangeset, file)
+    }
+
     static func agentDone(_ file: String) throws -> AgentDone {
         let fixture = try TestFixtures.named(file)
         let done = try XCTUnwrap(fixture.streamEvents.last)
@@ -75,6 +81,7 @@ enum T52Fixtures {
         Changeset(
             id: UUID(),
             status: .pending,
+            reason: .agent,
             planId: nil,
             staged: projects.map { StagedMutation(source: .agent, interpretation: nil, change: .projectCreated(projectId: $0.0, project: $0.1)) } + extra,
             createdAt: createdAt,

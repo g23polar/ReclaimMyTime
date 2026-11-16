@@ -93,6 +93,13 @@ struct ProposalReviewSheet: View {
                         .font(.rmt.callout)
                         .foregroundStyle(ColorToken.proposal)
                 }
+                // drift / google_edit: say why the server proposed this (D25).
+                if let headline = ChangesetReasonCopy.headline(changeset.reason) {
+                    Label(headline, systemImage: "calendar.badge.exclamationmark")
+                        .font(.rmt.callout.weight(.semibold))
+                        .foregroundStyle(ColorToken.textPrimary)
+                        .accessibilityAddTraits(.isHeader)
+                }
                 // Agent proposals have no narration (D8): their reply is already in chat.
                 Text(changeset.narration ?? summary.summary)
                     .font(.rmt.callout)
@@ -135,6 +142,8 @@ struct ProposalReviewSheet: View {
         }
         .safeAreaInset(edge: .bottom) {
             ConfirmRejectBar(
+                rejectTitle: ProposalReviewCopy.rejectTitle(changeset),
+                rejectFootnote: ProposalReviewCopy.rejectFootnote(changeset),
                 confirmTitle: ProposalReviewCopy.confirmTitle(changeset),
                 isBusy: model.pending.isResolving,
                 onReject: { Task { if await model.pending.reject(id: changeset.id) { dismiss() } } },
@@ -190,10 +199,28 @@ enum ProposalReviewCopy {
     }
 
     static let rejectTitle = "Keep my week"
+
+    /// google_edit with staged pins: rejecting restores our planned time on the edited events (any
+    /// already-applied edits in the same batch stay), so the button names the plan and the
+    /// footnote says what moves back.
+    /// google_edit with empty `staged` (the Google edit is already live, T4.3b): rejecting only
+    /// declines the knock-on re-plan and the edit stays, so no footnote.
+    static func rejectTitle(_ changeset: Changeset) -> String {
+        guard changeset.reason == .googleEdit else { return rejectTitle }
+        return changeset.staged.isEmpty ? "Keep the rest of my week" : "Keep original plan"
+    }
+
+    /// A non-empty batch may also hold edits that were already applied; those stay.
+    static func rejectFootnote(_ changeset: Changeset) -> String? {
+        changeset.reason == .googleEdit && !changeset.staged.isEmpty
+            ? "Moves the edited events back in Google Calendar. Changes already applied stay as they are." : nil
+    }
 }
 
 /// diff-and-infeasibility.md §3: "Keep my week" (bordered) + confirm (`borderedProminent`).
 struct ConfirmRejectBar: View {
+    var rejectTitle = ProposalReviewCopy.rejectTitle
+    var rejectFootnote: String?
     let confirmTitle: String
     let isBusy: Bool
     let onReject: () -> Void
@@ -202,15 +229,23 @@ struct ConfirmRejectBar: View {
 
     var body: some View {
         let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: Spacing.s)) : AnyLayout(HStackLayout(spacing: Spacing.s))
-        layout {
-            Button(action: onReject) {
-                Text(ProposalReviewCopy.rejectTitle).frame(maxWidth: .infinity, minHeight: HitTarget.min)
+        VStack(alignment: .leading, spacing: Spacing.s) {
+            if let rejectFootnote {
+                Text(rejectFootnote)
+                    .font(.rmt.callout)
+                    .foregroundStyle(ColorToken.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .buttonStyle(.bordered)
-            Button(action: onConfirm) {
-                Text(confirmTitle).frame(maxWidth: .infinity, minHeight: HitTarget.min)
+            layout {
+                Button(action: onReject) {
+                    Text(rejectTitle).frame(maxWidth: .infinity, minHeight: HitTarget.min)
+                }
+                .buttonStyle(.bordered)
+                Button(action: onConfirm) {
+                    Text(confirmTitle).frame(maxWidth: .infinity, minHeight: HitTarget.min)
+                }
+                .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.borderedProminent)
         }
         .disabled(isBusy)
         .padding(Spacing.l)

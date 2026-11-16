@@ -91,9 +91,24 @@ final class FakeBackgroundScheduler: BackgroundRefreshScheduling, @unchecked Sen
     }
 }
 
-struct FakeDriftSource: DriftSource {
-    let alert: DriftAlert?
-    func pendingDrift(livePlan: WeekPlan) async throws -> DriftAlert? { alert }
+/// Answers every sync with `changeset` (or throws `error`) and counts calls.
+final class FakeDriftSource: DriftSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private let changeset: Changeset?
+    private let error: APIError?
+    private var _calls = 0
+    var calls: Int { lock.withLock { _calls } }
+
+    init(changeset: Changeset?, error: APIError? = nil) {
+        self.changeset = changeset
+        self.error = error
+    }
+
+    func check() async throws -> DriftCheckResult {
+        lock.withLock { _calls += 1 }
+        if let error { throw error }
+        return DriftCheckResult(pendingChangeset: changeset, outbox: OutboxCounts(pending: 0, synced: 0))
+    }
 }
 
 // MARK: - builders
@@ -563,30 +578,34 @@ final class NotificationAppTests: XCTestCase {
         XCTAssertTrue(background.submissions.isEmpty)
     }
 
-    func testBackgroundRefreshFetchesThePlanReschedulesAndStubNoOps() async throws {
+    func testBackgroundRefreshFetchesThePlanReschedulesAndSyncs() async throws {
         let center = FakeNotificationCenter()
         let background = FakeBackgroundScheduler()
         let model = await T54.model(transport: gate, center: center, background: background)
         await model.handleBackgroundRefresh()
         let planFetches = await gate.requests.filter { $0.url?.path() == "/plans/current" }.count
         XCTAssertEqual(planFetches, 1)
+        let syncs = await gate.requests.filter { $0.httpMethod == "POST" && $0.url?.path() == "/gcal/sync" }.count
+        XCTAssertEqual(syncs, 1, "the background task syncs with Google")
         XCTAssertEqual(background.submissions.count, 1, "the task schedules its successor")
         let pending = await center.sortedPendingIds
         let delivered = await center.delivered
         XCTAssertEqual(pending.count, 3, "the window rolls in the background too")
-        XCTAssertTrue(delivered.isEmpty, "no drift source yet (T4.3): nothing posted")
+        XCTAssertTrue(delivered.isEmpty, "the fixture sync has no pending changeset: nothing posted")
     }
 
     func testBackgroundDriftPostsOnceAndNeverApplies() async throws {
         let center = FakeNotificationCenter()
-        let alert = DriftAlert(changesetId: UUID(), projectId: T52Fixtures.portfolioId, blockStart: T53.date("2026-11-18T03:00:00Z"))
+        let drift = try T52Fixtures.syncChangeset("post_gcal_sync__pending_drift.json")
         let defaults = T54.freshDefaults()
-        let model = await T54.model(transport: gate, center: center, drift: FakeDriftSource(alert: alert), defaults: defaults)
+        let model = await T54.model(transport: gate, center: center, drift: FakeDriftSource(changeset: drift), defaults: defaults)
         await model.handleBackgroundRefresh()
         await model.handleBackgroundRefresh()
         let delivered = await center.delivered
-        XCTAssertEqual(delivered.map(\.identifier), [DriftNotification.identifier(alert.changesetId)])
-        XCTAssertEqual(T53.plain(delivered.first?.body ?? ""), "Portfolio site at 7:00 PM clashes with something new in your calendar. Tap to see a fix.")
+        XCTAssertEqual(delivered.map(\.identifier), [DriftNotification.identifier(drift.id)])
+        // The clash: Workout's Wed 7–8 AM LA block (15:00Z) moves to Thursday.
+        XCTAssertEqual(T53.plain(delivered.first?.body ?? ""), "Workout at 7:00 AM clashes with something new in your calendar. Tap to see a fix.")
+        XCTAssertEqual(model.pending.pending?.id, drift.id, "staged for review, not applied")
         let confirms = await gate.requests.filter { $0.url?.path().hasSuffix("/confirm") == true }.count
         XCTAssertEqual(confirms, 0)
     }

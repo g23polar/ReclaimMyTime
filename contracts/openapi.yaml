@@ -618,16 +618,22 @@ paths:
         1. Drains this user's write-back outbox (live blocks → events in the app calendar),
            waiting at most ~10 s overall. Whatever remains stays pending (retried by the next
            confirm or sync), and the response still returns.
-        2. (Reserved for T4.3 part (b), same endpoint: ingest edits made to our events inside
-           Google → a `google_edit` changeset; drift check → a `drift` changeset.)
+        2. (2026-11-16, T4.3b) Ingests edits the user made to our events inside Google
+           Calendar: a move becomes a pin, a delete a forbid. When nothing else has to move,
+           the edit goes live directly; otherwise the knock-on re-solve is proposed as a
+           `google_edit` changeset (NOTES D25). Then the drift check: live blocks that have not
+           started and now overlap calendar busy time → a `drift` changeset. Neither replaces
+           a changeset that is already pending.
         3. Returns the user's current pending changeset, if any (resolves O2), and the outbox
            counts.
 
         Never connected (or disconnected): 200 with `outbox` all zeros; nothing is written
         and `pending_changeset` is still returned. Errors: 409 `gcal_reconnect_required`
         (connection revoked, or its credential undecryptable: reconnect via GET /gcal/connect),
-        503 `gcal_unavailable` (Google failed during the drain; what was written stays written,
-        the rest stays pending; retry later).
+        503 `gcal_unavailable` (Google failed during the drain, the edit ingest or the busy
+        read; what was written stays written, the rest stays pending, and no Google edit is
+        applied when the busy read fails; retry later). 2026-11-16 (T4.3b): the same two
+        errors now also come from the ingest and drift steps.
       parameters: [{$ref: '#/components/parameters/XTimezone'}]
       responses:
         '200':
@@ -807,9 +813,14 @@ components:
         staged write (projects, preferences, exceptions, pins, block edit/delete). `agent`:
         an agent turn (POST /agent/message). `drift`: calendar busy time now overlaps live
         blocks; the server re-solved with no constraint change (`staged` may be empty).
-        `google_edit`: one of our events was edited inside Google Calendar; `staged` carries
-        the resulting pin(s). A stale re-proposal (409 `changeset_stale`) keeps the reason of
-        the changeset it replaces.
+        `google_edit`: one of our events was edited inside Google Calendar (2026-11-16, T4.3b).
+        `staged` carries the resulting pin(s) when nothing was applied; it is empty when the
+        user's pin/forbid was already applied directly and only the knock-on re-solve is
+        proposed. Rejecting a `google_edit` changeset that carries pins (nothing applied yet)
+        writes our planned times back over the user's events in Google; rejecting an empty one
+        only declines the knock-on, and the user's edit stays live (2026-11-16, T4.3b review). A stale re-proposal (409 `changeset_stale`) keeps the reason
+        of the changeset it replaces. Clients decode this enum strictly (as every other enum
+        while contracts/ is frozen): a new value ships with a client update.
       enum: [user_edit, agent, drift, google_edit]
     BlockState: {type: string, enum: [planned, completed, skipped]}
     GcalSync: {type: string, enum: [pending, synced, failed]}
@@ -1363,8 +1374,9 @@ components:
           type: array
           description: |
             The staged mutations, unapplied until confirm. Empty ONLY when `reason` is `drift`
-            (a re-solve that changes no constraint; O11, resolved 2026-11-16 T4.3); every other
-            reason has at least one entry (enforced by the `if`/`then` below, 2026-11-16 T4.3).
+            (a re-solve that changes no constraint; O11, resolved 2026-11-16 T4.3) or
+            `google_edit` (the user's pin was already applied; 2026-11-16 T4.3b); every other
+            reason has at least one entry (enforced by the `if`/`then` below).
           minItems: 0
           items: {$ref: '#/components/schemas/StagedMutation'}
         created_at: {type: string, format: date-time}
@@ -1374,9 +1386,10 @@ components:
         diff:
           oneOf: [{$ref: '#/components/schemas/PlanDiff'}, {type: 'null'}]
         narration: {type: [string, 'null']}
-      # 2026-11-16 (T4.3, D25): `staged` may be empty only for a drift re-solve.
+      # 2026-11-16 (T4.3, D25): `staged` may be empty only for a drift re-solve;
+      # 2026-11-16 (T4.3b): or a google_edit knock-on re-solve.
       if:
-        properties: {reason: {not: {const: drift}}}
+        properties: {reason: {not: {enum: [drift, google_edit]}}}
       then:
         properties: {staged: {minItems: 1}}
 

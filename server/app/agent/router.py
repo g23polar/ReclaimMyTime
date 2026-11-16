@@ -12,7 +12,7 @@ import asyncio
 import contextlib
 import json
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -40,6 +40,7 @@ from app.api.deps import (
     transaction,
     validation_failed,
 )
+from app.api.outbox import kick_outbox
 from app.api.views import changeset_view
 from app.db.models import Changeset
 from app.db.models.staged import InvalidMutation, StagedMutation, dump_staged
@@ -109,6 +110,7 @@ async def post_agent_message(
             committed_names=ctx.committed_names,
             pending_id=ctx.pending_id,
             busy=busy,
+            kick_outbox=lambda: kick_outbox(request.app, user_id),
         ),
     )
     try:
@@ -195,6 +197,7 @@ class DbProposer:
         committed_names: dict[str, str],
         pending_id: uuid.UUID | None,
         busy: BusyProvider,
+        kick_outbox: Callable[[], None] = lambda: None,
     ) -> None:
         self._maker = maker
         self._user_id = user_id
@@ -203,6 +206,7 @@ class DbProposer:
         self._names = committed_names
         self._pending_id = pending_id
         self._busy = busy
+        self._kick_outbox = kick_outbox
         # T4.2: one freeBusy read per horizon per turn, so the dry run and the commit solve
         # against identical busy time (their fingerprints must match).
         self._windows: dict[Interval, BusyWindow] = {}
@@ -228,6 +232,7 @@ class DbProposer:
 
     async def commit(self, staged: Sequence[StagedMutation]) -> Solve:
         window = await self._window(staged)  # before the lock and the write session (T4.2)
+        repended = 0
         async with transaction(self._maker) as tx:
             await lock_user(tx, self._user_id)
             if await _pending_id(tx, self._user_id) != self._pending_id:
@@ -235,9 +240,18 @@ class DbProposer:
             if not staged:
                 # Everything pending was discarded: retire the pending changeset.
                 if self._pending_id is not None:
-                    await reject_changeset(tx, self._user_id, self._pending_id, now=self._now)
-                return Solve(None, None, None)
-            view, narration = await self._propose(tx, staged, window)
+                    repended = await reject_changeset(
+                        tx, self._user_id, self._pending_id, now=self._now
+                    )
+                view = narration = None
+            else:
+                view, narration = await self._propose(tx, staged, window)
+        if repended:
+            # A discarded `google_edit` undoes the user's Google move (T4.3b): write our
+            # planned times back after commit, as the REST reject route does.
+            self._kick_outbox()
+        if view is None:
+            return Solve(None, None, None)
         return Solve(view, narration, _fingerprint(staged, view))
 
     async def reshow(self, staged: Sequence[StagedMutation], expected: str | None) -> Solve:

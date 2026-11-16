@@ -78,7 +78,7 @@ Shown whenever the app holds a `pending` changeset (from chat, an edit, or onboa
 - Summary text is computed from the diff counts: "{n} moved · {n} added · {n} removed" (omit zeros). If `plan.infeasibility` is set, append "· doesn't all fit" in `warning` with `exclamationmark.triangle`.
 - With no plan yet (`plan_id` null, onboarding): "Ready to confirm your projects".
 - **Review** opens the proposal review screen. The banner is not dismissible: the user must confirm or reject (principle 2).
-- In-memory only; lost on relaunch (contract gap G3).
+- Held in memory, and recovered on foreground or relaunch from `POST /gcal/sync`'s `pending_changeset` (G3 resolved 2026-11-16, T4.3).
 
 ## 7. Empty and edge states
 

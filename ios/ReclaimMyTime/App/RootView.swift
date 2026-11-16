@@ -40,7 +40,8 @@ struct RootView: View {
         .onChange(of: auth.phase, initial: true) { _, phase in
             model.handleAuthPhase(phase)
         }
-        .onChange(of: scenePhase) { _, phase in
+        // `initial`: a cold launch is already `.active` and must still run the foreground pass.
+        .onChange(of: scenePhase, initial: true) { _, phase in
             model.handleScenePhase(phase)
         }
     }

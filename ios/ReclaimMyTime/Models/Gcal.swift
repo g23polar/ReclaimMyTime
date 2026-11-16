@@ -30,6 +30,31 @@ struct GcalStatus: Codable, Hashable, Sendable {
     let connection: GoogleConnection?
 }
 
+/// `OutboxCounts`: write-back state of live blocks in the current and future weeks after the drain.
+/// Both 0 when Google Calendar is not connected.
+struct OutboxCounts: Codable, Hashable, Sendable {
+    /// Not yet written to Google (retried automatically).
+    let pending: Int
+    let synced: Int
+}
+
+/// `GcalSyncResult`: the `POST /gcal/sync` answer (D25).
+struct GcalSyncResult: Codable, Hashable, Sendable {
+    /// The user's current pending changeset, whatever its reason (at most one, D4), else nil.
+    let pendingChangeset: Changeset?
+    let outbox: OutboxCounts
+
+    private enum CodingKeys: String, CodingKey {
+        case outbox
+        case pendingChangeset = "pending_changeset"
+    }
+
+    init(pendingChangeset: Changeset?, outbox: OutboxCounts) {
+        self.pendingChangeset = pendingChangeset
+        self.outbox = outbox
+    }
+}
+
 /// `POST /gcal/complete` body: the `auth_code`/`state` pair from an `authorized` callback.
 struct GcalCompleteRequest: Codable, Hashable, Sendable {
     let authCode: String

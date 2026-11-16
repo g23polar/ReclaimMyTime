@@ -21,7 +21,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.busy import Busy, BusyWindow, fetch_window
-from app.api.deps import Maker, Now, Tx, UserId, transaction
+from app.api.deps import Maker, Now, UserId, transaction
 from app.api.outbox import kick_outbox
 from app.api.views import changeset_view
 from app.auth.dependencies import require_timezone
@@ -174,6 +174,14 @@ async def _restage(
 
 
 @router.post("/changesets/{changeset_id}/reject", operation_id="rejectChangeset")
-async def reject(user_id: UserId, tx: Tx, now: Now, changeset_id: uuid.UUID) -> dict[str, Any]:
-    await reject_changeset(tx, user_id, changeset_id, now=now)
-    return await changeset_view(tx, user_id, changeset_id)
+async def reject(
+    request: Request, user_id: UserId, maker: Maker, now: Now, changeset_id: uuid.UUID
+) -> dict[str, Any]:
+    async with transaction(maker) as tx:
+        repended = await reject_changeset(tx, user_id, changeset_id, now=now)
+        body = await changeset_view(tx, user_id, changeset_id)
+    if repended:
+        # A rejected `google_edit` (T4.3b): write our planned times back over the user's
+        # Google edits, after commit, in the background.
+        kick_outbox(request.app, user_id)
+    return body

@@ -57,6 +57,21 @@ final class CalendarConnectionModel {
     private(set) var activeUserId: UUID?
     /// The one-time "Google Calendar disconnected" banner (design/notifications.md §5).
     private(set) var showsRevokedBanner = false
+    /// The server answered 409 `gcal_reconnect_required` (a solving route or `POST /gcal/sync`)
+    /// since the last successful connect or sync. Kept even when `GET /gcal/status` still says
+    /// `active`: an undecryptable stored credential needs a reconnect but isn't `revoked`.
+    private(set) var needsReconnect = false
+
+    /// How a 409 `gcal_reconnect_required` raises the banner.
+    enum ReconnectAnnouncement: Sendable {
+        /// A change the user just tried was refused: always show the way out.
+        case always
+        /// Background/foreground sync: once per revocation, like §5's status-driven banner.
+        case oncePerRevocation
+    }
+
+    /// Marker for a revocation first learned from a 409 (no `revoked_at` to key it by).
+    static let reconnectRequiredMarker = "reconnect_required"
 
     private let api: any APIClient
     private let defaults: UserDefaults
@@ -89,6 +104,7 @@ final class CalendarConnectionModel {
         callout = nil
         isConnecting = false
         showsRevokedBanner = false
+        needsReconnect = false
         status = userId.flatMap { defaults.string(forKey: statusKey(for: $0)) }.flatMap(Status.init(rawValue:)) ?? .unknown
     }
 
@@ -141,6 +157,8 @@ final class CalendarConnectionModel {
                 }
                 let remote = try await api.completeGcalConnect(GcalCompleteRequest(authCode: authCode, state: state))
                 guard started == epoch else { return false }
+                // A fresh grant (and credential) replaces whatever needed reconnecting.
+                if remote.connection?.status == .active { needsReconnect = false }
                 applyRemote(remote)
                 guard status == .connected else {
                     logger.error("gcal complete returned no active connection")
@@ -188,14 +206,43 @@ final class CalendarConnectionModel {
         }
     }
 
+    /// A 409 `gcal_reconnect_required`: Settings shows Reconnect and the banner offers it. Ignored
+    /// when signed out. (The server never sends it to a user who never connected.)
+    func noteReconnectRequired(_ announcement: ReconnectAnnouncement) {
+        guard let activeUserId else { return }
+        needsReconnect = true
+        setStatus(.revoked)
+        let key = revokedBannerKey(for: activeUserId)
+        switch announcement {
+        case .always:
+            if defaults.string(forKey: key) == nil { defaults.set(Self.reconnectRequiredMarker, forKey: key) }
+            showsRevokedBanner = true
+        case .oncePerRevocation:
+            // Any marker means this revocation was already announced (by status or a 409).
+            guard defaults.string(forKey: key) == nil else { return }
+            defaults.set(Self.reconnectRequiredMarker, forKey: key)
+            showsRevokedBanner = true
+        }
+    }
+
+    /// `POST /gcal/sync` answered 200: whatever needed reconnecting no longer does. Status itself
+    /// stays with `GET /gcal/status`.
+    func noteSyncSucceeded() {
+        needsReconnect = false
+    }
+
     /// Applies a server `GcalStatus` (from `GET /gcal/status` or `POST /gcal/complete`).
     private func applyRemote(_ remote: GcalStatus) {
         if let connection = remote.connection {
             connectedEmail = connection.googleEmail
-            setStatus(connection.status == .active ? .connected : .revoked)
-            if connection.status == .active {
+            if connection.status == .active, needsReconnect {
+                // Active row, unusable credential: still a reconnect (see `needsReconnect`).
+                setStatus(.revoked)
+            } else if connection.status == .active {
+                setStatus(.connected)
                 clearRevokedBannerMarker()
             } else {
+                setStatus(.revoked)
                 raiseRevokedBannerOnce(revokedAt: connection.revokedAt)
             }
         } else {
@@ -219,7 +266,13 @@ final class CalendarConnectionModel {
         guard let activeUserId else { return }
         let marker = revokedAt.map { String($0.timeIntervalSince1970) } ?? "revoked"
         let key = revokedBannerKey(for: activeUserId)
-        guard defaults.string(forKey: key) != marker else { return }
+        let stored = defaults.string(forKey: key)
+        if stored == Self.reconnectRequiredMarker {
+            // A 409 already announced this revocation; key it by `revoked_at` from now on.
+            defaults.set(marker, forKey: key)
+            return
+        }
+        guard stored != marker else { return }
         defaults.set(marker, forKey: key)
         showsRevokedBanner = true
     }

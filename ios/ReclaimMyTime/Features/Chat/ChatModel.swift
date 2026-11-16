@@ -29,8 +29,8 @@ final class ChatModel {
         enum Content: Hashable, Sendable {
             case agent(text: String, state: AgentBubbleState, status: AgentPhase?)
             case user(text: String)
-            /// "Couldn't reach the assistant." + Retry.
-            case failure
+            /// A failed turn + Retry. Nothing from the turn was staged.
+            case failure(TurnFailure)
             /// The in-chat preferences cards.
             case preferences
         }
@@ -45,6 +45,21 @@ final class ChatModel {
             self.id = id
             self.content = content
             self.changeset = changeset
+        }
+    }
+
+    /// Why a turn failed; picks the failure row's copy.
+    enum TurnFailure: Hashable, Sendable {
+        /// Transport, upstream LLM, or anything else: "Couldn't reach the assistant."
+        case unreachable
+        /// In-stream (or pre-stream) `gcal_reconnect_required` / `gcal_unavailable` (T4.2).
+        case gcal(GcalSolveFailure)
+
+        var message: String {
+            switch self {
+            case .unreachable: "Couldn't reach the assistant."
+            case .gcal(let failure): failure.message
+            }
         }
     }
 
@@ -95,7 +110,8 @@ final class ChatModel {
     }
 
     var hasFailedTurn: Bool {
-        entries.last?.content == .failure
+        if case .failure? = entries.last?.content { return true }
+        return false
     }
 
     // MARK: intents
@@ -119,7 +135,7 @@ final class ChatModel {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isStreaming, !trimmed.isEmpty else { return }
         let content = String(trimmed.prefix(Self.maxMessageLength))
-        entries.removeAll { $0.content == .failure }
+        entries.removeAll(where: Self.isFailure)
         entries.append(Entry(content: .user(text: content)))
         transcript.append(TranscriptMessage(role: .user, content: content))
         await runTurn()
@@ -129,7 +145,7 @@ final class ChatModel {
     /// endpoint is not idempotent and has no resume, NOTES "SSE").
     func retry() async {
         guard !isStreaming, hasFailedTurn, transcript.last?.role == .user else { return }
-        entries.removeAll { $0.content == .failure }
+        entries.removeAll(where: Self.isFailure)
         await runTurn()
     }
 
@@ -314,11 +330,17 @@ final class ChatModel {
     }
 
     /// On `error` (or a pre-stream failure) nothing was staged: discard the streamed text and show
-    /// the Retry row. The user's message stays in the transcript, so Retry resends it.
+    /// the Retry row. The user's message stays in the transcript, so Retry resends it. A Google
+    /// reconnect also raised the banner (client hook); the row says the change wasn't applied.
     private func fail(_ id: UUID, code: String?) {
         logger.notice("Agent turn failed: \(code ?? "transport", privacy: .public)")
         entries.removeAll { $0.id == id }
-        entries.append(Entry(content: .failure))
+        entries.append(Entry(content: .failure(GcalSolveFailure(code: code).map(TurnFailure.gcal) ?? .unreachable)))
+    }
+
+    private static func isFailure(_ entry: Entry) -> Bool {
+        if case .failure = entry.content { return true }
+        return false
     }
 
     private func update(_ id: UUID, _ content: Entry.Content) {

@@ -33,6 +33,6 @@ Decision: **4-tab `TabView`: Week · Chat · Projects · Settings.** These are t
 |---|---|---|---|
 | G1 | No route exposes busy intervals to the client (ARCH §4 `busy` stays server-side). | The timetable can't draw calendar busy time, and drag can't pre-check calendar collisions. | Specify the busy layer fully. Render it only when data exists. Until then, calendar collisions surface after the drop as `pin_invalidated` (`conflicts_with: busy`). Suggest adding `busy: [Span]` to `WeekPlan`. It's intervals only, so the privacy rule still holds. |
 | G2 | `Block` has no pinned flag. | Pin glyph needs a join. | Client joins `GET /pins` (`kind: pin`) to blocks on `project_id` + exact span equality. |
-| G3 | No way to fetch the pending changeset (O2). | A relaunch mid-review loses the banner. | The banner state is held in memory. Relaunch shows no banner until the next write. |
+| G3 | ~~No way to fetch the pending changeset (O2).~~ Resolved 2026-11-16 (T4.3, D25). | — | `POST /gcal/sync` returns `pending_changeset`; the app calls it on foreground and relaunch, so the banner is restored. |
 | G4 | Changesets have no TTL. "Expiry" only happens through supersession (D4) or a 409. | No countdown UI. | Expiry is handled reactively (see `diff-and-infeasibility.md` §4). |
 | G5 | `remaining_minutes` isn't exposed (O4). | No burn-down on project rows. | Project rows show targets, not progress. |

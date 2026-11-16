@@ -35,11 +35,14 @@ from app.scheduler import Interval
 
 __all__ = [
     "OutboxCounts",
+    "IngestCandidates",
     "OutboxItem",
+    "SyncedRow",
     "claim_deletes",
     "claim_upserts",
     "counts",
     "event_id_for",
+    "ingest_candidates",
     "record_deleted",
     "record_synced",
     "repend_current",
@@ -344,3 +347,79 @@ async def counts(tx: AsyncSession, user_id: uuid.UUID, now: datetime) -> OutboxC
     ).all()
     by_status = {str(status): int(n) for status, n in rows}
     return OutboxCounts(pending=by_status.get("pending", 0), synced=by_status.get("synced", 0))
+
+
+# ---------------------------------------------------------------- ingest (T4.3b)
+
+
+@dataclass(frozen=True)
+class SyncedRow:
+    """A live, synced, not-yet-started block whose event the ingest compares with Google."""
+
+    block_id: uuid.UUID
+    lineage_id: uuid.UUID
+    span: Interval
+    plan_horizon: Interval
+    event_id: str
+    etag: str | None
+
+
+@dataclass(frozen=True)
+class IngestCandidates:
+    window: Interval | None  # union of the live current/future plan horizons; None: no plan
+    rows: tuple[SyncedRow, ...] = ()
+
+
+async def ingest_candidates(
+    tx: AsyncSession, user_id: uuid.UUID, now: datetime
+) -> IngestCandidates:
+    """What the Google-edit ingest compares (a read; no lock: everything is re-validated
+    under the lock before any write). Only `synced` rows that have not started: a `pending`
+    row has our own write in flight, and past/in-progress blocks are immutable."""
+    plans = (
+        await tx.execute(
+            select(WeekPlan.horizon).where(
+                WeekPlan.user_id == user_id,
+                WeekPlan.status == "live",
+                func.upper(WeekPlan.horizon) > now,
+            )
+        )
+    ).scalars()
+    horizons = [to_interval(h) for h in plans]
+    if not horizons:
+        return IngestCandidates(window=None)
+    window = Interval(start=min(h.start for h in horizons), end=max(h.end for h in horizons))
+    found = (
+        await tx.execute(
+            select(
+                Block.id,
+                Block.lineage_id,
+                Block.span,
+                WeekPlan.horizon,
+                Block.gcal_event_id,
+                Block.gcal_etag,
+            )
+            .join(WeekPlan, _live_current_plans(now))
+            .where(
+                Block.user_id == user_id,
+                Block.gcal_status == "synced",
+                Block.gcal_event_id.is_not(None),
+                func.lower(Block.span) > now,
+            )
+            .order_by(func.lower(Block.span), Block.id)
+        )
+    ).all()
+    return IngestCandidates(
+        window=window,
+        rows=tuple(
+            SyncedRow(
+                block_id=bid,
+                lineage_id=lid,
+                span=to_interval(span),
+                plan_horizon=to_interval(horizon),
+                event_id=event_id,
+                etag=etag,
+            )
+            for bid, lid, span, horizon, event_id, etag in found
+        ),
+    )

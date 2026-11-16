@@ -188,6 +188,8 @@ final class PreferencesFormModel {
             phase = .editing
             if let apiError = error as? APIError, let body = apiError.errorBody, body.code == KnownErrorCode.validationFailed {
                 submitError = body.validationFields.first?.message ?? "Those hours didn't work. Check them and try again."
+            } else if let gcal = GcalSolveFailure(error) {
+                submitError = gcal.message
             } else if !(error is CancellationError) {
                 submitError = "Couldn't send that. Nothing changed; try again."
             }

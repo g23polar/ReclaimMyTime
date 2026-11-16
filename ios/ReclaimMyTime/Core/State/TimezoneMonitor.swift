@@ -121,7 +121,7 @@ final class TimezoneMonitor {
         } catch {
             guard started == generation else { return false }
             logger.notice("Re-plan for a new time zone failed")
-            replanError = "Couldn't re-plan right now. Nothing changed; try again."
+            replanError = GcalSolveFailure(error)?.message ?? "Couldn't re-plan right now. Nothing changed; try again."
             return false
         }
     }

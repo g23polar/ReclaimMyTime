@@ -33,7 +33,7 @@ sentence rather than a form or a drag-and-drop session.
 4. **Adjust mid-week.** "I don't have my laptop today or tomorrow" becomes a temporary
    availability exception. Only the rest of the week is re-solved: laptop work moves later,
    other work may move earlier to fill the gap, and you review the diff before accepting.
-5. **Write back and remind** *(in progress)*. Confirmed blocks go to a dedicated
+5. **Write back and remind.** Confirmed blocks go to a dedicated
    "ReclaimMyTime" calendar in Google Calendar, and local notifications fire at block start.
 
 ## Design principles
@@ -110,7 +110,7 @@ server/
     api/        REST routers (projects, preferences, exceptions, pins, blocks, plans, changesets)
     auth/       Sign in with Apple verification, sessions, account deletion
     db/         SQLAlchemy models, solver I/O, write paths
-    gcal/       Google Calendar integration (in progress)
+    gcal/       Google Calendar integration (OAuth, free/busy, write-back, edit ingestion, drift)
   alembic/      Migrations
   tests/        Unit, property, golden-replay, contract and Postgres-backed tests
 ```
@@ -127,7 +127,7 @@ server/
 | Google Calendar: OAuth connect (PKCE, bearer-bound completion), status, disconnect with revocation | Done |
 | Google Calendar: free/busy reads on every solve (primary calendar; fails closed when Google is unreachable or the grant is revoked) | Done |
 | Google Calendar: write-back of confirmed blocks to a dedicated "ReclaimMyTime" calendar (idempotent outbox, retried on sync) | Done |
-| Google Calendar: edits made in Google flow back as pins, drift detection | In progress |
+| Google Calendar: edits made in Google flow back as pins (applied directly when nothing else moves, otherwise proposed), drift detection | Done |
 | Live end-to-end integration (iOS app against the real server) | Not started |
 | Onboarding intent-narrative illustrations | Placeholder in the app |
 

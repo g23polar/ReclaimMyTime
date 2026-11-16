@@ -34,6 +34,10 @@ final class TimetableModel {
         case unreachable
         case failed
         case syncFailed
+        /// 409 `gcal_reconnect_required` on a block edit/delete (T4.2); the banner offers Reconnect.
+        case gcalReconnectRequired
+        /// 503 `gcal_unavailable` on a block edit/delete (T4.2).
+        case gcalUnavailable
 
         var id: Self { self }
 
@@ -45,6 +49,8 @@ final class TimetableModel {
             case .unreachable: "Couldn't reach the server. Nothing changed; try again."
             case .failed: "That didn't work. Nothing changed."
             case .syncFailed: "This block didn't reach Google Calendar yet. We'll keep trying."
+            case .gcalReconnectRequired: GcalSolveFailure.reconnectRequired.message
+            case .gcalUnavailable: GcalSolveFailure.unavailable.message
             }
         }
     }
@@ -461,6 +467,7 @@ final class TimetableModel {
             if let apiError = error as? APIError, case .server(_, let message, _, _) = apiError, apiError.serverCode == KnownErrorCode.validationFailed {
                 return .failed(message)
             }
+            if let gcal = GcalSolveFailure(error) { return .failed(gcal.message) }
             return .failed("Couldn't do that. Nothing changed; try again.")
         }
     }
@@ -579,6 +586,10 @@ final class TimetableModel {
         case KnownErrorCode.blockNotStarted:
             notice = .notStarted
             await load()
+        case KnownErrorCode.gcalReconnectRequired:
+            notice = .gcalReconnectRequired
+        case KnownErrorCode.gcalUnavailable:
+            notice = .gcalUnavailable
         default:
             if case .transport = apiError {
                 notice = .unreachable

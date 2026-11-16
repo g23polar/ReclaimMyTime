@@ -2,9 +2,13 @@ import Foundation
 
 /// `Changeset`: staged mutations + proposed plan + diff. `planId`, `plan` and `diff` are all set
 /// or all nil (nil during onboarding before preferences exist). Nothing is applied until confirm.
+/// `staged` is empty only for a `drift` re-solve (D25, O11) or a `google_edit` whose Google-side
+/// move was already applied, leaving only the knock-on re-plan (T4.3b); decoding rejects an empty
+/// list for any other reason, mirroring the schema's `if`/`then`.
 struct Changeset: Codable, Hashable, Sendable, Identifiable {
     let id: UUID
     let status: ChangesetStatus
+    let reason: ChangesetReason
     let planId: UUID?
     let staged: [StagedMutation]
     let createdAt: Date
@@ -15,10 +19,65 @@ struct Changeset: Codable, Hashable, Sendable, Identifiable {
     let narration: String?
 
     private enum CodingKeys: String, CodingKey {
-        case id, status, staged, plan, diff, narration
+        case id, status, reason, staged, plan, diff, narration
         case planId = "plan_id"
         case createdAt = "created_at"
         case resolvedAt = "resolved_at"
+    }
+
+    init(
+        id: UUID,
+        status: ChangesetStatus,
+        reason: ChangesetReason,
+        planId: UUID?,
+        staged: [StagedMutation],
+        createdAt: Date,
+        resolvedAt: Date?,
+        plan: WeekPlan?,
+        diff: PlanDiff?,
+        narration: String?
+    ) {
+        self.id = id
+        self.status = status
+        self.reason = reason
+        self.planId = planId
+        self.staged = staged
+        self.createdAt = createdAt
+        self.resolvedAt = resolvedAt
+        self.plan = plan
+        self.diff = diff
+        self.narration = narration
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        status = try container.decode(ChangesetStatus.self, forKey: .status)
+        reason = try container.decode(ChangesetReason.self, forKey: .reason)
+        planId = try container.decodeIfPresent(UUID.self, forKey: .planId)
+        staged = try container.decode([StagedMutation].self, forKey: .staged)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        resolvedAt = try container.decodeIfPresent(Date.self, forKey: .resolvedAt)
+        plan = try container.decodeIfPresent(WeekPlan.self, forKey: .plan)
+        diff = try container.decodeIfPresent(PlanDiff.self, forKey: .diff)
+        narration = try container.decodeIfPresent(String.self, forKey: .narration)
+        if staged.isEmpty, !reason.allowsEmptyStaged {
+            throw DecodingError.dataCorruptedError(forKey: .staged, in: container, debugDescription: "staged may be empty only when reason is drift or google_edit")
+        }
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(status, forKey: .status)
+        try container.encode(reason, forKey: .reason)
+        try container.encode(planId, forKey: .planId)
+        try container.encode(staged, forKey: .staged)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(resolvedAt, forKey: .resolvedAt)
+        try container.encode(plan, forKey: .plan)
+        try container.encode(diff, forKey: .diff)
+        try container.encode(narration, forKey: .narration)
     }
 }
 

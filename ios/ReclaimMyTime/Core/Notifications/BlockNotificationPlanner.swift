@@ -55,6 +55,17 @@ enum NotificationCopy {
     static func drift(project: String, startText: String) -> (title: String, body: String) {
         ("A meeting landed on your plan", "\(project) at \(startText) clashes with something new in your calendar. Tap to see a fix.")
     }
+
+    /// Not in design/: a `google_edit` proposal (D25). The title matches the in-app banner.
+    static func googleEdit(project: String, startText: String) -> (title: String, body: String) {
+        ("You moved a block in Google Calendar", "\(project) is now at \(startText). Tap to review how the rest of your week fits.")
+    }
+
+    /// google_edit with empty `staged`: the move or delete is already live (T4.3b).
+    static let googleEditApplied = (title: "You moved a block in Google Calendar", body: "Your change is in. Tap to review how the rest of your week fits.")
+
+    /// google_edit whose staged change names no block (nothing applied yet). Not in design/.
+    static let googleEditUnnamed = (title: "You moved a block in Google Calendar", body: "Tap to review the change to your week.")
 }
 
 /// What the scheduler plans from: the live plan plus the reference data the copy needs.

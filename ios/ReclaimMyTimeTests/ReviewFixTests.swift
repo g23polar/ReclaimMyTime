@@ -6,18 +6,28 @@ import XCTest
 /// Holds every request until the test releases it, then answers 401 `unauthenticated`.
 actor GatedUnauthorizedTransport: HTTPTransport {
     private var waiters: [CheckedContinuation<Void, Never>] = []
+    /// Releases that arrived before their request did; consumed on arrival. Without this a
+    /// release racing ahead of a slow request was dropped and the test hung forever.
+    private var earlyReleases = 0
     private(set) var authorizationHeaders: [String?] = []
 
     var pendingCount: Int { waiters.count }
 
     func releaseNext() {
-        guard !waiters.isEmpty else { return }
+        guard !waiters.isEmpty else {
+            earlyReleases += 1
+            return
+        }
         waiters.removeFirst().resume()
     }
 
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         authorizationHeaders.append(request.value(forHTTPHeaderField: "Authorization"))
-        await withCheckedContinuation { waiters.append($0) }
+        if earlyReleases > 0 {
+            earlyReleases -= 1
+        } else {
+            await withCheckedContinuation { waiters.append($0) }
+        }
         let body = try JSONCoding.makeEncoder().encode(ErrorEnvelope(error: ErrorBody(code: "unauthenticated", message: "expired")))
         let response = HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
         return (body, response)
@@ -75,7 +85,7 @@ final class DelayedUnauthorizedTests: XCTestCase {
         let a1 = Task { try? await api.getMe() }
         let a2 = Task { try? await api.getMe() }
         // Both requests have been built (with session A) and are in flight.
-        for _ in 0..<200 where await transport.pendingCount < 2 {
+        for _ in 0..<1000 where await transport.pendingCount < 2 {  // up to 5 s under load
             try await Task.sleep(for: .milliseconds(5))
         }
         let pending = await transport.pendingCount

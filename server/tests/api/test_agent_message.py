@@ -379,3 +379,31 @@ async def test_reshow_after_state_moved_reproposes(agent_app, client, fake, make
     assert done["changeset"]["id"] != str(base) and done["changeset"]["status"] == "pending"
     statuses = {cs_id: status for cs_id, status, _ in await changesets(maker, who.user_id)}
     assert statuses[base] == "expired"
+
+
+# ---------------------------------------------------------------- T4.3b: discard → drain kick
+
+
+@pytest.mark.parametrize("repended", [0, 2])
+async def test_discarding_kicks_the_outbox_only_when_reject_repended(
+    maker, who, monkeypatch, repended
+):
+    # Discarding a pending `google_edit` (reject re-pends blocks) must write our planned
+    # times back, like the REST reject route; other discards must not kick.
+    import app.agent.router as router_mod
+
+    base = await propose(maker, who.user_id, [EXTRA], now=NOW, horizon=None)
+
+    async def fake_reject(tx, user_id, changeset_id, *, now):
+        assert changeset_id == base
+        return repended
+
+    monkeypatch.setattr(router_mod, "reject_changeset", fake_reject)
+    kicks: list[int] = []
+    proposer = DbProposer(
+        maker, who.user_id, now=NOW, device_tz="America/Los_Angeles", committed_names={},
+        pending_id=base, busy=GcalBusy(maker, _no_google), kick_outbox=lambda: kicks.append(1),
+    )  # fmt: skip
+    solve = await proposer.commit([])
+    assert (solve.changeset, solve.narration) == (None, None)
+    assert kicks == ([1] if repended else [])

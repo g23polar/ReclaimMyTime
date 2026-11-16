@@ -55,6 +55,10 @@ protocol APIClient: Sendable {
     /// state. Errors: 400 `gcal_state_invalid`, 422 `gcal_scope_insufficient`, 502 `gcal_exchange_failed`.
     func completeGcalConnect(_ request: GcalCompleteRequest) async throws -> GcalStatus
     func disconnectGcal() async throws
+    /// `POST /gcal/sync` (D25): drains the write-back outbox and returns the user's pending
+    /// changeset, if any. 200 with zero counts when Google was never connected. Errors: 409
+    /// `gcal_reconnect_required`, 503 `gcal_unavailable`.
+    func syncGcal() async throws -> GcalSyncResult
 }
 
 extension APIClient {
@@ -76,6 +80,9 @@ struct Endpoint: Sendable {
     /// Overrides the stored session's token for this request.
     var bearerToken: String?
     var acceptsEventStream = false
+    /// Whether a 409 `gcal_reconnect_required` from this route fires the client's reconnect hook.
+    /// False for `POST /gcal/sync`, whose caller announces it once per revocation instead.
+    var reportsGcalReconnect = true
 }
 
 extension UUID {

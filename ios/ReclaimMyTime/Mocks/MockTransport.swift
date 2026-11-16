@@ -27,6 +27,9 @@ actor MockTransport: HTTPTransport {
         "updateProject": "weekly_target",
         "deletePin": "forbid",
         "getPlanDiff": "laptop",
+        // Connected and drained, nothing pending (matches `getGcalStatus: connected`). Falls back
+        // to the first 2xx case (`not_connected`) if the fixture is ever renamed.
+        "syncGcal": "ok",
     ]
 
     /// `PATCH /blocks/{id}` response depends on the action, not just the route.
@@ -43,7 +46,8 @@ actor MockTransport: HTTPTransport {
     private let frameDelay: Duration
     private let logger = Logger(subsystem: "com.reclaimmytime.app", category: "mock")
 
-    init(fixtures: [Fixture], frameDelay: Duration = .milliseconds(120)) {
+    /// - Parameter variants: initial `setVariant` overrides (operationId → case).
+    init(fixtures: [Fixture], frameDelay: Duration = .milliseconds(120), variants: [String: String] = [:]) {
         var byOperation: [String: [Fixture]] = [:]
         var routes: [(String, [String], String)] = []
         for fixture in fixtures {
@@ -58,12 +62,13 @@ actor MockTransport: HTTPTransport {
             lhs.1.filter { $0.hasPrefix("{") }.count < rhs.1.filter { $0.hasPrefix("{") }.count
         }
         self.frameDelay = frameDelay
+        self.overrides = variants
     }
 
     /// Loads the fixtures bundled with the app. Missing fixtures yield an empty mock (every route 404s).
-    static func bundled(frameDelay: Duration = .milliseconds(120)) -> MockTransport {
+    static func bundled(frameDelay: Duration = .milliseconds(120), variants: [String: String] = [:]) -> MockTransport {
         let fixtures = FixtureLoader.bundledDirectory().flatMap { try? FixtureLoader.loadMockFixtures(from: $0) } ?? []
-        return MockTransport(fixtures: fixtures, frameDelay: frameDelay)
+        return MockTransport(fixtures: fixtures, frameDelay: frameDelay, variants: variants)
     }
 
     // MARK: test / debug hooks

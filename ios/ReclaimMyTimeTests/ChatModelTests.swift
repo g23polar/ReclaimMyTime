@@ -54,7 +54,7 @@ final class ChatStreamingTests: XCTestCase {
         await h.mock.setVariant("upstream_error", for: "postAgentMessage")
         await h.chat.submit("I don't have my laptop today or tomorrow.")
 
-        XCTAssertEqual(h.chat.entries.last?.content, .failure)
+        XCTAssertEqual(h.chat.entries.last?.content, .failure(.unreachable))
         XCTAssertTrue(h.chat.hasFailedTurn)
         XCTAssertFalse(h.chat.entries.contains { if case .agent(let text, _, _) = $0.content { text.contains("Got it: no laptop") } else { false } },
                        "streamed text from a failed turn is discarded")
@@ -75,7 +75,7 @@ final class ChatStreamingTests: XCTestCase {
         let h = try T52Harness()
         await h.mock.setVariant("last_not_user", for: "postAgentMessage")
         await h.chat.submit("hello")
-        XCTAssertEqual(h.chat.entries.last?.content, .failure)
+        XCTAssertEqual(h.chat.entries.last?.content, .failure(.unreachable))
         XCTAssertFalse(h.chat.isStreaming)
     }
 

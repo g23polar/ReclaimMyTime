@@ -6,6 +6,8 @@ import OSLog
 /// Every request carries `X-Timezone` (device IANA zone) and, when a session exists,
 /// `Authorization: Bearer`. A 401 `unauthenticated` clears the stored session and fires
 /// `onUnauthenticated` (NOTES.md: discard the token and sign in again). Tokens are never logged.
+/// A 409 `gcal_reconnect_required` from a solving route (HTTP or in-stream) fires
+/// `onGcalReconnectRequired` so the app can show the reconnect banner wherever the write started.
 final class URLSessionAPIClient: APIClient {
     private let baseURL: URL
     private let transport: any HTTPTransport
@@ -14,6 +16,8 @@ final class URLSessionAPIClient: APIClient {
     /// Receives the rejected bearer token so auth can ignore a late notification for a session
     /// that has since been replaced.
     private let onUnauthenticated: (@Sendable (_ rejectedToken: String?) async -> Void)?
+    /// Receives the bearer the refused request carried (see `onUnauthenticated`).
+    private let onGcalReconnectRequired: (@Sendable (_ sentToken: String?) async -> Void)?
     private let logger = Logger(subsystem: "com.reclaimmytime.app", category: "api")
 
     init(
@@ -21,13 +25,15 @@ final class URLSessionAPIClient: APIClient {
         transport: any HTTPTransport,
         sessionStore: SessionStore,
         timeZoneIdentifier: @escaping @Sendable () -> String = { TimeZone.current.identifier },
-        onUnauthenticated: (@Sendable (_ rejectedToken: String?) async -> Void)? = nil
+        onUnauthenticated: (@Sendable (_ rejectedToken: String?) async -> Void)? = nil,
+        onGcalReconnectRequired: (@Sendable (_ sentToken: String?) async -> Void)? = nil
     ) {
         self.baseURL = baseURL
         self.transport = transport
         self.sessionStore = sessionStore
         self.timeZoneIdentifier = timeZoneIdentifier
         self.onUnauthenticated = onUnauthenticated
+        self.onGcalReconnectRequired = onGcalReconnectRequired
     }
 
     // MARK: auth
@@ -193,7 +199,7 @@ final class URLSessionAPIClient: APIClient {
             } catch {
                 throw Self.mapTransportError(error)
             }
-            throw await handleFailure(status: response.statusCode, body: body, sentToken: sentToken)
+            throw await handleFailure(status: response.statusCode, body: body, sentToken: sentToken, endpoint: endpoint)
         }
 
         let decoder = JSONCoding.makeDecoder()
@@ -208,6 +214,9 @@ final class URLSessionAPIClient: APIClient {
                         throw APIError.decodingFailure(error)
                     }
                     guard let event else { continue }
+                    if case .error(let body) = event, body.code == KnownErrorCode.gcalReconnectRequired {
+                        await onGcalReconnectRequired?(sentToken)
+                    }
                     continuation.yield(event)
                     if event.isTerminal { return } // exactly one terminal event; ignore anything after
                 }
@@ -249,6 +258,10 @@ final class URLSessionAPIClient: APIClient {
         try await sendExpectingNoContent(Endpoint(method: .delete, path: "/gcal"))
     }
 
+    func syncGcal() async throws -> GcalSyncResult {
+        try await send(Endpoint(method: .post, path: "/gcal/sync", reportsGcalReconnect: false))
+    }
+
     // MARK: plumbing
 
     private func send<Response: Decodable>(_ endpoint: Endpoint) async throws -> Response {
@@ -271,15 +284,18 @@ final class URLSessionAPIClient: APIClient {
             throw Self.mapTransportError(error)
         }
         guard (200..<300).contains(response.statusCode) else {
-            throw await handleFailure(status: response.statusCode, body: data, sentToken: sentToken)
+            throw await handleFailure(status: response.statusCode, body: data, sentToken: sentToken, endpoint: endpoint)
         }
         return (data, response)
     }
 
     /// `sentToken` is the bearer the failed request carried. The local session is cleared (and auth
     /// notified) only if it is still that same session: a late 401 for a replaced session is ignored.
-    private func handleFailure(status: Int, body: Data, sentToken: String?) async -> APIError {
+    private func handleFailure(status: Int, body: Data, sentToken: String?, endpoint: Endpoint) async -> APIError {
         let error = APIError.from(status: status, body: body, decoder: JSONCoding.makeDecoder())
+        if endpoint.reportsGcalReconnect, error.serverCode == KnownErrorCode.gcalReconnectRequired {
+            await onGcalReconnectRequired?(sentToken)
+        }
         if status == 401, error.isUnauthenticated {
             if await sessionStore.clear(ifToken: sentToken) {
                 logger.notice("Session rejected by server (401 unauthenticated); cleared local session")

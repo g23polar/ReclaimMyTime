@@ -81,8 +81,8 @@ struct ChatEntryView: View {
             }
         case .user(let text):
             UserBubble(text: text)
-        case .failure:
-            ChatFailureRow { model.chat.retryFromView() }
+        case .failure(let failure):
+            ChatFailureRow(message: failure.message) { model.chat.retryFromView() }
         case .preferences:
             if let preferences = model.chat.preferences {
                 PreferencesStepView(form: preferences)
@@ -183,14 +183,16 @@ struct AgentStatusLine: View {
 }
 
 struct ChatFailureRow: View {
+    let message: String
     let retry: () -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: Spacing.s)) : AnyLayout(HStackLayout(spacing: Spacing.s))
         layout {
-            Label("Couldn't reach the assistant.", systemImage: "exclamationmark.triangle")
+            Label(message, systemImage: "exclamationmark.triangle")
                 .font(.rmt.callout)
+                .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(ColorToken.warning)
             if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 0) }
             Button("Retry", action: retry)
@@ -246,7 +248,7 @@ struct ChatComposer: View {
             UserBubble(text: "A portfolio site, due mid-December.")
             AgentBubble(text: "", state: .thinking)
             AgentStatusLine(phase: .solving)
-            ChatFailureRow {}
+            ChatFailureRow(message: ChatModel.TurnFailure.unreachable.message) {}
         }
         .padding()
     }
@@ -258,7 +260,7 @@ struct ChatComposer: View {
         VStack(spacing: Spacing.m) {
             AgentBubble(text: ChatModel.openingMessage, state: .done)
             UserBubble(text: "A portfolio site, due mid-December.")
-            ChatFailureRow {}
+            ChatFailureRow(message: ChatModel.TurnFailure.unreachable.message) {}
         }
         .padding()
     }

@@ -7,6 +7,8 @@ CLAUDE.md rules 1, 2, 3, 5).
   user_tags, and writes the `mutations` trace row in the same transaction.
 - `stage_changeset` / `confirm_changeset` / `reject_changeset` implement propose → confirm.
 - `sweep_past_blocks` / `mark_block_state` are the only block-state writes.
+- `apply_google_edits` is the only path that applies an edit made in Google Calendar
+  directly (T4.3b, "hybrid"); `propose_drift` stages the drift re-solve.
 
 Transaction discipline (same as app/auth/repository.py): the caller owns `tx` and commits;
 nothing here commits or rolls back. A raised exception means the caller must roll back.
@@ -18,9 +20,9 @@ exact key auth uses. Nothing reads the clock: `now` is injected and also stamps 
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -71,7 +73,16 @@ from app.db.solver_io import (
     week_horizon,
     week_start_for,
 )
-from app.scheduler import Interval, PlannedBlock, SolverInput, SolverOutput, Violation, pack, verify
+from app.scheduler import (
+    Infeasibility,
+    Interval,
+    PlannedBlock,
+    SolverInput,
+    SolverOutput,
+    Violation,
+    pack,
+    verify,
+)
 
 __all__ = [
     "BlockNotFound",
@@ -81,11 +92,14 @@ __all__ = [
     "ChangesetNotPending",
     "ChangesetStale",
     "ConfirmResult",
+    "GoogleEdit",
+    "GoogleEditOutcome",
     "InvalidMutation",
     "PlanVerificationError",
     "PreferencesNotSet",
     "Reason",
     "WritePathError",
+    "apply_google_edits",
     "apply_mutation",
     "carry_forward",
     "confirm_changeset",
@@ -95,6 +109,7 @@ __all__ = [
     "persist_plan",
     "preview_carry_forward",
     "propose_changeset",
+    "propose_drift",
     "reject_changeset",
     "solve_horizon",
     "stage_changeset",
@@ -107,6 +122,8 @@ __all__ = [
 # staging is `user_edit`, agent turns `agent`; `drift` / `google_edit` come from T4.3 part (b).
 Reason = Literal["user_edit", "agent", "drift", "google_edit"]
 _REASON_BY_SOURCE: dict[str, Reason] = {"agent": "agent", "manual": "user_edit"}
+# Reasons whose changeset may stage no mutation (D25; google_edit added 2026-11-16, T4.3b).
+_MAY_STAGE_NOTHING: frozenset[str] = frozenset({"drift", "google_edit"})
 
 
 def _reason_for(source: str, reason: Reason | None) -> Reason:
@@ -793,6 +810,7 @@ async def stage_changeset(
     timezone: str | None = None,
     source: Literal["agent", "manual", "system"] = "agent",
     reason: Reason | None = None,
+    created_at: datetime | None = None,
 ) -> uuid.UUID:
     """Insert a pending changeset (+ its proposed plan when a solve was possible).
 
@@ -805,13 +823,18 @@ async def stage_changeset(
     `solver_input`/`solver_output` must both be given or both be None (onboarding before
     preferences: plan_id null). `timezone` defaults to the overlaid preferences timezone.
     `reason` (contract `Changeset.reason`) defaults from `source` (`_reason_for`). An empty
-    `staged` list is allowed only for a `drift` re-solve (contract D25, resolving O11).
+    `staged` list is allowed only for a `drift` re-solve (contract D25, resolving O11) and for
+    a `google_edit` knock-on re-solve whose pin was already applied directly (2026-11-16,
+    T4.3b). `created_at` (default `now`) stamps the changeset row only; a restage passes a
+    write-time stamp later than the changeset it replaces (T4.3b review round 2).
     """
     if (solver_input is None) != (solver_output is None):
         raise ValueError("solver_input and solver_output go together")
     reason = _reason_for(source, reason)
-    if not staged_mutations and reason != "drift":
-        raise InvalidMutation("validation_failed", "only a drift changeset may stage no mutations")
+    if not staged_mutations and reason not in _MAY_STAGE_NOTHING:
+        raise InvalidMutation(
+            "validation_failed", "only a drift or google_edit changeset may stage no mutations"
+        )
     await lock_user(tx, user_id)
     if solver_input is not None:
         # M1+M2 gate: ended work is `completed` before anything is stored against it.
@@ -882,7 +905,7 @@ async def stage_changeset(
             staged=dump_staged(staged),
             status="pending",
             reason=reason,
-            created_at=now,
+            created_at=now if created_at is None else created_at,
         )
     )
     if plan_id is not None:
@@ -970,6 +993,7 @@ async def propose_changeset(
     busy: Sequence[Interval] = (),
     source: Literal["agent", "manual", "system"] = "agent",
     reason: Reason | None = None,
+    created_at: datetime | None = None,
 ) -> uuid.UUID:
     """Convenience for T2.3/T3: solve the hypothetical state (committed + staged) over the
     current preference week (`expected_horizon` of the overlaid preferences, unless an
@@ -984,7 +1008,9 @@ async def propose_changeset(
     staged = parse_staged(staged_mutations)
     state = overlay(await load_constraint_state(tx, user_id), staged)
     if state.preferences is None:
-        return await stage_changeset(tx, user_id, staged, now=now, source=source, reason=reason)
+        return await stage_changeset(
+            tx, user_id, staged, now=now, source=source, reason=reason, created_at=created_at
+        )
     tz = state.preferences.timezone
     if horizon is None:
         horizon = expected_horizon(now, tz, state.preferences.week_start)
@@ -1001,6 +1027,7 @@ async def propose_changeset(
         timezone=tz,
         source=source,
         reason=reason,
+        created_at=created_at,
     )
 
 
@@ -1268,16 +1295,33 @@ async def confirm_changeset(
 
 async def reject_changeset(
     tx: AsyncSession, user_id: uuid.UUID, changeset_id: uuid.UUID, *, now: datetime
-) -> None:
+) -> int:
     """Plan → `rejected`, staged projects deleted (O1), constraint state untouched.
-    Idempotent on an already-rejected changeset; other non-pending → ChangesetNotPending."""
+    Idempotent on an already-rejected changeset; other non-pending → ChangesetNotPending.
+
+    Rejecting a `google_edit` changeset that carries staged pins (case iii: nothing was
+    applied) undoes the edit made in Google (user decision 2026-11-16, T4.3b): the live blocks
+    its pins came from go back to `pending`, so the write-back puts our planned time back over
+    the user's event and the next sync sees our etag (nothing is re-proposed). An empty
+    `google_edit` (the edit already went live, pinned) only declines the knock-on: nothing is
+    re-pended (review round 1). Returns how many blocks were re-pended; the caller kicks
+    the drain after commit when that is non-zero."""
     await lock_user(tx, user_id)
     cs = await _get_changeset(tx, user_id, changeset_id)
     if cs.status == "rejected":
-        return
+        return 0
     if cs.status != "pending":
         raise ChangesetNotPending(cs.status)
     await _close_changeset(tx, user_id, cs, "rejected", keep_projects=(), now=now)
+    staged = parse_staged(cs.staged)
+    # Review round 1 (user decision): only a google_edit that carries staged pins (case iii:
+    # nothing was applied) undoes the Google move. An EMPTY one is a knock-on whose edit is
+    # already live and pinned: rejecting it only declines the knock-on.
+    repended = (
+        await _repend_google_edit_sources(tx, user_id, staged, now)
+        if cs.reason == "google_edit" and staged
+        else 0
+    )
     await _trace(
         tx,
         user_id,
@@ -1290,6 +1334,50 @@ async def reject_changeset(
         changeset_id=cs.id,
         plan_id=cs.plan_id,
     )
+    return repended
+
+
+async def _repend_google_edit_sources(
+    tx: AsyncSession, user_id: uuid.UUID, staged: Sequence[StagedMutation], now: datetime
+) -> int:
+    """The live, not-ended rows of the lineage-weeks a rejected `google_edit` changeset's pins
+    were created from (`created_from_block_id`) → `pending`. Only sync columns change."""
+    sources = sorted(
+        {
+            m.payload.created_from_block_id
+            for m in staged
+            if isinstance(m, PinAdded) and m.payload.created_from_block_id is not None
+        }
+    )
+    if not sources:
+        return 0
+    keys = (
+        await tx.execute(
+            select(Block.lineage_id, WeekPlan.week_start)
+            .join(WeekPlan, and_(WeekPlan.id == Block.plan_id, WeekPlan.user_id == Block.user_id))
+            .where(Block.user_id == user_id, Block.id.in_(sources))
+        )
+    ).all()
+    total = 0
+    for lineage_id, week_start in keys:
+        live = select(WeekPlan.id).where(
+            WeekPlan.user_id == user_id,
+            WeekPlan.status == "live",
+            WeekPlan.week_start == week_start,
+        )
+        result = await tx.execute(
+            update(Block)
+            .where(
+                Block.user_id == user_id,
+                Block.lineage_id == lineage_id,
+                Block.gcal_status == "synced",
+                func.upper(Block.span) > now,
+                Block.plan_id.in_(live.scalar_subquery()),
+            )
+            .values(gcal_status="pending")
+        )
+        total += int(result.rowcount)  # type: ignore[attr-defined]
+    return total
 
 
 # ---------------------------------------------------------------- block state
@@ -1344,3 +1432,466 @@ async def mark_block_state(
     if block.span.lower is None or block.span.lower > now:
         raise BlockNotStarted(str(block_id))
     await tx.execute(update(Block).where(Block.id == block_id).values(state=state))
+
+
+# ---------------------------------------------------------------- Google edits + drift (T4.3b)
+
+
+@dataclass(frozen=True)
+class GoogleEdit:
+    """An edit the user made to one of our events inside Google Calendar, detected BEFORE the
+    lock (app.gcal.ingest). `block_id`/`expected_etag`/`old_span` are what the row looked like
+    when Google was read; `apply_google_edits` re-validates them under the lock (compare-and-
+    set) and skips the edit when anything changed (the next sync re-evaluates it)."""
+
+    kind: Literal["move", "delete"]
+    block_id: uuid.UUID
+    lineage_id: uuid.UUID
+    old_span: Interval
+    event_id: str
+    expected_etag: str | None
+    new_span: Interval | None = None  # move only
+    new_etag: str | None = None  # move only: the event's etag, stored once applied
+
+    @property
+    def interpretation(self) -> str:
+        return "Moved in Google Calendar" if self.kind == "move" else "Deleted in Google Calendar"
+
+
+@dataclass(frozen=True)
+class GoogleEditOutcome:
+    applied: int = 0  # edits applied directly (a new live plan each)
+    staged: int = 0  # edits whose pins went into the proposal (case iii / fallback)
+    skipped: int = 0  # state changed since Google was read, or a pending changeset blocked it
+    changeset_id: uuid.UUID | None = None  # the one combined `google_edit` proposal, if any
+
+
+def _block_key(blocks: Sequence[PlannedBlock]) -> list[tuple[str, str, Any, Any]]:
+    return sorted((b.lineage_id, b.project_id, b.span.start, b.span.end) for b in blocks)
+
+
+def _with_pin_flags(blocks: Sequence[PlannedBlock], inp: SolverInput) -> list[PlannedBlock]:
+    """`pinned` = the block exactly realizes a pin-kind pin of `inp` (what verify() expects)."""
+    pinned = {(p.project_id, p.span) for p in inp.pins if p.kind == "pin"}
+    return [
+        b.model_copy(update={"pinned": (b.project_id, b.span) in pinned})
+        for b in sorted(blocks, key=lambda b: (b.span.start, b.lineage_id))
+    ]
+
+
+async def _valid_google_edit(
+    tx: AsyncSession, user_id: uuid.UUID, e: GoogleEdit, horizon: Interval, now: datetime
+) -> bool:
+    """Compare-and-set re-validation under the lock: the row is still in the live plan of the
+    current week, still `synced` with the etag we compared, same event and span, not started;
+    a move's new span still starts in the future."""
+    row = (
+        await tx.execute(
+            select(Block, WeekPlan.status, WeekPlan.horizon)
+            .join(WeekPlan, and_(WeekPlan.id == Block.plan_id, WeekPlan.user_id == Block.user_id))
+            .where(Block.id == e.block_id, Block.user_id == user_id)
+            .execution_options(populate_existing=True)
+        )
+    ).one_or_none()
+    if row is None:
+        return False
+    block, plan_status, plan_horizon = row
+    return (
+        plan_status == "live"
+        and to_interval(plan_horizon) == horizon
+        and block.gcal_status == "synced"
+        and block.gcal_etag == e.expected_etag
+        and block.gcal_event_id == e.event_id
+        and block.lineage_id == e.lineage_id
+        and to_interval(block.span) == e.old_span
+        and e.old_span.start > now
+        and (e.kind == "delete" or (e.new_span is not None and e.new_span.start > now))
+    )
+
+
+async def _google_edit_mutations(
+    tx: AsyncSession, user_id: uuid.UUID, e: GoogleEdit, block: Block
+) -> list[StagedMutation]:
+    """The same constraint shape PATCH /blocks produces (edit → `pin`, delete → `forbid` on
+    the old span; a pin the block realizes is removed first), sourced `system` (the user acted
+    in Google, not in the app; mutation_source has no better value)."""
+    if e.kind == "move":
+        assert e.new_span is not None
+        kind, span = "pin", e.new_span
+    else:
+        kind, span = "forbid", e.old_span
+    realized = (
+        await tx.execute(
+            select(BlockPin.id)
+            .where(
+                BlockPin.user_id == user_id,
+                BlockPin.kind == "pin",
+                BlockPin.project_id == block.project_id,
+                BlockPin.span == block.span,
+            )
+            .order_by(BlockPin.id)
+        )
+    ).scalars()
+
+    def system(kind_: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "kind": kind_,
+            "source": "system",
+            "interpretation": e.interpretation,
+            "payload": payload,
+        }
+
+    raw = [system("pin_removed", {"pin_id": str(pin_id)}) for pin_id in realized]
+    raw.append(
+        system(
+            "pin_added",
+            {
+                "pin_id": str(uuid.uuid4()),
+                "project_id": str(block.project_id),
+                "span": _span_json(span),
+                "kind": kind,
+                "created_from_block_id": str(block.id),
+            },
+        )
+    )
+    return parse_staged(raw)
+
+
+async def _live_row(
+    tx: AsyncSession, user_id: uuid.UUID, horizon: Interval, lineage_id: uuid.UUID, span: Interval
+) -> Block | None:
+    """The current live row of (lineage, span): earlier direct applies in the same pass mint
+    new row ids, but leave every untouched block's lineage and span as they were."""
+    return (
+        await tx.execute(
+            select(Block)
+            .join(WeekPlan, and_(WeekPlan.id == Block.plan_id, WeekPlan.user_id == Block.user_id))
+            .where(
+                Block.user_id == user_id,
+                WeekPlan.status == "live",
+                WeekPlan.horizon == to_range(horizon),
+                Block.lineage_id == lineage_id,
+                Block.span == to_range(span),
+            )
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+
+
+async def _promote_direct(
+    tx: AsyncSession,
+    user_id: uuid.UUID,
+    inp: SolverInput,
+    out: SolverOutput,
+    mutations: Sequence[StagedMutation],
+    *,
+    now: datetime,
+    timezone: str,
+    week_start: int,
+) -> uuid.UUID:
+    # Logged (review round 2, no change): several direct edits in one sync re-persist the whole
+    # plan once per edit; rare, and each version stays individually verified.
+    """A directly applied Google edit, with confirm's own machinery: supersede the live plan,
+    persist the new one as `live` (verify() gate), inherit lineage outbox fields, apply the
+    pins via `apply_mutation`, and trace `plan_confirmed` with no changeset."""
+    to_supersede = await _check_supersedable(tx, user_id, inp.horizon, now)
+    superseded = list(
+        (
+            await tx.execute(
+                update(WeekPlan)
+                .where(WeekPlan.id.in_(to_supersede), WeekPlan.status == "live")
+                .values(status="superseded", superseded_at=now)
+                .returning(WeekPlan.id)
+            )
+        ).scalars()
+    )
+    plan_id = await persist_plan(
+        tx, user_id, inp, out, now=now, timezone=timezone, status="live", week_start=week_start
+    )
+    await _inherit_from_live(tx, plan_id, superseded, {f.lineage_id for f in inp.frozen})
+    for m in mutations:
+        await apply_mutation(tx, user_id, m, now=now, plan_id=plan_id)
+    await _trace(
+        tx,
+        user_id,
+        kind="plan_confirmed",
+        payload={"changeset_id": None, "plan_id": str(plan_id), "reason": "google_edit"},
+        source="system",
+        interpretation=mutations[-1].interpretation if mutations else None,
+        now=now,
+        plan_id=plan_id,
+    )
+    return plan_id
+
+
+async def _live_infeasibility(
+    tx: AsyncSession, user_id: uuid.UUID, horizon: Interval
+) -> Infeasibility | None:
+    raw = (
+        await tx.execute(
+            select(WeekPlan.infeasibility).where(
+                WeekPlan.user_id == user_id,
+                WeekPlan.status == "live",
+                WeekPlan.horizon == to_range(horizon),
+            )
+        )
+    ).scalar_one_or_none()
+    return None if raw is None else Infeasibility.model_validate(raw)
+
+
+async def apply_google_edits(
+    tx: AsyncSession,
+    user_id: uuid.UUID,
+    edits: Sequence[GoogleEdit],
+    *,
+    now: datetime,
+    busy: Sequence[Interval],
+    clock: Callable[[], datetime] | None = None,
+) -> GoogleEditOutcome:
+    """THE write path for edits made in Google (T4.3b; user decision "hybrid"). Runs under the
+    per-user lock; never calls Google (the edits and `busy` were read before the lock).
+
+    Edits are re-validated (`_valid_google_edit`) and processed in old-start order, each
+    against the state the previous ones left:
+
+    - move → pin on the new span (+ remove a pin the block realized), then pin + re-solve:
+      (i)   every other block stays (lineage, project, span) → the re-solve goes live;
+      (iii) the pin is not honoured (calendar/exception/window beat it) or the new span
+            overlaps another live block → nothing applied; the pins go into the proposal;
+      (ii)  otherwise → only the moved block goes live (the live plan with that one block
+            moved), and the knock-on re-solve is proposed. If that plan fails verify() it is
+            treated as (iii).
+    - delete → forbid on the old span + the live plan without the block, applied directly;
+      re-placing the lost minutes is proposed. verify() failure → treated as (iii).
+
+    A directly applied move's row is marked `synced` with the event's new etag (it already
+    matches Google, so it is not rewritten). At most ONE `google_edit` changeset is staged,
+    holding every (iii) pin (possibly none: then it is the knock-on re-solve only), and only
+    if no changeset is pending (the user's proposal is never expired by this: its confirm
+    reconciles via the stale path) and the re-solve changes something or carries pins.
+
+    When a changeset IS pending and an edit was applied directly with a knock-on (case ii,
+    delete), the knock-on is not dropped (T4.3b review round 1): the pending changeset is
+    restaged against the new live plan with the same staged list and reason, solved against
+    the same fresh busy (`_restage_pending`), so the user reviews it inside their proposal.
+    If it cannot be restaged it is expired, and the knock-on is staged as `google_edit`.
+
+    `now` is the sync's instant (every solve uses it); `clock` (injected; default: `now`)
+    stamps a restaged changeset at the moment of this locked write (review round 2)."""
+    await lock_user(tx, user_id)
+    if not edits:
+        return GoogleEditOutcome()
+    await sweep_past_blocks(tx, user_id, now)
+    week = await _preference_week(tx, user_id)
+    if week is None:
+        return GoogleEditOutcome(skipped=len(edits))
+    tz, week_start = week
+    horizon = expected_horizon(now, tz, week_start)
+    pending = await _pending(tx, user_id)
+
+    ordered = sorted(edits, key=lambda e: (e.old_span.start, e.old_span.end, str(e.block_id)))
+    valid = [e for e in ordered if await _valid_google_edit(tx, user_id, e, horizon, now)]
+    skipped = len(edits) - len(valid)
+    staged_all: list[StagedMutation] = []
+    replaced_pins: set[uuid.UUID] = set()  # pins the direct applies removed (review round 2)
+    applied = staged_edits = 0
+    need_proposal = False
+
+    for e in valid:
+        block = await _live_row(tx, user_id, horizon, e.lineage_id, e.old_span)
+        if block is None:  # pragma: no cover - defensive: an earlier edit took it away
+            skipped += 1
+            continue
+        mutations = await _google_edit_mutations(tx, user_id, e, block)
+        inp = await build_solver_input(tx, user_id, horizon, now, tz, staged=mutations, busy=busy)
+        previous = await load_previous(tx, user_id, horizon, now)
+        lineage = str(e.lineage_id)
+        others = [b for b in previous if not (b.lineage_id == lineage and b.span == e.old_span)]
+        direct: SolverOutput | None = None
+        if e.kind == "delete":
+            direct = SolverOutput(
+                input_schema_version=inp.input_schema_version,
+                solver_version=inp.solver_version,
+                blocks=tuple(_with_pin_flags(others, inp)),
+                infeasibility=await _live_infeasibility(tx, user_id, horizon),
+            )
+        else:
+            assert e.new_span is not None
+            out = pack(inp, previous)
+            moved = PlannedBlock(
+                lineage_id=lineage, project_id=str(block.project_id), span=e.new_span, pinned=True
+            )
+            realized = moved in out.blocks
+            rest = [b for b in out.blocks if b != moved]
+            occupied = [*(b.span for b in others), *(f.span for f in inp.frozen)]
+            if realized and _block_key(rest) == _block_key(others):
+                direct = out  # (i)
+            elif realized and not any(e.new_span.overlaps(s) for s in occupied):
+                direct = SolverOutput(  # (ii): only the moved block
+                    input_schema_version=inp.input_schema_version,
+                    solver_version=inp.solver_version,
+                    blocks=tuple(_with_pin_flags([*others, moved], inp)),
+                    infeasibility=await _live_infeasibility(tx, user_id, horizon),
+                )
+                need_proposal = True
+        if direct is not None and verify(list(direct.blocks), inp):
+            direct = None  # the one-block change is not a valid plan: review it instead
+        if direct is None:  # (iii)
+            staged_all.extend(mutations)
+            staged_edits += 1
+            need_proposal = True
+            continue
+        if e.kind == "delete":
+            need_proposal = True
+        plan_id = await _promote_direct(
+            tx, user_id, inp, direct, mutations, now=now, timezone=tz, week_start=week_start
+        )
+        replaced_pins.update(m.payload.pin_id for m in mutations if isinstance(m, PinRemoved))
+        if e.kind == "move" and e.new_span is not None:
+            await tx.execute(
+                update(Block)
+                .where(
+                    Block.plan_id == plan_id,
+                    Block.lineage_id == e.lineage_id,
+                    Block.span == to_range(e.new_span),
+                )
+                .values(gcal_status="synced", gcal_event_id=e.event_id, gcal_etag=e.new_etag)
+            )
+        applied += 1
+
+    changeset_id: uuid.UUID | None = None
+    if need_proposal and pending and applied:
+        restage = await _restage_pending(
+            tx,
+            user_id,
+            pending[-1],
+            now=now,
+            busy=busy,
+            replaced_pins=replaced_pins,
+            stamp=now if clock is None else clock(),
+        )
+        changeset_id = restage.changeset_id
+        if restage.status == "expired":
+            pending = await _pending(tx, user_id)  # the knock-on is staged below if none left
+    if need_proposal and pending:
+        skipped += staged_edits  # (iii) pins are not staged: the next sync re-evaluates them
+        staged_edits = 0
+    elif need_proposal:
+        inp = await build_solver_input(tx, user_id, horizon, now, tz, staged=staged_all, busy=busy)
+        previous = await load_previous(tx, user_id, horizon, now)
+        out = pack(inp, previous)
+        if staged_all or _schedule_key([(b.project_id, b.span) for b in out.blocks]) != (
+            _schedule_key([(b.project_id, b.span) for b in previous])
+        ):
+            changeset_id = await stage_changeset(
+                tx,
+                user_id,
+                staged_all,
+                inp,
+                out,
+                now=now,
+                timezone=tz,
+                source="system",
+                reason="google_edit",
+            )
+    return GoogleEditOutcome(
+        applied=applied, staged=staged_edits, skipped=skipped, changeset_id=changeset_id
+    )
+
+
+@dataclass(frozen=True)
+class _Restage:
+    status: Literal["restaged", "expired", "kept"]
+    changeset_id: uuid.UUID | None = None
+
+
+async def _restage_pending(
+    tx: AsyncSession,
+    user_id: uuid.UUID,
+    cs: Changeset,
+    *,
+    now: datetime,
+    busy: Sequence[Interval],
+    replaced_pins: set[uuid.UUID],
+    stamp: datetime,
+) -> _Restage:
+    """Re-solve the user's pending changeset on the CURRENT state (the new live plan) with its
+    own staged list and reason, like the `changeset_stale` restage (app.api.changesets
+    `_restage`, whose fallback is exactly this `propose_changeset`). Same session and
+    transaction; the per-user lock is already held (re-entrant). D4 expires the old one;
+    staged projects it creates are re-pointed, not deleted (O9 carry-forward).
+
+    Review round 2 (main-session decision):
+    - `pin_removed` entries for pins the Google edit just removed/replaced (`replaced_pins`)
+      are dropped; the rest of the list is kept;
+    - if that empties the list, or the rest still cannot apply (another missing pin, or
+      staging refuses it, in a savepoint), the pending changeset is EXPIRED, never left
+      actionable but unconfirmable ("expired"; the caller then stages the knock-on);
+    - the replacement's `created_at` is `max(stamp, replaced + 1µs)`: `stamp` is the clock
+      at the locked write, so a changeset staged while the sync awaited Google is never
+      replaced by an older-looking one (clients drop older replacements);
+    - a list that moves the week (week_start change) is "kept": `busy` does not cover that
+      solve, and its confirm re-fetches busy time."""
+    original = parse_staged(cs.staged)
+    staged = [
+        m for m in original if not (isinstance(m, PinRemoved) and m.payload.pin_id in replaced_pins)
+    ]
+    if await solve_horizon(tx, user_id, staged, now) != await solve_horizon(tx, user_id, [], now):
+        return _Restage("kept")
+
+    async def expire() -> _Restage:
+        await _close_changeset(tx, user_id, cs, "expired", keep_projects=(), now=stamp)
+        return _Restage("expired")
+
+    if original and not staged:
+        return await expire()
+    removed = sorted(m.payload.pin_id for m in staged if isinstance(m, PinRemoved))
+    if removed:
+        existing = set(
+            (
+                await tx.execute(
+                    select(BlockPin.id).where(BlockPin.user_id == user_id, BlockPin.id.in_(removed))
+                )
+            ).scalars()
+        )
+        if existing != set(removed):  # `overlay` tolerates it, but confirm would answer 404
+            return await expire()
+    created_at = max(stamp, cs.created_at + timedelta(microseconds=1))
+    try:
+        async with tx.begin_nested():
+            new_id = await propose_changeset(
+                tx,
+                user_id,
+                staged,
+                now=now,
+                busy=busy,
+                source=staged[0].source if staged else "system",
+                reason=cs.reason,  # type: ignore[arg-type]
+                created_at=created_at,
+            )
+    except (InvalidMutation, PlanVerificationError, PreferencesNotSet):
+        return await expire()
+    return _Restage("restaged", new_id)
+
+
+async def propose_drift(
+    tx: AsyncSession, user_id: uuid.UUID, *, now: datetime, busy: Sequence[Interval]
+) -> uuid.UUID | None:
+    """Drift (ARCH §3 "Busy time & drift"; T4.3b): a live block that has not started overlaps
+    FRESH busy time (read before the lock) → propose a re-solve, `reason: drift`, nothing
+    staged. None when there is no drift, no preferences/plan, or a changeset is already
+    pending (that one is returned by /gcal/sync instead; its confirm re-checks busy)."""
+    await lock_user(tx, user_id)
+    if await _pending(tx, user_id):
+        return None
+    week = await _preference_week(tx, user_id)
+    if week is None:
+        return None
+    horizon = expected_horizon(now, *week)
+    fresh = clip_intervals(busy, horizon)
+    previous = await load_previous(tx, user_id, horizon, now)
+    if not any(iv.overlaps(b.span) for b in previous for iv in fresh):
+        return None
+    return await propose_changeset(
+        tx, user_id, [], now=now, horizon=horizon, busy=busy, source="system", reason="drift"
+    )

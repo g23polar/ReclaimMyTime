@@ -36,6 +36,23 @@ enum ChangesetStatus: String, Codable, Hashable, Sendable {
     case pending, confirmed, rejected, expired
 }
 
+/// Why a changeset was proposed (D25). Strict while the contract is frozen: an unknown value fails
+/// decoding like every other enum here (NOTES suggests treating unknown values as `user_edit`; revisit
+/// if the contract unfreezes).
+enum ChangesetReason: String, Codable, Hashable, Sendable {
+    /// A REST staged write (projects, preferences, exceptions, pins, block edit/delete).
+    case userEdit = "user_edit"
+    /// An agent turn (`POST /agent/message`).
+    case agent
+    /// Calendar busy time now overlaps live blocks; re-solved with no constraint change.
+    case drift
+    /// One of our events was edited inside Google Calendar; `staged` carries the resulting pin(s).
+    case googleEdit = "google_edit"
+
+    /// Server-initiated re-plans may carry no constraint change (D25; google_edit since T4.3b).
+    var allowsEmptyStaged: Bool { self == .drift || self == .googleEdit }
+}
+
 enum BlockState: String, Codable, Hashable, Sendable {
     case planned, completed, skipped
 }
