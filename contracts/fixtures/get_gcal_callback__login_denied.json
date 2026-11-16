@@ -1,0 +1,19 @@
+{
+  "operation": "gcalCallback",
+  "method": "GET",
+  "path": "/gcal/callback",
+  "case": "login_denied",
+  "description": "Sign-in consent declined (T6.0, D26): a `login` state sends the error to the sign-in callback.",
+  "request": {
+    "query": {
+      "state": "Z0FBQUFBQnBsb2dpbi1zdGF0ZS1wbGFjZWhvbGRlcg.TG9naW5TdGF0ZUZvckZpeHR1cmVz",
+      "error": "access_denied"
+    }
+  },
+  "response": {
+    "status": 302,
+    "headers": {
+      "Location": "reclaimmytime://auth/google/callback?result=error&code=gcal_access_denied"
+    }
+  }
+}

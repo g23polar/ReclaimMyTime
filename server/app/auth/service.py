@@ -1,4 +1,5 @@
-"""Auth use cases: sign in with Apple, authenticate a bearer token, sign out, delete account.
+"""Auth use cases: sign in with Apple or Google, authenticate a bearer token, sign out, delete
+account.
 
 Pure orchestration over injected collaborators (repository, verifier, Apple client,
 cipher, clock). Never reads the wall clock or env directly.
@@ -42,6 +43,7 @@ from app.gcal.errors import GcalRevocationFailedError
 logger = logging.getLogger(__name__)
 
 APPLE = "apple"
+GOOGLE = "google"  # T6.0 (D26): identities(provider='google', subject=Google `sub`)
 MAX_EXTRA_REVOCATION_PASSES = 2
 MARK_REVOKED_TIMEOUT_S = 5.0
 # Strong refs to shielded mark tasks so a cancelled caller cannot let them be GC'd.
@@ -143,6 +145,66 @@ class AuthService:
             user = await self._returning_sign_in(identity, claims, refresh_enc)
             is_new = False
 
+        return await self._issue_session(user, now, is_new=is_new)
+
+    async def sign_in_with_google(self, subject: str, email: str) -> SignInResult:
+        """Find or create the user for `('google', subject)` and issue a session (T6.0).
+
+        The caller has already exchanged the code and checked the id_token (`email` is
+        Google-verified); nothing here calls Google. Runs in the caller's transaction, under
+        the same per-user lock as Apple sign-in for an existing identity. No account
+        merging: a new Google identity always gets a new user, whose email stays null when
+        another user already holds it (exactly as for Apple).
+        """
+        now = self._clock.now()
+        identity = await self._locked_identity(subject, provider=GOOGLE)
+        if identity is None:
+            user = await self._create_user(email, now)
+            owner_id = await self._repo.insert_identity(
+                IdentityRecord(
+                    provider=GOOGLE,
+                    subject=subject,
+                    user_id=user.id,
+                    email=email,
+                    email_verified=True,
+                    is_private_email=False,
+                    apple_refresh_token_enc=None,
+                    created_at=now,
+                )
+            )
+            is_new = owner_id is not None
+            if not is_new:
+                # A concurrent first sign-in for this subject won; converge on its owner.
+                logger.info("concurrent first google sign-in; converging on the persisted owner")
+                await self._repo.delete_user(user.id)
+                identity = await self._locked_identity(subject, provider=GOOGLE)
+                if identity is None:  # owner deleted meanwhile; client retries
+                    raise UnauthenticatedError()
+                user = await self._returning_google(identity, email)
+        else:
+            user = await self._returning_google(identity, email)
+            is_new = False
+        return await self._issue_session(user, now, is_new=is_new)
+
+    async def _returning_google(self, identity: IdentityRecord, email: str) -> UserRecord:
+        """Caller holds the owner's lock (`_locked_identity`)."""
+        existing = await self._repo.get_user(identity.user_id)
+        if existing is None:  # FK makes this impossible in Postgres; defensive.
+            raise UnauthenticatedError()
+        user = await self._apply_linkable_email(existing, email)
+        await self._repo.update_identity(
+            GOOGLE,
+            identity.subject,
+            apple_refresh_token_enc=None,
+            email=email,
+            email_verified=True,
+            is_private_email=False,
+        )
+        return user
+
+    async def _issue_session(
+        self, user: UserRecord, now: datetime, *, is_new: bool
+    ) -> SignInResult:
         token = mint_token()
         session = SessionRecord(
             id=uuid.uuid4(),
@@ -175,7 +237,9 @@ class AuthService:
         )
         return user
 
-    async def _locked_identity(self, subject: str) -> IdentityRecord | None:
+    async def _locked_identity(
+        self, subject: str, *, provider: str = APPLE
+    ) -> IdentityRecord | None:
         """The identity for `subject`, read under its owner's per-user lock.
 
         Serializes against `AccountDeletionService` for that user: once the lock is held
@@ -183,14 +247,14 @@ class AuthService:
         (sign-in then creates a fresh account). A brand-new identity takes no lock; its
         row is created by `insert_identity`, which never writes over an existing one.
         """
-        identity = await self._repo.get_identity(APPLE, subject)
+        identity = await self._repo.get_identity(provider, subject)
         locked: set[uuid.UUID] = set()
         for _ in range(_LOCK_ATTEMPTS):
             if identity is None or identity.user_id in locked:
                 return identity
             await self._repo.lock_user(identity.user_id)
             locked.add(identity.user_id)
-            identity = await self._repo.get_identity(APPLE, subject)
+            identity = await self._repo.get_identity(provider, subject)
         if identity is not None and identity.user_id not in locked:
             raise UnauthenticatedError()  # owner kept changing under us; client retries
         return identity
@@ -239,7 +303,10 @@ class AuthService:
     async def _refresh_user_email(self, user: UserRecord, claims: AppleClaims) -> UserRecord:
         if claims.email is None:
             return user  # Apple sent no email claim this time; keep what we have.
-        desired = linkable_email(claims)
+        return await self._apply_linkable_email(user, linkable_email(claims))
+
+    async def _apply_linkable_email(self, user: UserRecord, desired: str | None) -> UserRecord:
+        """Set users.email to `desired` unless another user holds it (no merging)."""
         if desired == user.email:
             return user
         if desired is not None:

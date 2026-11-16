@@ -33,7 +33,7 @@ from app.gcal.errors import (
 from app.gcal.runtime import GcalRuntime, build_gcal_runtime
 from app.gcal.settings import GcalSettings
 from app.gcal.state import StateCodec, s256_challenge
-from tests.api.conftest import SettableClock, new_user
+from tests.api.conftest import NOW, SettableClock, new_user
 from tests.api.contract import SPEC, assert_conforms
 from tests.db.conftest import requires_db
 from tests.gcal.fakes import (
@@ -436,7 +436,9 @@ async def test_bad_id_token_is_exchange_failed(
     body = google.exchange_ok() | {"id_token": id_token(clock.current, **claims)}
     google.exchange = Reply(200, body)
     assert await connect(client) == "gcal_exchange_failed"
-    assert google.revoked == [REFRESH_TOKEN]  # no stored row: safe to revoke
+    # Account unknown (unverifiable id_token): another user may hold a connection to it and
+    # revocation is grant-wide, so the grant is left alone (T6.0 review; was: revoked).
+    assert google.revoked == []
     assert await row(maker, user_id) is None
 
 
@@ -1172,3 +1174,90 @@ def test_app_installs_redaction_once_on_uvicorn_access() -> None:
     record = _access_record("/gcal/callback?code=SECRET&state=SECRET2")
     assert access.filter(record)  # the logger-level filter rewrites the record
     assert "SECRET" not in record.getMessage()
+
+
+# ------------------------------------------------------- cross-user same account (T6.0 review)
+
+
+async def _other_user_holds(
+    maker: async_sessionmaker[AsyncSession], cipher: TokenCipher, email: str
+) -> uuid.UUID:
+    other = await new_user(maker)
+    async with maker() as s, s.begin():
+        s.add(
+            GoogleConnection(
+                user_id=other,
+                google_email=email,
+                refresh_token_enc=cipher.encrypt("1//0g-other-user"),
+                key_id=cipher.primary_key_id,
+                scopes=[FREEBUSY, APP_CREATED],
+                app_calendar_id=None,
+                status="active",
+                revoked_at=None,
+                created_at=NOW,
+            )
+        )
+    return other
+
+
+async def test_partial_grant_of_an_account_another_user_connected_is_not_revoked(
+    client: httpx.AsyncClient,
+    runtime: GcalRuntime,
+    google: FakeGoogle,
+    cipher: TokenCipher,
+    maker: async_sessionmaker[AsyncSession],
+    user_id: uuid.UUID,
+) -> None:
+    """User A has Google account G connected; user B (the caller) connects G but unticks a
+    calendar scope. Revoking B's partial grant would kill A's connection (grant-wide)."""
+    other = await _other_user_holds(maker, cipher, EMAIL.upper())  # citext: case-insensitive
+    google.scope = "openid https://www.googleapis.com/auth/userinfo.email"
+    assert await connect(client) == "gcal_scope_insufficient"
+    assert google.revoked == []
+    held = await row(maker, other)
+    assert held is not None and held.status == "active"
+
+
+async def test_missing_refresh_token_for_another_users_account_is_not_revoked(
+    client: httpx.AsyncClient,
+    runtime: GcalRuntime,
+    google: FakeGoogle,
+    cipher: TokenCipher,
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _other_user_holds(maker, cipher, EMAIL)
+    google.refresh_token = None
+    assert await connect(client) == "gcal_exchange_failed"
+    assert google.revoked == []
+
+
+async def test_partial_grant_revoked_when_another_user_holds_a_different_account(
+    client: httpx.AsyncClient,
+    runtime: GcalRuntime,
+    google: FakeGoogle,
+    cipher: TokenCipher,
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _other_user_holds(maker, cipher, "someone.else@gmail.com")
+    google.scope = "openid https://www.googleapis.com/auth/userinfo.email"
+    assert await connect(client) == "gcal_scope_insufficient"
+    assert google.revoked == [REFRESH_TOKEN]
+
+
+async def test_replaced_account_still_connected_by_another_user_is_not_revoked(
+    client: httpx.AsyncClient,
+    runtime: GcalRuntime,
+    google: FakeGoogle,
+    cipher: TokenCipher,
+    maker: async_sessionmaker[AsyncSession],
+    user_id: uuid.UUID,
+) -> None:
+    """The caller switches from account X to G while another user still has X connected:
+    the old grant is not revoked (it would kill the other user's connection)."""
+    await connect(client)  # caller connected EMAIL
+    await set_row(
+        maker, user_id, google_email="x@gmail.com", refresh_token_enc=cipher.encrypt("1//0g-x")
+    )
+    await _other_user_holds(maker, cipher, "x@gmail.com")
+    assert await connect(client, code="4/0Aean-second") == "connected"
+    assert google.revoked == []

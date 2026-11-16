@@ -203,17 +203,46 @@ def _nonempty_str(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+@dataclass(frozen=True)
+class GoogleIdentity:
+    """The checked claims of a token-endpoint id_token: the account's stable `sub` and its
+    verified email."""
+
+    subject: str
+    email: str
+
+
 def google_email_from_id_token(
     id_token: str | None, *, client_id: str, now: datetime, leeway: timedelta
 ) -> str:
-    """The verified email from the id_token returned by Google's token endpoint.
+    """The verified email from the id_token returned by Google's token endpoint (T4.1).
 
     No signature check, deliberately (decision T4.1 #2): this id_token comes straight from
     Google's token endpoint in the TLS response to our client-authenticated code exchange,
     so OIDC Core §3.1.3.7 (item 6) lets the TLS server validation stand in for the
     signature. We still check iss, aud, exp and email_verified, and never accept an
-    id_token from any other channel this way. Avoids google-auth + requests as dependencies.
+    id_token from any other channel this way (the T6.0 sign-in included: the app never
+    hands us an id_token, only the code we exchange ourselves). Avoids google-auth +
+    requests as dependencies.
     """
+    return _checked_claims(id_token, client_id=client_id, now=now, leeway=leeway)[1]
+
+
+def google_identity_from_id_token(
+    id_token: str | None, *, client_id: str, now: datetime, leeway: timedelta
+) -> GoogleIdentity:
+    """Sign-in (T6.0): the same checks as `google_email_from_id_token`, plus a usable `sub`
+    (the stable account id the `('google', sub)` identity is keyed on)."""
+    claims, email = _checked_claims(id_token, client_id=client_id, now=now, leeway=leeway)
+    subject = claims.get("sub")
+    if not isinstance(subject, str) or not subject or len(subject) > 255:
+        raise IdTokenInvalidError("subject")
+    return GoogleIdentity(subject=subject, email=email)
+
+
+def _checked_claims(
+    id_token: str | None, *, client_id: str, now: datetime, leeway: timedelta
+) -> tuple[dict[str, Any], str]:
     if not id_token:
         raise IdTokenInvalidError("missing")
     try:
@@ -240,4 +269,4 @@ def google_email_from_id_token(
         raise IdTokenInvalidError("email")
     if verified is not True and verified != "true":
         raise IdTokenInvalidError("email_verified")
-    return email
+    return claims, email

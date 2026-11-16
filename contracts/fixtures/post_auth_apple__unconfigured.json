@@ -1,0 +1,23 @@
+{
+  "operation": "signInWithApple",
+  "method": "POST",
+  "path": "/auth/apple",
+  "case": "unconfigured",
+  "description": "Sign in with Apple is optional since T6.0 (D26); a server without Apple configuration answers 503 apple_unavailable before looking at the request.",
+  "request": {
+    "body": {
+      "identity_token": "eyJraWQiOiJXNldjT0tCIiwiYWxnIjoiUlMyNTYifQ.eyJpc3MiOiJodHRwczovL2FwcGxlaWQuYXBwbGUuY29tIn0.c2lnbmF0dXJl",
+      "authorization_code": "c1f0e5a2b7d84c6f9e3a1b2c4d5e6f70.0.rqwz.Hk3vX9pL2mQ8nR4t",
+      "nonce": "8tYq2Lw0VbN5xZr7Kc3Mf1Hd"
+    }
+  },
+  "response": {
+    "status": 503,
+    "body": {
+      "error": {
+        "code": "apple_unavailable",
+        "message": "Sign in with Apple is not available on this server."
+      }
+    }
+  }
+}

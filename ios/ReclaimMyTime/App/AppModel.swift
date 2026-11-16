@@ -96,6 +96,10 @@ final class AppModel {
         let timezone = TimezoneMonitor(api: api, pending: pending, defaults: defaults)
         self.timezone = timezone
         relay.auth = auth
+        // Before the phase flips: RootView's consent routing must already see the grant.
+        auth.onGoogleSignIn = { [weak calendar] session, gcalConnected in
+            calendar?.adoptSignInGrant(userId: session.userId, gcalConnected: gcalConnected)
+        }
         projects.onProjectRead = { [weak timetable] project in
             timetable?.adoptProject(project)
         }
@@ -397,7 +401,7 @@ final class AppModel {
         guard config.usesMock, let flag = arguments.firstIndex(of: "-DemoScenario"), arguments.indices.contains(flag + 1) else { return }
         let scenario = arguments[flag + 1]
         if case .signedIn = auth.phase {} else {
-            await auth.signInWithApple(identityToken: "mock-identity-token", authorizationCode: "mock-authorization-code", rawNonce: Nonce.random())
+            await auth.signInWithGoogle(using: { url, _ in MockWebAuthenticator.signInCallbackURL(authorizationURL: url, arguments: []) })
         }
         guard case .signedIn(let session) = auth.phase else { return }
         calendar.activate(userId: session.userId)

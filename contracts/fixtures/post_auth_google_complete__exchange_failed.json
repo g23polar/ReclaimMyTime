@@ -1,0 +1,26 @@
+{
+  "operation": "completeGoogleSignIn",
+  "method": "POST",
+  "path": "/auth/google/complete",
+  "case": "exchange_failed",
+  "description": "Google rejected or did not answer the code exchange, or returned an unusable id_token. Nothing was created.",
+  "request": {
+    "headers": {
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "auth_code": "4/0AeanS0aExampleLoginCode",
+      "state": "Z0FBQUFBQnBsb2dpbi1zdGF0ZS1wbGFjZWhvbGRlcg.TG9naW5TdGF0ZUZvckZpeHR1cmVz",
+      "nonce": "Q7vX2mL9pR4tW8nB6sD3fH5jZ0cY1aE7"
+    }
+  },
+  "response": {
+    "status": 502,
+    "body": {
+      "error": {
+        "code": "gcal_exchange_failed",
+        "message": "Google did not complete the connection. Please try again."
+      }
+    }
+  }
+}

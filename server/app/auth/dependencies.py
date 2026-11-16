@@ -37,10 +37,11 @@ from app.auth.apple import (
     JwksCache,
     JwksFetcher,
     NonceGuard,
+    UnconfiguredAppleClient,
 )
 from app.auth.clock import Clock, SystemClock
 from app.auth.crypto import TokenCipher
-from app.auth.errors import TimezoneInvalidError, UnauthenticatedError
+from app.auth.errors import AppleNotConfiguredError, TimezoneInvalidError, UnauthenticatedError
 from app.auth.repository import (
     AuthRepository,
     RepositoryProvider,
@@ -68,6 +69,9 @@ class AuthRuntime:
     policy: SessionPolicy
     repository_provider: RepositoryProvider
     google: GoogleRevoker  # DELETE /me revokes the Google grant too (T4.1)
+    # False when Sign in with Apple is not configured (no APPLE_BUNDLE_ID; T6.0, D26):
+    # /auth/apple answers 503 apple_unavailable; everything else is unaffected.
+    apple_enabled: bool = True
 
     def service(self, repo: AuthRepository) -> AuthService:
         return AuthService(
@@ -100,13 +104,18 @@ def build_runtime(
     nonce_guard: NonceGuard | None = None,
     google_revoker: GoogleRevoker | None = None,
 ) -> AuthRuntime:
-    """AuthConfigError if no `apple_client` is injected and the APPLE_TEAM_ID /
-    APPLE_KEY_ID / APPLE_PRIVATE_KEY credentials the HTTP client needs are missing.
-    Without `google_revoker`, Google's default revoke endpoint is used (it needs no
-    client credentials)."""
-    if apple_client is None:
-        settings.require_apple_credentials()
+    """AuthConfigError if Apple is configured (APPLE_BUNDLE_ID set), no `apple_client` is
+    injected, and the APPLE_TEAM_ID / APPLE_KEY_ID / APPLE_PRIVATE_KEY credentials the HTTP
+    client needs are missing. Without APPLE_BUNDLE_ID, Apple is disabled (T6.0) and an
+    `UnconfiguredAppleClient` stands in unless one is injected. Without `google_revoker`,
+    Google's default revoke endpoint is used (it needs no client credentials)."""
     clock = clock or SystemClock()
+    if apple_client is None:
+        if settings.apple_configured:
+            settings.require_apple_credentials()
+            apple_client = HttpAppleClient(settings, clock)
+        else:
+            apple_client = UnconfiguredAppleClient()
     jwks = JwksCache(
         jwks_fetcher or HttpJwksFetcher(settings.apple_jwks_url, settings.apple_http_timeout_s),
         clock,
@@ -120,7 +129,7 @@ def build_runtime(
         verifier=AppleIdentityVerifier(jwks, settings, clock),
         nonce_guard=nonce_guard
         or InMemoryNonceGuard(clock, retention_leeway=settings.token_leeway),
-        apple=apple_client or HttpAppleClient(settings, clock),
+        apple=apple_client,
         cipher=TokenCipher(settings.fernet_keys),
         policy=SessionPolicy(
             sliding=settings.session_sliding,
@@ -129,6 +138,7 @@ def build_runtime(
         ),
         repository_provider=repository_provider,
         google=google_revoker or HttpGoogleRevoker(),
+        apple_enabled=settings.apple_configured,
     )
 
 
@@ -144,10 +154,12 @@ def sqlalchemy_repository_provider(
 
 
 def default_runtime(*, apple_client: AppleClient | None = None) -> AuthRuntime:
-    """Production runtime from env (APPLE_*, AUTH_FERNET_KEYS, DATABASE_URL).
+    """Production runtime from env (AUTH_FERNET_KEYS, DATABASE_URL, optional APPLE_*).
 
-    Fails fast (AuthConfigError) on missing Apple credentials unless `apple_client` is
-    injected.
+    Apple is optional (T6.0): with no APPLE_* variable the runtime builds with Apple
+    disabled. Fails fast (AuthConfigError) on partial Apple configuration (a bundle id
+    without credentials, unless `apple_client` is injected, or credentials without a bundle
+    id).
 
     TODO(T2.1): replace the auth-local engine with the shared engine/sessionmaker from
     app/db once T2.1 lands it.
@@ -268,6 +280,12 @@ async def get_deletion_service(runtime: RuntimeDep) -> AccountDeletionService:
 
 
 DeletionServiceDep = Annotated[AccountDeletionService, Depends(get_deletion_service)]
+
+
+async def require_apple_configured(runtime: RuntimeDep) -> None:
+    """503 `apple_unavailable` before anything else when Apple is not configured (T6.0)."""
+    if not runtime.apple_enabled:
+        raise AppleNotConfiguredError()
 
 
 async def require_timezone(

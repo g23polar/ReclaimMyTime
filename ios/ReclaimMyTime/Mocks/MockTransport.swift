@@ -20,6 +20,8 @@ actor MockTransport: HTTPTransport {
         "createException": "traveling_friday",
         "postAgentMessage": "laptop",
         "signInWithApple": "new_user",
+        // Every scope granted: the consent step is skipped. `without_calendar` keeps it.
+        "completeGoogleSignIn": "new_user",
         "getMe": "ok",
         "getCurrentPlan": "ok",
         "getPreferences": "ok",
@@ -48,6 +50,7 @@ actor MockTransport: HTTPTransport {
 
     /// - Parameter variants: initial `setVariant` overrides (operationId → case).
     init(fixtures: [Fixture], frameDelay: Duration = .milliseconds(120), variants: [String: String] = [:]) {
+        let fixtures = fixtures + Self.googleSignInFallbacks(for: fixtures)
         var byOperation: [String: [Fixture]] = [:]
         var routes: [(String, [String], String)] = []
         for fixture in fixtures {
@@ -69,6 +72,51 @@ actor MockTransport: HTTPTransport {
     static func bundled(frameDelay: Duration = .milliseconds(120), variants: [String: String] = [:]) -> MockTransport {
         let fixtures = FixtureLoader.bundledDirectory().flatMap { try? FixtureLoader.loadMockFixtures(from: $0) } ?? []
         return MockTransport(fixtures: fixtures, frameDelay: frameDelay, variants: variants)
+    }
+
+    // MARK: Google sign-in fallback (T6.0)
+
+    static let googleSignInStartPath = "/auth/google/start"
+    static let googleSignInCompletePath = "/auth/google/complete"
+    /// operationIds of the synthesized fallbacks (the contract's own ids). A bundled fixture for a
+    /// path always replaces its fallback.
+    static let syntheticGoogleSignInOperations = (start: "startGoogleSignIn", complete: "completeGoogleSignIn")
+    /// The fallback's authorization URL. Its `state` is what `MockWebAuthenticator` echoes back.
+    static let syntheticGoogleAuthorizationURL = "https://accounts.google.com/o/oauth2/v2/auth?client_id=1234567890-abc.apps.googleusercontent.com&redirect_uri=https%3A%2F%2Fapi.reclaimmytime.example%2Fgcal%2Fcallback&response_type=code&scope=openid%20email%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcalendar.freebusy%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcalendar.app.created&access_type=offline&prompt=consent&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&state=eyJwIjoibG9naW4iLCJuIjoiN2YzYSJ9.TW9ja0xvZ2luU3RhdGU"
+
+    /// Safety net: contracts/fixtures now carries `post_auth_google_start__*` and
+    /// `post_auth_google_complete__*` (T6.0), which always win. Should either be missing (a stale
+    /// bundle, a trimmed fixture set), mock mode answers that route from an inline stand-in so
+    /// sign-in stays walkable: start returns
+    /// `syntheticGoogleAuthorizationURL`; complete returns the `signInWithApple` success fixture's
+    /// `AuthSession` plus `gcal_connected: true` (the consent step is skipped). Each fallback is
+    /// added only when no fixture serves its path.
+    static func googleSignInFallbacks(for fixtures: [Fixture]) -> [Fixture] {
+        let paths = Set(fixtures.map(\.path))
+        var synthesized: [Fixture] = []
+        if !paths.contains(googleSignInStartPath),
+           let body = try? JSONSerialization.data(withJSONObject: ["authorization_url": syntheticGoogleAuthorizationURL]) {
+            synthesized.append(syntheticFixture(operation: syntheticGoogleSignInOperations.start, path: googleSignInStartPath, body: body))
+        }
+        let appleSuccesses = fixtures.filter { $0.operation == "signInWithApple" && $0.isSuccess }
+        let appleSuccess = appleSuccesses.first { $0.caseName == defaultVariants["signInWithApple"] } ?? appleSuccesses.first
+        if !paths.contains(googleSignInCompletePath),
+           let appleBody = appleSuccess?.responseBody,
+           var object = try? JSONSerialization.jsonObject(with: appleBody) as? [String: Any] {
+            object["gcal_connected"] = true
+            if let body = try? JSONSerialization.data(withJSONObject: object) {
+                synthesized.append(syntheticFixture(operation: syntheticGoogleSignInOperations.complete, path: googleSignInCompletePath, body: body))
+            }
+        }
+        return synthesized
+    }
+
+    private static func syntheticFixture(operation: String, path: String, body: Data) -> Fixture {
+        Fixture(
+            fileName: "synthesized:\(operation)", operation: operation, method: "POST", path: path, caseName: "ok",
+            requestValid: true, responseValid: true, pathParams: [:], query: [:], requestHeaders: [:], requestBody: nil,
+            status: 200, responseHeaders: [:], isEventStream: false, responseBody: body, streamEvents: []
+        )
     }
 
     // MARK: test / debug hooks

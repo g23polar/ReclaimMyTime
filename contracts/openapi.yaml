@@ -34,6 +34,74 @@ tags:
 
 paths:
   # ------------------------------------------------------------------ auth
+  /auth/google/start:
+    post:
+      operationId: startGoogleSignIn
+      tags: [auth]
+      parameters: [{$ref: '#/components/parameters/XTimezoneIgnored'}]
+      summary: Build the Google sign-in consent URL (T6.0, NOTES D26).
+      description: |
+        Unauthenticated. X-Timezone is not required (like POST /auth/apple, D11) and is
+        ignored when sent, whatever its value. The app generates a
+        random nonce, keeps it, and sends `nonce_hash` = base64url(SHA-256(nonce)) without
+        padding. The URL asks for one combined consent (openid, email, calendar.freebusy,
+        calendar.app.created; offline access, prompt=consent, PKCE) under an encrypted
+        `login` state that carries the nonce hash. Open it in ASWebAuthenticationSession;
+        Google redirects to GET /gcal/callback, which 302s to
+        `reclaimmytime://auth/google/callback?result=…`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GoogleSignInStartRequest'}
+      responses:
+        '200':
+          description: Open `authorization_url` in ASWebAuthenticationSession.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GcalConnectUrl'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /auth/google/complete:
+    post:
+      operationId: completeGoogleSignIn
+      tags: [auth]
+      parameters: [{$ref: '#/components/parameters/XTimezoneIgnored'}]
+      summary: Finish Google sign-in and get an opaque session token (T6.0, NOTES D26).
+      description: |
+        Unauthenticated; X-Timezone not required and ignored when sent. Body carries the
+        `auth_code` and `state` from the
+        `result=authorized` sign-in callback, plus the raw `nonce` the app hashed for
+        POST /auth/google/start. The state must decrypt, be unexpired and be a sign-in
+        (`login`) state, and base64url(SHA-256(`nonce`)) must equal the hash it carries;
+        then the server exchanges the code (PKCE), checks the id_token, and finds or creates
+        the user for the Google account (`sub`; no account merging). Always 200 with
+        `is_new_user` (as D21). When both calendar scopes were granted and a refresh token
+        came back, the calendar connection is stored too; otherwise the user is signed in
+        without a new connection and the partial grant is revoked best-effort.
+        `gcal_connected` says whether the user has an active calendar connection after this
+        call (false → show the existing connect prompt, GET /gcal/connect). Errors: 400
+        `gcal_state_invalid` (bad, expired or connect state, or nonce mismatch — not
+        distinguished), 502 `gcal_exchange_failed`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GoogleSignInCompleteRequest'}
+      responses:
+        '200':
+          description: Signed in (existing or newly created user; see `is_new_user`).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GoogleAuthSession'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '502': {$ref: '#/components/responses/BadGateway'}
+        default: {$ref: '#/components/responses/InternalError'}
+
   /auth/apple:
     post:
       operationId: signInWithApple
@@ -44,6 +112,8 @@ paths:
         iss=https://appleid.apple.com, aud=bundle id) and checks that the token's `nonce`
         claim equals SHA-256(`nonce`). The authorization code is exchanged for Apple's
         refresh token (stored encrypted; used to revoke on DELETE /me).
+        Optional since T6.0 (D26): a server without Apple configuration answers 503
+        `apple_unavailable`; Google sign-in is the primary path.
       security: []
       requestBody:
         required: true
@@ -58,6 +128,7 @@ paths:
               schema: {$ref: '#/components/schemas/AuthSession'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
         default: {$ref: '#/components/responses/InternalError'}
 
   /me:
@@ -78,7 +149,7 @@ paths:
       operationId: deleteMe
       tags: [auth]
       summary: Delete the account (App Store requirement).
-      description: Revokes the Apple refresh token, revokes Google if connected, then cascades the user row. Irreversible.
+      description: Revokes Google if connected, then each stored Apple refresh token (only users with an Apple identity have one; T6.0), then cascades the user row. Irreversible.
       parameters: [{$ref: '#/components/parameters/XTimezone'}]
       responses:
         '204': {description: Account deleted; all sessions are invalid.}
@@ -541,6 +612,10 @@ paths:
         and persists nothing (D24, 2026-11-15 T4.1 review): on success it hands Google's code
         and the state back to the app (`result=authorized&auth_code=…&state=…`, both
         URL-encoded), and the app finishes with its bearer via POST /gcal/complete.
+        Shared with Google sign-in (T6.0, D26): a sign-in (`login`) state is sent to
+        `reclaimmytime://auth/google/callback` instead, with the same `result`/`code`
+        parameters, and the app finishes via POST /auth/google/complete. A state too broken
+        to read its purpose goes to the connect URL (`reclaimmytime://gcal/callback`).
         `error=access_denied` → `gcal_access_denied`; any other Google `error`, or no `code` →
         `gcal_exchange_failed`; a missing, undecryptable or expired `state` →
         `gcal_state_invalid` (state is decrypted and its expiry checked; no DB access).
@@ -558,7 +633,7 @@ paths:
               required: true
               schema:
                 type: string
-                pattern: '^reclaimmytime://gcal/callback\?result=(authorized&auth_code=[^&#]+&state=[^&#]+|error&code=[a-z_]+)$'
+                pattern: '^reclaimmytime://(gcal|auth/google)/callback\?result=(authorized&auth_code=[^&#]+&state=[^&#]+|error&code=[a-z_]+)$'
         default: {$ref: '#/components/responses/InternalError'}
 
   /gcal/complete:
@@ -571,8 +646,8 @@ paths:
         redirect. The state must decrypt, be unexpired, and have been issued to this same
         bearer user; then the server exchanges the code (PKCE), checks the granted scopes,
         the refresh token and the id_token, and stores the connection. Errors:
-        400 `gcal_state_invalid` (bad, expired, or another user's state — not distinguished),
-        422 `gcal_scope_insufficient`, 502 `gcal_exchange_failed`.
+        400 `gcal_state_invalid` (bad, expired, or another user's state, or a sign-in state —
+        not distinguished), 422 `gcal_scope_insufficient`, 502 `gcal_exchange_failed`.
       parameters: [{$ref: '#/components/parameters/XTimezone'}]
       requestBody:
         required: true
@@ -666,7 +741,7 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      description: 'Opaque 256-bit session token from POST /auth/apple (`Authorization: Bearer <token>`). Not a JWT.'
+      description: 'Opaque 256-bit session token from POST /auth/google/complete or POST /auth/apple (`Authorization: Bearer <token>`). Not a JWT.'
 
   parameters:
     XTimezone:
@@ -675,6 +750,12 @@ components:
       required: true
       description: Device IANA timezone, sent on every authenticated request (ARCH §3 Semantics).
       schema: {$ref: '#/components/schemas/IanaTimezone'}
+    XTimezoneIgnored:
+      name: X-Timezone
+      in: header
+      required: false
+      description: Optional and ignored on the unauthenticated sign-in routes (T6.0, D26); declared so a client that sends it on every request conforms. Any value is accepted, so it is not validated as IanaTimezone.
+      schema: {type: string}
     ProjectId:
       {name: project_id, in: path, required: true, schema: {type: string, format: uuid}}
     ExceptionId:
@@ -862,6 +943,25 @@ components:
         identity_token: {type: string, minLength: 1, description: Apple identity token (JWT) from ASAuthorizationAppleIDCredential.}
         authorization_code: {type: string, minLength: 1, description: One-time code; exchanged server-side for Apple's refresh token.}
         nonce: {type: string, minLength: 16, description: The raw nonce; the token's nonce claim must equal its SHA-256 hex digest.}
+    GoogleSignInStartRequest:
+      type: object
+      description: T6.0, D26.
+      required: [nonce_hash]
+      additionalProperties: false
+      properties:
+        nonce_hash:
+          type: string
+          description: base64url(SHA-256(nonce)) without padding (43 chars) of a random nonce the app keeps until POST /auth/google/complete.
+          pattern: '^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$'
+    GoogleSignInCompleteRequest:
+      type: object
+      description: From the `result=authorized` sign-in callback redirect, URL-decoded, plus the app's raw nonce (T6.0, D26).
+      required: [auth_code, state, nonce]
+      additionalProperties: false
+      properties:
+        auth_code: {type: string, minLength: 1}
+        state: {type: string, minLength: 1}
+        nonce: {type: string, minLength: 16, maxLength: 512, description: The raw nonce whose hash was sent to POST /auth/google/start.}
     User:
       type: object
       required: [id, email, created_at]
@@ -871,7 +971,7 @@ components:
         email:
           type: [string, 'null']
           format: email
-          description: Null unless Apple reported a verified, non-private-relay address.
+          description: Null unless the sign-in provider reported a verified address (Apple, not private relay; Google, email_verified) that no other user holds.
         created_at: {type: string, format: date-time}
     Session:
       type: object
@@ -890,6 +990,17 @@ components:
         session: {$ref: '#/components/schemas/Session'}
         user: {$ref: '#/components/schemas/User'}
         is_new_user: {type: boolean}
+    GoogleAuthSession:
+      type: object
+      description: AuthSession plus `gcal_connected` (T6.0, D26).
+      required: [token, session, user, is_new_user, gcal_connected]
+      additionalProperties: false
+      properties:
+        token: {type: string, minLength: 32, description: Opaque bearer token. Shown once; store in Keychain.}
+        session: {$ref: '#/components/schemas/Session'}
+        user: {$ref: '#/components/schemas/User'}
+        is_new_user: {type: boolean}
+        gcal_connected: {type: boolean, description: 'The user has an active Google Calendar connection after this sign-in: the one just stored, or (calendar scopes not granted) one that already existed. False → show the connect prompt.'}
 
     # ---------------------------------------------------------------- projects
     Project:

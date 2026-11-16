@@ -7,7 +7,7 @@ import XCTest
 final class FixtureContractTests: XCTestCase {
     /// Every operationId in contracts/openapi.yaml.
     static let allOperations: Set<String> = [
-        "signInWithApple", "getMe", "deleteMe", "revokeAllSessions", "revokeCurrentSession",
+        "startGoogleSignIn", "completeGoogleSignIn", "signInWithApple", "getMe", "deleteMe", "revokeAllSessions", "revokeCurrentSession",
         "listProjects", "createProject", "getProject", "updateProject", "archiveProject",
         "getPreferences", "putPreferences",
         "listExceptions", "createException", "getException", "deleteException",
@@ -124,7 +124,11 @@ final class FixtureContractTests: XCTestCase {
             return
         case 302:
             let location = try XCTUnwrap(fixture.responseHeaders["Location"], fixture.fileName)
-            XCTAssertNotNil(GcalCallbackResult(url: try XCTUnwrap(URL(string: location))), fixture.fileName)
+            // Connect (`reclaimmytime://gcal/callback`) or sign-in (`…://auth/google/callback`, T6.0):
+            // each redirect parses as exactly one route.
+            let url = try XCTUnwrap(URL(string: location))
+            let routes = [GcalCallbackResult.Route.connect, .signIn].filter { GcalCallbackResult(url: url, route: $0) != nil }
+            XCTAssertEqual(routes.count, 1, fixture.fileName)
             return
         default:
             break
@@ -132,6 +136,9 @@ final class FixtureContractTests: XCTestCase {
         let body = try XCTUnwrap(fixture.responseBody, fixture.fileName)
         switch fixture.operation {
         case "signInWithApple": _ = try decoder.decode(AuthSession.self, from: body)
+        case "startGoogleSignIn":
+            XCTAssertNotNil(try decoder.decode(GoogleSignInStart.self, from: body).state, "\(fixture.fileName): the app checks the callback against this state")
+        case "completeGoogleSignIn": _ = try decoder.decode(GoogleSignInResult.self, from: body)
         case "getMe": _ = try decoder.decode(User.self, from: body)
         case "listProjects": _ = try decoder.decode(ProjectList.self, from: body)
         case "getProject": _ = try decoder.decode(Project.self, from: body)
@@ -166,6 +173,8 @@ final class FixtureContractTests: XCTestCase {
     private func roundTripRequest(_ operation: String, body: Data, name: String) throws {
         switch operation {
         case "signInWithApple": try roundTrip(AppleSignInRequest.self, body, name)
+        case "startGoogleSignIn": try roundTrip(GoogleSignInStartRequest.self, body, name)
+        case "completeGoogleSignIn": try roundTrip(GoogleSignInCompleteRequest.self, body, name)
         case "createProject": try roundTrip(ProjectDraft.self, body, name)
         case "updateProject": try roundTrip(ProjectPatch.self, body, name)
         case "putPreferences": try roundTrip(UserPreferences.self, body, name)

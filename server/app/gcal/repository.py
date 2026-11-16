@@ -20,6 +20,7 @@ from app.db.write_paths import lock_user
 
 __all__ = [
     "ConnectionRecord",
+    "account_has_connection",
     "clear_app_calendar_id",
     "delete_connection",
     "get_connection",
@@ -71,6 +72,19 @@ async def get_connection(s: AsyncSession, user_id: uuid.UUID) -> ConnectionRecor
     )
     row = (await s.execute(stmt)).scalar_one_or_none()
     return _record(row) if row is not None else None
+
+
+async def account_has_connection(s: AsyncSession, google_email: str) -> bool:
+    """Whether ANY user's stored connection (any status) is for this Google account.
+
+    google_email is the account identifier we store (citext, so the comparison is
+    case-insensitive; Google's `sub` is not stored on google_connections). Used before a
+    best-effort cleanup revoke: revocation is grant-wide per Google account, so revoking
+    a grant of an account another user (or this one) has connected would kill that
+    connection too. No index on google_email: a scan, fine at v1 scale.
+    """
+    stmt = select(GoogleConnection.user_id).where(GoogleConnection.google_email == google_email)
+    return (await s.execute(stmt.limit(1))).first() is not None
 
 
 def same_account(a: str, b: str) -> bool:

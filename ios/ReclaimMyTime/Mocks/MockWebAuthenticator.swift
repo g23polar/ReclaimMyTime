@@ -18,8 +18,8 @@ enum MockWebAuthenticator {
     ) -> URL {
         var components = URLComponents()
         components.scheme = GcalCallbackResult.scheme
-        components.host = "gcal"
-        components.path = "/callback"
+        components.host = GcalCallbackResult.Route.connect.host
+        components.path = GcalCallbackResult.Route.connect.path
         if let flag = arguments.firstIndex(of: "-MockGcalResult"), arguments.indices.contains(flag + 1) {
             components.queryItems = [
                 URLQueryItem(name: "result", value: "error"),
@@ -35,6 +35,38 @@ enum MockWebAuthenticator {
         }
         // `URLQueryItem` leaves `+`, `/`, `=` unescaped; encode them so the URL matches what the
         // server sends (urlencoded values).
+        components.percentEncodedQuery = components.percentEncodedQuery?
+            .replacingOccurrences(of: "+", with: "%2B")
+            .replacingOccurrences(of: "/", with: "%2F")
+        return components.url!
+    }
+
+    /// Sign-in (T6.0) counterpart of `callbackURL`: the `authorized`
+    /// `reclaimmytime://auth/google/callback` redirect, echoing the `state` of the authorization URL
+    /// the app opened (served by `MockTransport` from a fixture, or its synthesized fallback), so
+    /// the client-side state check passes and the app goes on to `POST /auth/google/complete`.
+    /// Launch with `-MockGoogleSignInResult <code>` (e.g. `gcal_access_denied`) for the error
+    /// callback instead. `-MockGcalResult` keeps applying to the connect flow only.
+    static func signInCallbackURL(
+        authorizationURL: URL,
+        arguments: [String] = ProcessInfo.processInfo.arguments
+    ) -> URL {
+        var components = URLComponents()
+        components.scheme = GcalCallbackResult.scheme
+        components.host = GcalCallbackResult.Route.signIn.host
+        components.path = GcalCallbackResult.Route.signIn.path
+        if let flag = arguments.firstIndex(of: "-MockGoogleSignInResult"), arguments.indices.contains(flag + 1) {
+            components.queryItems = [
+                URLQueryItem(name: "result", value: "error"),
+                URLQueryItem(name: "code", value: arguments[flag + 1]),
+            ]
+        } else {
+            components.queryItems = [
+                URLQueryItem(name: "result", value: "authorized"),
+                URLQueryItem(name: "auth_code", value: fixtureAuthCode),
+                URLQueryItem(name: "state", value: GcalCallbackResult.stateParameter(of: authorizationURL) ?? ""),
+            ]
+        }
         components.percentEncodedQuery = components.percentEncodedQuery?
             .replacingOccurrences(of: "+", with: "%2B")
             .replacingOccurrences(of: "/", with: "%2F")

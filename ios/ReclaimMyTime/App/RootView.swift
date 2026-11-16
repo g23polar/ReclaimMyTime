@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Onboarding flow (design/onboarding.md): intro placeholder → Sign in with Apple → Google Calendar
-/// consent → Chat. Returning users go straight to the tabs.
+/// Onboarding flow (design/onboarding.md): intro placeholder → Continue with Google (T6.0) → Google
+/// Calendar consent (skipped when the sign-in consent already granted the calendar) → Chat.
+/// Returning users go straight to the tabs.
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(AuthState.self) private var auth

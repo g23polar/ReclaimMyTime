@@ -10,6 +10,7 @@ from app.errors import AppError, error_body, register_error_handlers
 
 __all__ = [
     "AppError",
+    "AppleNotConfiguredError",
     "AppleRevocationFailedError",
     "AppleTokenInvalidError",
     "AppleUnavailableError",
@@ -57,10 +58,18 @@ class TimezoneInvalidError(AppError):
 
 
 class AppleUnavailableError(AppError):
-    # TODO(contract): `apple_unavailable` is not in the NOTES.md code table (codes are open
-    # strings, and these routes fall under `default: InternalError`). Main session to ratify.
+    """503 `apple_unavailable`: Apple unreachable (T2.2), or Sign in with Apple is not
+    configured on this server (T6.0, D26)."""
+
+    def __init__(self, message: str = "Sign in with Apple is temporarily unavailable.") -> None:
+        super().__init__(503, "apple_unavailable", message)
+
+
+class AppleNotConfiguredError(AppleUnavailableError):
+    """No APPLE_BUNDLE_ID: Sign in with Apple is not offered (T6.0, D26)."""
+
     def __init__(self) -> None:
-        super().__init__(503, "apple_unavailable", "Sign in with Apple is temporarily unavailable.")
+        super().__init__("Sign in with Apple is not available on this server.")
 
 
 class AppleRevocationFailedError(AppError):

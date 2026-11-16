@@ -1,5 +1,8 @@
 """Google connection lifecycle (T4.1): connect URL, callback redirect, bearer-bound
-completion (D24), status, disconnect, and on-demand access tokens for T4.2/T4.3.
+completion (D24), status, disconnect, and on-demand access tokens for T4.2/T4.3. The
+callback is shared with Google sign-in (T6.0, D26): a `login` state is handed back to the
+app's sign-in callback instead; app.auth.google_signin completes it and reuses
+`persist_connection` and the best-effort revoke helpers below.
 
 Transactions are short and never held across a Google call (same discipline as
 app.auth.service.AccountDeletionService). Credential writes run under the per-user lock.
@@ -12,6 +15,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from urllib.parse import quote, urlencode
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -45,7 +49,7 @@ from app.gcal.errors import (
     GcalTransientError,
 )
 from app.gcal.settings import CALENDAR_SCOPES, REQUESTED_SCOPES, GcalSettings
-from app.gcal.state import StateCodec, StateInvalidError, s256_challenge
+from app.gcal.state import CONNECT, LOGIN, StateCodec, StateInvalidError, s256_challenge
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +84,18 @@ class GcalService:
     # ----------------------------------------------------------------- connect
 
     def authorization_url(self, user_id: uuid.UUID) -> str:
-        s = self._settings
+        """GET /gcal/connect: a `connect` state bound to the bearer user (D24)."""
         token, issued = self._state.issue(user_id, self._clock.now())
+        return self._consent_url(token, issued.code_verifier)
+
+    def login_authorization_url(self, nonce_hash: str) -> str:
+        """POST /auth/google/start (T6.0, D26): the same consent (same scopes, offline,
+        prompt=consent, PKCE) under a `login` state bound to the app nonce's hash."""
+        token, issued = self._state.issue_login(nonce_hash, self._clock.now())
+        return self._consent_url(token, issued.code_verifier)
+
+    def _consent_url(self, state: str, code_verifier: str) -> str:
+        s = self._settings
         params = {
             "client_id": s.client_id,
             "redirect_uri": s.redirect_uri,
@@ -89,18 +103,29 @@ class GcalService:
             "scope": " ".join(REQUESTED_SCOPES),
             "access_type": "offline",
             "prompt": "consent",
-            "code_challenge": s256_challenge(issued.code_verifier),
+            "code_challenge": s256_challenge(code_verifier),
             "code_challenge_method": "S256",
-            "state": token,
+            "state": state,
         }
         return f"{s.auth_url}?{urlencode(params, quote_via=quote)}"
 
     def callback_redirect(self, *, state: str | None, code: str | None, error: str | None) -> str:
-        """GET /gcal/callback (D24): hand Google's code back to the app, which completes
-        the connection with its bearer via POST /gcal/complete. Nothing is exchanged or
-        persisted here, and nothing touches the DB: the state is only decrypted and its
-        expiry checked so an obviously dead attempt fails fast in the app."""
-        base = self._settings.app_callback_url
+        """GET /gcal/callback (D24, D26): hand Google's code back to the app, which completes
+        with its bearer via POST /gcal/complete (`connect`) or with its nonce via POST
+        /auth/google/complete (`login`). Nothing is exchanged or persisted here, and nothing
+        touches the DB: the state is only decrypted and its expiry checked so an obviously
+        dead attempt fails fast in the app.
+
+        The app URL follows the state's purpose: `login` → the sign-in callback; anything
+        else (connect, a pre-T6.0 state, or a state too broken to read) → the connect
+        callback, exactly as before T6.0.
+        """
+        purpose = self._state.peek_purpose(state)
+        base = (
+            self._settings.login_app_callback_url
+            if purpose == LOGIN
+            else self._settings.app_callback_url
+        )
         if error is not None:
             if error == "access_denied":
                 logger.info("google callback: consent denied")
@@ -133,7 +158,8 @@ class GcalService:
         under `_discard`'s same-account rule.
         """
         try:
-            oauth = self._state.open(state, self._clock.now())
+            # A sign-in (`login`) state is invalid here (D26).
+            oauth = self._state.open(state, self._clock.now(), purpose=CONNECT)
         except StateInvalidError as exc:
             logger.info("gcal complete: state rejected: %s", exc)
             raise GcalStateInvalidError() from None
@@ -183,48 +209,27 @@ class GcalService:
     async def _persist(
         self, user_id: uuid.UUID, email: str, tokens: GoogleTokens
     ) -> tuple[repo.ConnectionRecord, tuple[str, str] | None]:
-        """Upsert under the per-user lock. Returns the stored row and, when this replaced a
-        *different* Google account, that account's (plaintext refresh token, google_email)
-        (decrypted here, before it is overwritten) so the caller can revoke it after
-        commit."""
-        assert tokens.refresh_token is not None
-        enc = self._cipher.encrypt(tokens.refresh_token)
-        replaced: tuple[str, str] | None = None
+        """Upsert in a transaction of its own (see `persist_connection`)."""
         async with self._tx() as s:
-            await repo.lock_user(s, user_id)
-            if not await repo.user_exists(s, user_id):
-                # The bearer was valid moments ago; only a concurrent DELETE /me gets here.
-                raise GcalStateInvalidError()
-            previous = await repo.get_connection(s, user_id)
-            if previous is not None and not repo.same_account(previous.google_email, email):
-                try:
-                    replaced = (
-                        self._cipher.decrypt(previous.refresh_token_enc),
-                        previous.google_email,
-                    )
-                except DecryptionError:
-                    logger.warning(
-                        "replaced google credential undecryptable (key_id=%s); not revoked",
-                        previous.key_id,
-                    )
-            await repo.upsert_connection(
-                s,
-                user_id,
-                previous=previous,
-                google_email=email,
-                refresh_token_enc=enc,
-                key_id=self._cipher.primary_key_id,
-                scopes=sorted(tokens.scopes),
-                now=self._clock.now(),
+            return await persist_connection(
+                s, user_id, email, tokens, cipher=self._cipher, now=self._clock.now()
             )
-            stored = await repo.get_connection(s, user_id)
-        assert stored is not None
-        return stored, replaced
+
+    async def revoke_replaced_account(self, user_id: uuid.UUID, token: str, email: str) -> None:
+        """Public seam for Google sign-in (T6.0); see `_revoke_replaced_account`."""
+        await self._revoke_replaced_account(user_id, token, email)
+
+    async def discard(self, user_id: uuid.UUID, tokens: GoogleTokens, email: str | None) -> None:
+        """Public seam for Google sign-in (T6.0); see `_discard`."""
+        await self._discard(user_id, tokens, email)
 
     async def _revoke_replaced_account(self, user_id: uuid.UUID, token: str, email: str) -> None:
         """After switching Google accounts: best-effort revoke of the old account's grant.
         Only ever called for a *different* account (revocation is grant-wide, so doing this
-        for the same account would kill the connection just stored)."""
+        for the same account would kill the connection just stored), and skipped when any
+        other user still has that old account connected (T6.0 review)."""
+        if not await self._safe_to_revoke(email):
+            return
         try:
             await self._client.revoke_token(token)
         except Exception as exc:  # best effort by design
@@ -238,24 +243,21 @@ class GcalService:
     async def _discard(self, user_id: uuid.UUID, tokens: GoogleTokens, email: str | None) -> None:
         """Best-effort revoke of a grant we will not store (failures ignored).
 
-        Google revocation is grant-wide per account, so revoking a token from the same
-        account as the stored connection would kill that connection too. Revoke only when
-        no connection is stored, or when the discarded grant's email is known (verified
-        id_token) and differs from the stored one. Unknown email + existing row → skip.
-        The snapshot can be stale by the time Google acts, so every confirmed revoke is
-        followed by `_reconcile_after_revoke`.
+        Google revocation is grant-wide per account, so revoking a token from an account
+        that ANY user has connected would kill that connection too (T6.0 review: not only
+        the caller's own row). Revoke only when the discarded grant's email is known
+        (verified id_token) and no stored connection, of any user, is for that account.
+        Unknown email → skip: we cannot tell whose account it is. The snapshot can be stale
+        by the time Google acts, so every confirmed revoke is followed by
+        `_reconcile_after_revoke` (which covers the caller's own row).
         """
         token = tokens.refresh_token or tokens.access_token
         if token is None:
             return
-        try:
-            async with self._tx() as s:
-                stored = await repo.get_connection(s, user_id)
-        except Exception as exc:
-            logger.info("discard skipped, connection unreadable: %s", type(exc).__name__)
+        if email is None:
+            logger.info("discarded grant's account unknown; not revoked")
             return
-        if stored is not None and (email is None or repo.same_account(stored.google_email, email)):
-            logger.info("discarded grant may share the stored account's grant; not revoked")
+        if not await self._safe_to_revoke(email):
             return
         try:
             await self._client.revoke_token(token)
@@ -263,6 +265,19 @@ class GcalService:
             logger.info("best-effort revoke of discarded grant failed: %s", type(exc).__name__)
             return
         await self._reconcile_after_revoke(user_id, token=token, email=email)
+
+    async def _safe_to_revoke(self, email: str) -> bool:
+        """No stored connection of any user is for this Google account. Read in a short
+        transaction of its own, without the per-user lock and before Google is called."""
+        try:
+            async with self._tx() as s:
+                held = await repo.account_has_connection(s, email)
+        except Exception as exc:
+            logger.info("cleanup revoke skipped, connections unreadable: %s", type(exc).__name__)
+            return False
+        if held:
+            logger.info("google account has a stored connection; cleanup grant not revoked")
+        return not held
 
     async def _reconcile_after_revoke(
         self, user_id: uuid.UUID, *, token: str, email: str | None
@@ -379,6 +394,52 @@ class GcalService:
             )
         logger.info("google grant revoked (invalid_grant); connection marked revoked=%s", marked)
         raise GcalGrantRevokedError()
+
+
+async def persist_connection(
+    s: AsyncSession,
+    user_id: uuid.UUID,
+    email: str,
+    tokens: GoogleTokens,
+    *,
+    cipher: TokenCipher,
+    now: datetime,
+) -> tuple[repo.ConnectionRecord, tuple[str, str] | None]:
+    """The T4.1 persist path inside the caller's transaction `s`: upsert under the per-user
+    lock (re-entrant, so a caller that already holds it is fine). Returns the stored row and,
+    when this replaced a *different* Google account, that account's (plaintext refresh
+    token, google_email) (decrypted here, before it is overwritten) so the caller can revoke
+    it after commit. GcalStateInvalidError if the user no longer exists (a concurrent
+    DELETE /me)."""
+    assert tokens.refresh_token is not None
+    enc = cipher.encrypt(tokens.refresh_token)
+    replaced: tuple[str, str] | None = None
+    await repo.lock_user(s, user_id)
+    if not await repo.user_exists(s, user_id):
+        # The bearer was valid moments ago; only a concurrent DELETE /me gets here.
+        raise GcalStateInvalidError()
+    previous = await repo.get_connection(s, user_id)
+    if previous is not None and not repo.same_account(previous.google_email, email):
+        try:
+            replaced = (cipher.decrypt(previous.refresh_token_enc), previous.google_email)
+        except DecryptionError:
+            logger.warning(
+                "replaced google credential undecryptable (key_id=%s); not revoked",
+                previous.key_id,
+            )
+    await repo.upsert_connection(
+        s,
+        user_id,
+        previous=previous,
+        google_email=email,
+        refresh_token_enc=enc,
+        key_id=cipher.primary_key_id,
+        scopes=sorted(tokens.scopes),
+        now=now,
+    )
+    stored = await repo.get_connection(s, user_id)
+    assert stored is not None
+    return stored, replaced
 
 
 async def revoke_or_fail(revoker: GoogleRevoker, token: str) -> None:

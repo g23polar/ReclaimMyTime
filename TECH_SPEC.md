@@ -104,6 +104,9 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 
 ## M6 — Integration & hardening
 
+**T6.0 — Google sign-in replaces Sign in with Apple** · owner: `backend-developer` + `ios-developer` · deps: M4 · decided 2026-11-16 (user: no paid Apple Developer membership)
+- One combined Google consent (openid email + calendar.freebusy + calendar.app.created) creates the account, session and calendar connection. Server web flow reusing T4.1: `POST /auth/google/start {nonce_hash}` → `authorization_url`; `/gcal/callback` (state purpose=login) 302s `auth_code`+`state` into the app; `POST /auth/google/complete {auth_code, state, nonce}` → session. Login CSRF is bound by an app nonce whose hash sits in the encrypted state.
+- Identity `(google, sub)`, no account merging; calendar scopes unticked → account created without a connection (existing connect prompt). Apple code kept but optional (503 when unconfigured); iOS shows "Continue with Google".
 **T6.1 — Live integration** · owner: main session · deps: M2–M5
 - Kill the mock flag path by path against the real server; fix seams; `gcal` connect flow on a real test Google account.
 **T6.2 — Journey walkthrough + guards** · owner: main session · deps: T6.1
@@ -117,7 +120,7 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 
 ## Progress checklist
 
-*Maintained by the main session; a task is checked only when committed to `main` after local checks + review. Last updated 2026-11-15.*
+*Maintained by the main session; a task is checked only when committed to `main` after local checks + review. Last updated 2026-11-16.*
 
 **M0 — Foundations**
 - [x] T0.1 API contracts — `9b94804`, frozen `86024f2`
@@ -158,5 +161,6 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 - [ ] Intent-narrative panels (product owner)
 
 **M6 — Integration & hardening**
+- [x] T6.0 Google sign-in replaces Sign in with Apple
 - [ ] T6.1 Live integration
 - [ ] T6.2 Journey walkthrough + guards

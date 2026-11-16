@@ -1,0 +1,20 @@
+{
+  "operation": "gcalCallback",
+  "method": "GET",
+  "path": "/gcal/callback",
+  "case": "login_authorized",
+  "description": "Sign-in step 2 (T6.0, D26): Google redirects here with a `login` state; the server exchanges nothing and hands the code + state to the app's sign-in callback, which completes via POST /auth/google/complete.",
+  "request": {
+    "query": {
+      "state": "Z0FBQUFBQnBsb2dpbi1zdGF0ZS1wbGFjZWhvbGRlcg.TG9naW5TdGF0ZUZvckZpeHR1cmVz",
+      "code": "4/0AeanS0aExampleLoginCode",
+      "scope": "https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/calendar.app.created openid email"
+    }
+  },
+  "response": {
+    "status": 302,
+    "headers": {
+      "Location": "reclaimmytime://auth/google/callback?result=authorized&auth_code=4%2F0AeanS0aExampleLoginCode&state=Z0FBQUFBQnBsb2dpbi1zdGF0ZS1wbGFjZWhvbGRlcg.TG9naW5TdGF0ZUZvckZpeHR1cmVz"
+    }
+  }
+}

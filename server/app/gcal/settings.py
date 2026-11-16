@@ -15,7 +15,8 @@ from cryptography.fernet import Fernet
 
 SCOPE_FREEBUSY = "https://www.googleapis.com/auth/calendar.freebusy"
 SCOPE_APP_CREATED = "https://www.googleapis.com/auth/calendar.app.created"
-# ARCH §1 / review S9: narrow from day one. openid + email only to learn google_email.
+# ARCH §1 / review S9: narrow from day one. openid + email identify the Google account
+# (google_email for the connection; `sub` for the sign-in identity, T6.0).
 CALENDAR_SCOPES = (SCOPE_FREEBUSY, SCOPE_APP_CREATED)
 REQUESTED_SCOPES = (*CALENDAR_SCOPES, "openid", "email")
 
@@ -36,6 +37,8 @@ class GcalSettings:
     redirect_uri: str = ""  # our GET /gcal/callback, as registered with Google
     state_key: str = field(default="", repr=False)  # Fernet key; NOT one of AUTH_FERNET_KEYS
     app_callback_url: str = "reclaimmytime://gcal/callback"  # D15 placeholder scheme
+    # Where GET /gcal/callback sends a `login` state (Google sign-in, T6.0 / D26).
+    login_app_callback_url: str = "reclaimmytime://auth/google/callback"
     auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
     token_url: str = "https://oauth2.googleapis.com/token"
     revoke_url: str = "https://oauth2.googleapis.com/revoke"
@@ -60,6 +63,7 @@ class GcalSettings:
         if missing:
             raise GcalConfigError(f"{', '.join(missing)} must be set (Google OAuth)")
         validate_app_callback_url(self.app_callback_url)
+        validate_app_callback_url(self.login_app_callback_url, "GOOGLE_LOGIN_APP_CALLBACK_URL")
         try:
             Fernet(self.state_key.encode())
         except (ValueError, TypeError):
@@ -95,6 +99,7 @@ class GcalSettings:
             redirect_uri=get("GOOGLE_REDIRECT_URI"),
             state_key=get("GCAL_STATE_KEY"),
             app_callback_url=get("GCAL_APP_CALLBACK_URL", cls.app_callback_url),
+            login_app_callback_url=get("GOOGLE_LOGIN_APP_CALLBACK_URL", cls.login_app_callback_url),
             auth_url=get("GOOGLE_AUTH_URL", cls.auth_url),
             token_url=get("GOOGLE_TOKEN_URL", cls.token_url),
             calendar_api_url=get("GOOGLE_CALENDAR_API_URL", cls.calendar_api_url).rstrip("/"),
@@ -104,11 +109,11 @@ class GcalSettings:
         return settings
 
 
-def validate_app_callback_url(url: str) -> None:
+def validate_app_callback_url(url: str, name: str = "GCAL_APP_CALLBACK_URL") -> None:
     """The callback redirect appends `?result=…`, so the base must carry no query or
     fragment of its own."""
     if not url or "?" in url or "#" in url:
-        raise GcalConfigError("GCAL_APP_CALLBACK_URL must be set, without a query or fragment")
+        raise GcalConfigError(f"{name} must be set, without a query or fragment")
 
 
 def validate_state_key(state_key: str, auth_fernet_keys: str) -> None:

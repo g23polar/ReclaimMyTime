@@ -5,6 +5,13 @@ import Foundation
 /// pending `Changeset` (202); nothing is applied until `confirmChangeset`.
 protocol APIClient: Sendable {
     // auth
+    /// `POST /auth/google/start` (unauthenticated): the Google authorization URL for a sign-in
+    /// whose nonce hash is `request.nonceHash`.
+    func startGoogleSignIn(_ request: GoogleSignInStartRequest) async throws -> GoogleSignInStart
+    /// `POST /auth/google/complete` (unauthenticated): exchanges an `authorized` sign-in callback
+    /// for a session. Errors: 400 `gcal_state_invalid`, 502 `gcal_exchange_failed`.
+    func completeGoogleSignIn(_ request: GoogleSignInCompleteRequest) async throws -> GoogleSignInResult
+    /// `POST /auth/apple`: kept for a future paid-membership build; no UI calls it since T6.0.
     func signInWithApple(_ request: AppleSignInRequest) async throws -> AuthSession
     func getMe() async throws -> User
     func deleteMe() async throws
@@ -75,7 +82,7 @@ struct Endpoint: Sendable {
     let path: String
     var query: [URLQueryItem] = []
     var body: Data?
-    /// False only for `POST /auth/apple`.
+    /// False only for the sign-in routes (`POST /auth/google/start|complete`, `POST /auth/apple`).
     var requiresAuth = true
     /// Overrides the stored session's token for this request.
     var bearerToken: String?

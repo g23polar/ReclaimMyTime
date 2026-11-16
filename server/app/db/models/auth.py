@@ -66,13 +66,13 @@ class User(Base):
 class Identity(Base):
     __tablename__ = "identities"
     __table_args__ = (
-        CheckConstraint("provider IN ('apple')", name="provider"),
+        CheckConstraint("provider IN ('apple', 'google')", name="provider"),
         # Per-user identity reads (deletion, sign-in) and the users -> identities cascade.
         Index("identities_user_id_idx", "user_id"),
     )
 
     provider: Mapped[str] = mapped_column(Text, primary_key=True)
-    subject: Mapped[str] = mapped_column(Text, primary_key=True)  # Apple `sub`
+    subject: Mapped[str] = mapped_column(Text, primary_key=True)  # Apple or Google `sub`
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )

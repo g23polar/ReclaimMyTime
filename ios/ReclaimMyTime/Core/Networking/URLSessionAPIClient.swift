@@ -38,6 +38,14 @@ final class URLSessionAPIClient: APIClient {
 
     // MARK: auth
 
+    func startGoogleSignIn(_ request: GoogleSignInStartRequest) async throws -> GoogleSignInStart {
+        try await send(Endpoint(method: .post, path: "/auth/google/start", body: try encode(request), requiresAuth: false))
+    }
+
+    func completeGoogleSignIn(_ request: GoogleSignInCompleteRequest) async throws -> GoogleSignInResult {
+        try await send(Endpoint(method: .post, path: "/auth/google/complete", body: try encode(request), requiresAuth: false))
+    }
+
     func signInWithApple(_ request: AppleSignInRequest) async throws -> AuthSession {
         try await send(Endpoint(method: .post, path: "/auth/apple", body: try encode(request), requiresAuth: false))
     }

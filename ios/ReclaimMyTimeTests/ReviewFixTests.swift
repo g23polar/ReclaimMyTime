@@ -93,8 +93,13 @@ final class DelayedUnauthorizedTests: XCTestCase {
         let headers = await transport.authorizationHeaders
         XCTAssertEqual(headers, ["Bearer token-A", "Bearer token-A"])
 
+        // `releaseNext` answers whichever request reached the transport first (a1 or a2: their
+        // arrival order isn't guaranteed), so wait for that 401 to land rather than for a1.
+        // Awaiting a1 here hung the suite whenever a2 arrived first (a1 was never released).
         await transport.releaseNext()
-        _ = await a1.value
+        for _ in 0..<1000 where await notifications.count < 1 {  // up to 5 s under load
+            try await Task.sleep(for: .milliseconds(5))
+        }
         let afterFirst = try await store.current()
         XCTAssertNil(afterFirst, "A1's 401 clears session A")
         let firstCount = await notifications.count
@@ -103,6 +108,7 @@ final class DelayedUnauthorizedTests: XCTestCase {
         // The user re-authenticates: session B is persisted before A2's 401 lands.
         try await store.save(makeSession(token: "token-B"))
         await transport.releaseNext()
+        _ = await a1.value
         _ = await a2.value
 
         let survivor = try await store.current()

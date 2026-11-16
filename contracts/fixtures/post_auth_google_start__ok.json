@@ -1,0 +1,21 @@
+{
+  "operation": "startGoogleSignIn",
+  "method": "POST",
+  "path": "/auth/google/start",
+  "case": "ok",
+  "description": "Sign-in step 1 (T6.0, D26): the app sends base64url(SHA-256(nonce)) of a nonce it keeps; the server answers with the combined consent URL (openid, email and both calendar scopes; PKCE; a `login` state carrying the nonce hash). Unauthenticated; X-Timezone is not required and is ignored when sent (the app sends it on every request).",
+  "request": {
+    "headers": {
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "nonce_hash": "W2jeoGpBxZC2mKH1szhjqv0sL6rLiuSMSKygtWMt9MY"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth?client_id=1234567890-abc.apps.googleusercontent.com&redirect_uri=https%3A%2F%2Fapi.reclaimmytime.example%2Fgcal%2Fcallback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcalendar.freebusy%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcalendar.app.created%20openid%20email&access_type=offline&prompt=consent&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&state=Z0FBQUFBQnBsb2dpbi1zdGF0ZS1wbGFjZWhvbGRlcg.TG9naW5TdGF0ZUZvckZpeHR1cmVz"
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "operation": "completeGoogleSignIn",
+  "method": "POST",
+  "path": "/auth/google/complete",
+  "case": "without_calendar",
+  "description": "The user unticked the calendar permissions on Google's consent screen (T6.0, D26): signed in without a connection (the partial grant is revoked best-effort); gcal_connected false, so the app shows the existing connect prompt (GET /gcal/connect).",
+  "request": {
+    "headers": {
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "auth_code": "4/0AeanS0aExampleLoginCode",
+      "state": "Z0FBQUFBQnBsb2dpbi1zdGF0ZS1wbGFjZWhvbGRlcg.TG9naW5TdGF0ZUZvckZpeHR1cmVz",
+      "nonce": "Q7vX2mL9pR4tW8nB6sD3fH5jZ0cY1aE7"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "token": "k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "session": {
+        "id": "2d9e7c4b-1a3f-4b6e-8c5d-7f0a9b8c6d21",
+        "created_at": "2026-11-15T02:40:03Z",
+        "expires_at": "2026-12-15T02:40:03Z"
+      },
+      "user": {
+        "id": "0b6e2f1a-5c3d-4e8f-9a01-2b3c4d5e6f70",
+        "email": "reclaim.tester@gmail.com",
+        "created_at": "2026-11-15T02:40:03Z"
+      },
+      "is_new_user": true,
+      "gcal_connected": false
+    }
+  }
+}

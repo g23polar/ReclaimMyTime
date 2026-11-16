@@ -40,7 +40,9 @@ def parse_fernet_keys(raw: str) -> tuple[tuple[int, str], ...]:
 
 @dataclass(frozen=True)
 class AuthSettings:
-    apple_bundle_id: str  # expected `aud` of identity tokens; also the client_id for /auth/token
+    # Expected `aud` of identity tokens; also the client_id for /auth/token. Empty = Sign in
+    # with Apple is not configured (T6.0: Apple is optional; /auth/apple answers 503).
+    apple_bundle_id: str
     fernet_keys: tuple[tuple[int, str], ...] = field(repr=False)
     apple_team_id: str = ""
     apple_key_id: str = ""
@@ -57,6 +59,11 @@ class AuthSettings:
     session_sliding: timedelta = timedelta(days=30)
     session_absolute: timedelta = timedelta(days=180)
     last_seen_interval: timedelta = timedelta(hours=1)
+
+    @property
+    def apple_configured(self) -> bool:
+        """Sign in with Apple is offered iff APPLE_BUNDLE_ID is set (T6.0)."""
+        return bool(self.apple_bundle_id)
 
     def missing_apple_credentials(self) -> tuple[str, ...]:
         values = (self.apple_team_id, self.apple_key_id, self.apple_private_key_pem)
@@ -77,7 +84,12 @@ class AuthSettings:
         cls, env: Mapping[str, str] | None = None, *, require_apple_credentials: bool = True
     ) -> AuthSettings:
         """Build from env. Pass `require_apple_credentials=False` only when an Apple
-        client is injected (the HTTP client needs APPLE_TEAM_ID/KEY_ID/PRIVATE_KEY)."""
+        client is injected (the HTTP client needs APPLE_TEAM_ID/KEY_ID/PRIVATE_KEY).
+
+        Apple is optional (T6.0): with no APPLE_BUNDLE_ID and no APPLE_* credential the
+        settings build with Apple unconfigured. Partial Apple configuration fails fast: a
+        bundle id without the credentials (unless `require_apple_credentials=False`), or
+        any credential without a bundle id."""
         env = os.environ if env is None else env
 
         def required(name: str) -> str:
@@ -90,7 +102,7 @@ class AuthSettings:
             return timedelta(days=int(env.get(name, default)))
 
         settings = cls(
-            apple_bundle_id=required("APPLE_BUNDLE_ID"),
+            apple_bundle_id=env.get("APPLE_BUNDLE_ID", "").strip(),
             fernet_keys=parse_fernet_keys(required("AUTH_FERNET_KEYS")),
             apple_team_id=env.get("APPLE_TEAM_ID", "").strip(),
             apple_key_id=env.get("APPLE_KEY_ID", "").strip(),
@@ -103,6 +115,13 @@ class AuthSettings:
             session_sliding=days("SESSION_SLIDING_DAYS", 30),
             session_absolute=days("SESSION_ABSOLUTE_DAYS", 180),
         )
-        if require_apple_credentials:
+        if not settings.apple_configured:
+            stray = [n for n in APPLE_CREDENTIAL_VARS if env.get(n, "").strip()]
+            if stray:
+                raise AuthConfigError(
+                    f"APPLE_BUNDLE_ID must be set when {', '.join(stray)} is set "
+                    "(or unset every APPLE_* variable to run without Sign in with Apple)"
+                )
+        elif require_apple_credentials:
             settings.require_apple_credentials()
         return settings

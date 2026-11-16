@@ -39,9 +39,8 @@ final class CalendarConnectionModel {
         }
     }
 
-    /// Opens the authorization URL and returns the callback URL. Production uses SwiftUI's
-    /// `WebAuthenticationSession` (ASWebAuthenticationSession); mock mode and tests inject their own.
-    typealias Authenticator = @MainActor (_ url: URL, _ callbackScheme: String) async throws -> URL
+    /// See `WebAuthenticator`.
+    typealias Authenticator = WebAuthenticator
 
     static let statusKey = "gcalConnectionStatus"
     static let consentCompletedKey = "gcalConsentCompletedUsers"
@@ -116,6 +115,23 @@ final class CalendarConnectionModel {
     func completeConsentStep(userId: UUID) {
         consentCompletedUsers.insert(userId.uuidString)
         defaults.set(Array(consentCompletedUsers).sorted(), forKey: Self.consentCompletedKey)
+    }
+
+    /// Google sign-in (T6.0) for `userId` just stored a session. Binds the model to that account
+    /// and, when the same consent granted the calendar (`gcal_connected: true`), records the
+    /// connection and completes the consent step so onboarding skips "Connect Google Calendar".
+    /// `false` changes nothing beyond the binding: a new account still gets the consent step, and a
+    /// returning one keeps whatever it had until `GET /gcal/status` (the foreground pass) says
+    /// otherwise. The connected email arrives with that same status read.
+    func adoptSignInGrant(userId: UUID, gcalConnected: Bool) {
+        activate(userId: userId)
+        guard gcalConnected else { return }
+        // A fresh grant (and credential) replaces whatever needed reconnecting.
+        needsReconnect = false
+        callout = nil
+        setStatus(.connected)
+        clearRevokedBannerMarker()
+        completeConsentStep(userId: userId)
     }
 
     /// "Not now": planning proceeds without busy data (O5).

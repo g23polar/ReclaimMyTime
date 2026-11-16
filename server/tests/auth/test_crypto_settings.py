@@ -60,6 +60,8 @@ def test_main_app_mounts_auth_routes() -> None:
     # operationIds and paths verbatim from contracts/openapi.yaml.
     assert {
         ("/auth/apple", "post"): "signInWithApple",
+        ("/auth/google/start", "post"): "startGoogleSignIn",
+        ("/auth/google/complete", "post"): "completeGoogleSignIn",
         ("/me", "get"): "getMe",
         ("/me", "delete"): "deleteMe",
         ("/sessions", "delete"): "revokeAllSessions",

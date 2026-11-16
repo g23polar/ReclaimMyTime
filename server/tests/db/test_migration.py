@@ -1,10 +1,13 @@
-"""Alembic 0001_initial: up/down/up on a scratch schema, and migrated schema == Base.metadata."""
+"""Alembic migrations: up/down/up on a scratch schema, migrated schema == Base.metadata, and the
+per-revision data checks (0002 reason backfill, 0003 google identities)."""
 
 from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from sqlalchemy import Connection, inspect, text
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.db.base import Base
@@ -195,5 +198,59 @@ async def test_0002_changeset_reason_backfills_and_round_trips(schema: str) -> N
             await conn.run_sync(run_alembic, "upgrade", "head")
             got = (await conn.execute(text("SELECT reason::text FROM changesets"))).all()
             assert got == [("user_edit",)]
+    finally:
+        await engine.dispose()
+
+
+async def test_0003_google_identity_widens_provider_and_round_trips(schema: str) -> None:
+    """Migration 0003 (T6.0): 'google' identities are rejected before it and accepted after;
+    downgrade refuses while one exists (changing nothing), and otherwise narrows the CHECK
+    back; up again restores it. Apple rows survive every step."""
+    uid = "00000000-0000-4000-8000-000000000003"
+    insert_identity = (
+        "INSERT INTO identities (provider, subject, user_id) VALUES (:p, :s, '" + uid + "')"
+    )
+
+    def provider_check(conn: Connection) -> str:
+        return conn.execute(
+            text(
+                "SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c"
+                " JOIN pg_namespace n ON n.oid = c.connamespace"
+                " WHERE n.nspname = :s AND c.conname = 'ck_identities_provider'"
+            ),
+            {"s": schema},
+        ).scalar_one()
+
+    engine = await make_engine(schema)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(run_alembic, "upgrade", "0002_changeset_reason")
+            await conn.execute(text(f"INSERT INTO users (id) VALUES ('{uid}')"))
+            await conn.execute(text(insert_identity), {"p": "apple", "s": "apple-sub"})
+            nested = await conn.begin_nested()
+            with pytest.raises(IntegrityError):
+                await conn.execute(text(insert_identity), {"p": "google", "s": "g-sub"})
+            await nested.rollback()
+
+            await conn.run_sync(run_alembic, "upgrade", "head")
+            assert "'google'" in await conn.run_sync(provider_check)
+            nested = await conn.begin_nested()
+            await conn.execute(text(insert_identity), {"p": "google", "s": "g-sub"})
+            with pytest.raises(DBAPIError, match="google identities exist"):
+                await conn.run_sync(run_alembic, "downgrade", "0002_changeset_reason")
+            await nested.rollback()  # discards the google row and the failed downgrade
+            with pytest.raises(IntegrityError):
+                async with conn.begin_nested():
+                    await conn.execute(text(insert_identity), {"p": "github", "s": "x"})
+
+            await conn.run_sync(run_alembic, "downgrade", "0002_changeset_reason")
+            assert "'google'" not in await conn.run_sync(provider_check)
+            await conn.run_sync(run_alembic, "upgrade", "head")
+            assert "'google'" in await conn.run_sync(provider_check)
+            await conn.execute(text(insert_identity), {"p": "google", "s": "g-sub-2"})
+            got = (
+                await conn.execute(text("SELECT provider, subject FROM identities ORDER BY 1, 2"))
+            ).all()
+            assert got == [("apple", "apple-sub"), ("google", "g-sub-2")]
     finally:
         await engine.dispose()

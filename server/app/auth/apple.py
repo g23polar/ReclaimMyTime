@@ -21,7 +21,11 @@ import jwt
 from jwt.algorithms import RSAAlgorithm
 
 from app.auth.clock import Clock
-from app.auth.errors import AppleTokenInvalidError, AppleUnavailableError
+from app.auth.errors import (
+    AppleNotConfiguredError,
+    AppleTokenInvalidError,
+    AppleUnavailableError,
+)
 from app.auth.settings import AuthSettings
 
 logger = logging.getLogger(__name__)
@@ -394,6 +398,18 @@ class AppleClient(Protocol):
     async def revoke_refresh_token(self, refresh_token: str) -> None:
         """Revoke a refresh token. Already-invalid tokens count as revoked."""
         ...
+
+
+class UnconfiguredAppleClient:
+    """Stands in when Sign in with Apple is not configured (T6.0): every call is 503
+    `apple_unavailable`. /auth/apple refuses before reaching it; DELETE /me only reaches it
+    for a stored Apple credential, which then cannot be revoked, so deletion fails closed."""
+
+    async def exchange_code(self, authorization_code: str) -> AppleTokenResponse:
+        raise AppleNotConfiguredError()
+
+    async def revoke_refresh_token(self, refresh_token: str) -> None:
+        raise AppleNotConfiguredError()
 
 
 class HttpAppleClient:

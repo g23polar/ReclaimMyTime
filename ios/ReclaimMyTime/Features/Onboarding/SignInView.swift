@@ -1,13 +1,18 @@
-import AuthenticationServices
 import SwiftUI
 
-/// Sign in with Apple (PRD §4.2, design/onboarding.md §2). A fresh nonce is generated per attempt;
-/// Apple gets its SHA-256, the server gets the raw value.
+/// Continue with Google (T6.0, design/onboarding.md §2): one Google consent creates the account,
+/// the session and (if the calendar scopes are granted) the calendar connection. The browser hop
+/// runs in the app's own `WebAuthenticationSession`; mock mode answers it with
+/// `MockWebAuthenticator` so the whole flow is walkable against fixtures.
+///
+/// Sign in with Apple (`AuthState.signInWithApple`) stays in the tree for a future paid-membership
+/// build; no UI calls it.
 struct SignInView: View {
     @Environment(AppModel.self) private var model
     @Environment(AuthState.self) private var auth
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var pendingNonce: String?
+    @Environment(\.webAuthenticationSession) private var webAuthenticationSession
+
+    static let consentCopy = "We'll ask for your Google Calendar free/busy times and permission to add a ReclaimMyTime calendar. We never see your event titles."
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xl) {
@@ -19,36 +24,24 @@ struct SignInView: View {
                 .font(.rmt.body)
                 .foregroundStyle(ColorToken.textPrimary)
 
-            if auth.signInFailure != nil {
-                Text("Apple sign-in didn't go through. Try again.")
+            if let failure = auth.signInFailure {
+                Text(failure.message)
                     .font(.rmt.callout)
                     .foregroundStyle(ColorToken.warning)
                     .accessibilityAddTraits(.updatesFrequently)
             }
 
-            SignInWithAppleButton(.signIn, onRequest: configure, onCompletion: complete)
-                .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-                .frame(height: 50)
-                .disabled(auth.isSigningIn)
-
-            if model.config.usesMock {
-                // Mock mode: the fixture server accepts any credential, so skip Apple's sheet.
-                Button("Continue with mock account") {
-                    Task {
-                        await auth.signInWithApple(
-                            identityToken: "mock-identity-token",
-                            authorizationCode: "mock-authorization-code",
-                            rawNonce: Nonce.random()
-                        )
-                    }
-                }
-                .frame(maxWidth: .infinity, minHeight: HitTarget.min)
-                .disabled(auth.isSigningIn)
+            Button(action: signIn) {
+                Text("Continue with Google")
+                    .frame(maxWidth: .infinity, minHeight: HitTarget.min)
             }
+            .buttonStyle(.borderedProminent)
+            .disabled(auth.isSigningIn)
 
-            Text("We only use your Apple ID to sign you in. We never see your password.")
+            Text(Self.consentCopy)
                 .font(.rmt.callout)
                 .foregroundStyle(ColorToken.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer()
         }
         .padding(Spacing.l)
@@ -57,34 +50,11 @@ struct SignInView: View {
         }
     }
 
-    private func configure(_ request: ASAuthorizationAppleIDRequest) {
-        let nonce = Nonce.random()
-        pendingNonce = nonce
-        request.requestedScopes = [.email]
-        request.nonce = Nonce.sha256Hex(nonce)
-    }
-
-    private func complete(_ result: Result<ASAuthorization, any Error>) {
-        let rawNonce = pendingNonce
-        pendingNonce = nil
-        switch result {
-        case .success(let authorization):
-            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
-                  let rawNonce,
-                  let tokenData = credential.identityToken,
-                  let identityToken = String(data: tokenData, encoding: .utf8),
-                  let codeData = credential.authorizationCode,
-                  let authorizationCode = String(data: codeData, encoding: .utf8)
-            else {
-                auth.appleAuthorizationFailed(cancelled: false)
-                return
-            }
-            Task {
-                await auth.signInWithApple(identityToken: identityToken, authorizationCode: authorizationCode, rawNonce: rawNonce)
-            }
-        case .failure(let error):
-            let cancelled = (error as? ASAuthorizationError)?.code == .canceled
-            auth.appleAuthorizationFailed(cancelled: cancelled)
+    private func signIn() {
+        let session = webAuthenticationSession
+        let usesMock = model.config.usesMock
+        Task {
+            await auth.signInWithGoogle(using: GcalWebAuthenticator.makeForSignIn(session: session, usesMock: usesMock))
         }
     }
 }
