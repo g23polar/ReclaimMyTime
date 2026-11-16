@@ -78,7 +78,7 @@ flowchart LR
 | API | Python 3.12, FastAPI, Pydantic v2 |
 | Solver | Pure Python: greedy, scored packing plus an independent `verify()`; property-tested with Hypothesis |
 | Database | Postgres 16; SQLAlchemy 2.0 (async) + asyncpg; Alembic migrations |
-| Auth | Sign in with Apple; opaque, hashed bearer sessions |
+| Auth | Google sign-in (one consent covers identity and calendar access); opaque, hashed bearer sessions. Sign in with Apple is implemented but optional |
 | LLM | Anthropic Messages API, called only from the server (the API key never ships in the app); model id is configuration |
 | Tooling | uv, pytest, Ruff, import-linter, GitHub Actions |
 
@@ -108,7 +108,7 @@ server/
     scheduler/  Solver models, pack(), verify(): no I/O, no clock, no environment reads
     agent/      Tool schemas, prompt, per-turn staging, narration, /agent/message SSE loop
     api/        REST routers (projects, preferences, exceptions, pins, blocks, plans, changesets)
-    auth/       Sign in with Apple verification, sessions, account deletion
+    auth/       Google sign-in, optional Sign in with Apple, sessions, account deletion
     db/         SQLAlchemy models, solver I/O, write paths
     gcal/       Google Calendar integration (OAuth, free/busy, write-back, edit ingestion, drift)
   alembic/      Migrations
@@ -121,14 +121,15 @@ server/
 |---|---|
 | Solver: packing, `verify()`, typed infeasibility, determinism and golden-replay suites | Done |
 | Persistence and REST API: migrations, propose/confirm changesets, CRUD and plan endpoints | Done |
-| Auth: Sign in with Apple, sessions, account deletion with Apple token revocation | Done |
+| Auth: Google sign-in (one consent for identity + calendar, nonce-bound web flow), sessions, account deletion with token revocation | Done |
+| Auth: Sign in with Apple | Implemented, optional and off by default (needs a paid Apple Developer membership) |
 | Conversational agent: strict tool schemas, staging, streaming turn loop, refusal handling | Done (tested against a recorded/fake model transport) |
 | iOS app: onboarding chat, timetable week/day views, drag/resize/delete as staged edits, diff review, trade-off sheet, notifications | Done, running against a fixture-backed mock transport |
-| Google Calendar: OAuth connect (PKCE, bearer-bound completion), status, disconnect with revocation | Done |
+| Google Calendar: OAuth connect at sign-in or later (PKCE, bound completion), status, disconnect with revocation | Done |
 | Google Calendar: free/busy reads on every solve (primary calendar; fails closed when Google is unreachable or the grant is revoked) | Done |
 | Google Calendar: write-back of confirmed blocks to a dedicated "ReclaimMyTime" calendar (idempotent outbox, retried on sync) | Done |
 | Google Calendar: edits made in Google flow back as pins (applied directly when nothing else moves, otherwise proposed), drift detection | Done |
-| Live end-to-end integration (iOS app against the real server) | Not started |
+| Live end-to-end integration (iOS app against the real server) | In progress |
 | Onboarding intent-narrative illustrations | Placeholder in the app |
 
 Explicitly out of scope for v1: Android or web clients, calendar providers other than
@@ -177,18 +178,19 @@ not at import:
 | Variable | Used for |
 |---|---|
 | `DATABASE_URL` | App and Alembic (`postgresql+asyncpg://...`); apply migrations with `alembic upgrade head` |
-| `APPLE_BUNDLE_ID` | Expected audience of Sign in with Apple identity tokens |
 | `AUTH_FERNET_KEYS` | Encryption keys for stored tokens, as `<key_id>:<fernet-key>[,...]` (first is primary) |
-| `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` | Apple REST client (authorization-code exchange, revocation) |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | **Required for sign-in.** One Google OAuth web client (Calendar API enabled) serves both sign-in and the calendar connection; the single redirect URI points at `/gcal/callback` |
+| `GCAL_STATE_KEY` | Fernet key that encrypts the OAuth `state` for both flows (must differ from every `AUTH_FERNET_KEYS` entry) |
+| `GCAL_APP_CALLBACK_URL` | Optional; calendar-connect redirect target, default `reclaimmytime://gcal/callback` |
+| `GOOGLE_LOGIN_APP_CALLBACK_URL` | Optional; sign-in redirect target, default `reclaimmytime://auth/google/callback` |
 | `ANTHROPIC_API_KEY` | Read by the Anthropic SDK for `/agent/message` |
 | `AGENT_MODEL` | Optional model id override |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | Google OAuth web client; the redirect URI points at `/gcal/callback` |
-| `GCAL_STATE_KEY` | Fernet key that encrypts the OAuth `state` (must differ from every `AUTH_FERNET_KEYS` entry) |
-| `GCAL_APP_CALLBACK_URL` | Optional; app redirect target, default `reclaimmytime://gcal/callback` |
+| `APPLE_BUNDLE_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` | Optional, all or none. Sign in with Apple (identity-token audience, code exchange, revocation). Unset: `POST /auth/apple` answers 503 `apple_unavailable` |
 
-Authenticated routes need real Sign in with Apple credentials, so running the full API
-locally is currently only practical for the authors. The test suite needs none of these
-variables because it injects fakes.
+`server/.env.example` is a commented template for these. Copy it to `server/.env`
+(gitignored) and load it with `set -a; source .env; set +a` before starting the server.
+Signing in locally needs a Google OAuth client with your account added as a test user on its
+consent screen. The test suite needs none of these variables because it injects fakes.
 
 ### iOS
 
@@ -196,7 +198,8 @@ Requires Xcode 26 (the project targets iOS 17 and Swift 6). Open
 `ios/ReclaimMyTime.xcodeproj` and run the **ReclaimMyTime** scheme.
 
 - The shared scheme launches with `-UseMockAPI YES`, so the app runs entirely against the
-  JSON fixtures in `contracts/fixtures/`. No server or Apple account is needed. The fixtures
+  JSON fixtures in `contracts/fixtures/`. No server or Google account is needed; sign-in goes
+  through a mock Google flow. The fixtures
   are referenced from the repository, so build from a full checkout.
 - In Debug builds, `-DemoScenario week|day|review|tradeoff` opens the app on a canned mock
   state (useful for screenshots).
