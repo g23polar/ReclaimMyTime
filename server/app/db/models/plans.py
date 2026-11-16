@@ -116,6 +116,11 @@ class Changeset(Base):
     status: Mapped[str] = mapped_column(
         pg_enum("changeset_status"), nullable=False, server_default=text("'pending'")
     )
+    # Migration 0002 (T4.3). The default only backfilled pre-existing rows; every write path
+    # passes `reason` explicitly (`stage_changeset`).
+    reason: Mapped[str] = mapped_column(
+        pg_enum("changeset_reason"), nullable=False, server_default=text("'user_edit'")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

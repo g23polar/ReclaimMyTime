@@ -23,6 +23,7 @@
     "body": {
       "id": "c4a7e1f2-8b3d-4f6a-9e05-1d2c3b4a5e10",
       "status": "pending",
+      "reason": "user_edit",
       "plan_id": null,
       "staged": [
         {

@@ -125,13 +125,25 @@ async def test_revoked_on_confirm_is_409_and_applies_nothing(
     assert await status(maker, body["id"]) == "pending"
 
 
+def without_outbox(changeset: dict[str, Any]) -> dict[str, Any]:
+    plan = changeset["plan"]
+    blocks = [
+        {k: v for k, v in b.items() if k not in ("gcal_status", "gcal_event_id")}
+        for b in plan["blocks"]
+    ]
+    return changeset | {"plan": plan | {"blocks": blocks}}
+
+
 async def test_confirm_replay_and_planless_changesets_read_no_busy(
     google, cal, cipher, client, maker, who
 ):
     body = await staged(client, maker, who.user_id, cipher)
     first = await ok(client.post(f"/changesets/{body['id']}/confirm"), 200)
     cal.freebusy = Reply(status=500, json={})  # Google down: an idempotent replay still works
-    assert await ok(client.post(f"/changesets/{body['id']}/confirm"), 200) == first
+    replay = await ok(client.post(f"/changesets/{body['id']}/confirm"), 200)
+    # The confirm kicked a write-back drain (T4.3a): the replay shows the blocks' current
+    # outbox state, which may have moved on. Everything else is the same changeset.
+    assert without_outbox(replay) == without_outbox(first)
     unknown = await client.post(f"/changesets/{uuid.uuid4()}/confirm")
     assert unknown.status_code == 404  # not a gcal error: nothing to solve
 

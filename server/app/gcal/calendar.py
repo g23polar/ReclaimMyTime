@@ -1,5 +1,6 @@
 """Google Calendar REST client (T4.2): freeBusy on the primary calendar, and create/delete of
-the app-owned secondary calendar (both allowed under our two narrow scopes).
+the app-owned secondary calendar (both allowed under our two narrow scopes). T4.3 adds
+insert/update/delete of events in that app calendar (the write-back outbox).
 
 Same discipline as app.gcal.client: the access token is passed in per call, held in memory
 only, and never logged; neither are response bodies. Log lines carry the HTTP status or the
@@ -34,6 +35,26 @@ class CalendarNotFoundError(Exception):
     """Google answered 404 for a calendar id (e.g. the user deleted the app calendar)."""
 
 
+class EventExistsError(Exception):
+    """events.insert answered 409: an event with this client-supplied id already exists in the
+    calendar (possibly cancelled). The write-back falls through to an update."""
+
+
+class EventNotFoundError(Exception):
+    """events.update answered 404/410: no such event (or the calendar itself is gone; Google
+    does not distinguish). The write-back falls back to an insert, which does."""
+
+
+class EventRejectedError(Exception):
+    """A non-retryable 4xx for this one event (e.g. 400). The write-back leaves the row pending
+    and moves on; retrying the same body would fail the same way."""
+
+
+# 401/403/429 on a token minted moments ago are a Google hiccup or a quota/rate limit, not a
+# revoked grant (refresh would have said invalid_grant): transient, like 5xx.
+_TRANSIENT_4XX = frozenset({401, 403, 408, 429})
+
+
 @dataclass(frozen=True)
 class BusySpan:
     """One raw freeBusy interval, absolute UTC, exactly as Google reported it."""
@@ -56,6 +77,24 @@ class GoogleCalendarClient(Protocol):
 
     async def delete_calendar(self, access_token: str, calendar_id: str) -> None:
         """Delete an app-created calendar. CalendarNotFoundError | GoogleUnavailableError."""
+        ...
+
+    async def insert_event(self, access_token: str, calendar_id: str, event: dict[str, Any]) -> str:
+        """events.insert with the client-supplied `event["id"]`; returns the new etag.
+        CalendarNotFoundError (404) | EventExistsError (409) | EventRejectedError |
+        GoogleUnavailableError."""
+        ...
+
+    async def update_event(
+        self, access_token: str, calendar_id: str, event_id: str, event: dict[str, Any]
+    ) -> str:
+        """events.update (full replace); returns the new etag. EventNotFoundError (404/410) |
+        EventRejectedError | GoogleUnavailableError."""
+        ...
+
+    async def delete_event(self, access_token: str, calendar_id: str, event_id: str) -> None:
+        """events.delete. Already gone (404/410) is success: the event does not exist either
+        way. EventRejectedError | GoogleUnavailableError."""
         ...
 
 
@@ -173,3 +212,62 @@ class HttpGoogleCalendarClient:
             raise CalendarNotFoundError()
         logger.warning("google calendars.delete returned %s", response.status_code)
         raise GoogleUnavailableError()
+
+    # ------------------------------------------------------------- events (T4.3 write-back)
+    # Event bodies carry project names: never logged, nor are Google's answers. Log lines
+    # carry the HTTP status only.
+
+    @staticmethod
+    def _events_path(calendar_id: str, event_id: str | None = None) -> str:
+        path = f"/calendars/{quote(calendar_id, safe='')}/events"
+        return path if event_id is None else f"{path}/{quote(event_id, safe='')}"
+
+    @staticmethod
+    def _fail(response: httpx.Response, what: str) -> Exception:
+        """The error for an unexpected status (callers have handled their specific ones)."""
+        status = response.status_code
+        logger.warning("google %s returned %s", what, status)
+        if 400 <= status < 500 and status not in _TRANSIENT_4XX:
+            return EventRejectedError()
+        return GoogleUnavailableError()
+
+    @classmethod
+    def _etag(cls, response: httpx.Response, what: str) -> str:
+        body = cls._json(response, what)
+        etag = body.get("etag") if isinstance(body, dict) else None
+        if not isinstance(etag, str) or not etag:
+            logger.warning("google %s answer lacks an etag", what)
+            raise GoogleUnavailableError()
+        return etag
+
+    async def insert_event(self, access_token: str, calendar_id: str, event: dict[str, Any]) -> str:
+        response = await self._request(
+            "POST", self._events_path(calendar_id), access_token, json=event
+        )
+        if response.status_code == 404:
+            raise CalendarNotFoundError()
+        if response.status_code == 409:
+            raise EventExistsError()
+        if response.status_code != 200:
+            raise self._fail(response, "events.insert")
+        return self._etag(response, "events.insert")
+
+    async def update_event(
+        self, access_token: str, calendar_id: str, event_id: str, event: dict[str, Any]
+    ) -> str:
+        response = await self._request(
+            "PUT", self._events_path(calendar_id, event_id), access_token, json=event
+        )
+        if response.status_code in (404, 410):
+            raise EventNotFoundError()
+        if response.status_code != 200:
+            raise self._fail(response, "events.update")
+        return self._etag(response, "events.update")
+
+    async def delete_event(self, access_token: str, calendar_id: str, event_id: str) -> None:
+        response = await self._request(
+            "DELETE", self._events_path(calendar_id, event_id), access_token
+        )
+        if response.status_code in (200, 204, 404, 410):
+            return
+        raise self._fail(response, "events.delete")

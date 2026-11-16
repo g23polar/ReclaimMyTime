@@ -296,6 +296,7 @@ def changeset_out(
     return {
         "id": str(cs.id),
         "status": cs.status,
+        "reason": cs.reason,
         "plan_id": None if cs.plan_id is None else str(cs.plan_id),
         "staged": staged_out(cs.staged),
         "created_at": ts(cs.created_at),

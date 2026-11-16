@@ -607,6 +607,40 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         default: {$ref: '#/components/responses/InternalError'}
 
+  /gcal/sync:
+    post:
+      operationId: syncGcal
+      tags: [gcal]
+      summary: Sync with Google Calendar and fetch the pending changeset (2026-11-16, T4.3; NOTES D25).
+      description: |
+        Call on app foreground and from BGAppRefreshTask. No request body.
+
+        1. Drains this user's write-back outbox (live blocks → events in the app calendar),
+           waiting at most ~10 s overall. Whatever remains stays pending (retried by the next
+           confirm or sync), and the response still returns.
+        2. (Reserved for T4.3 part (b), same endpoint: ingest edits made to our events inside
+           Google → a `google_edit` changeset; drift check → a `drift` changeset.)
+        3. Returns the user's current pending changeset, if any (resolves O2), and the outbox
+           counts.
+
+        Never connected (or disconnected): 200 with `outbox` all zeros; nothing is written
+        and `pending_changeset` is still returned. Errors: 409 `gcal_reconnect_required`
+        (connection revoked, or its credential undecryptable: reconnect via GET /gcal/connect),
+        503 `gcal_unavailable` (Google failed during the drain; what was written stays written,
+        the rest stays pending; retry later).
+      parameters: [{$ref: '#/components/parameters/XTimezone'}]
+      responses:
+        '200':
+          description: Synced as far as the time budget allowed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GcalSyncResult'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+        default: {$ref: '#/components/responses/InternalError'}
+
   /gcal:
     delete:
       operationId: disconnectGcal
@@ -766,6 +800,17 @@ components:
     PinKind: {type: string, enum: [pin, forbid]}
     PlanStatus: {type: string, enum: [proposed, live, superseded, rejected]}
     ChangesetStatus: {type: string, enum: [pending, confirmed, rejected, expired]}
+    ChangesetReason:
+      type: string
+      description: |
+        Why the changeset was proposed (2026-11-16, T4.3; NOTES D25). `user_edit`: a REST
+        staged write (projects, preferences, exceptions, pins, block edit/delete). `agent`:
+        an agent turn (POST /agent/message). `drift`: calendar busy time now overlaps live
+        blocks; the server re-solved with no constraint change (`staged` may be empty).
+        `google_edit`: one of our events was edited inside Google Calendar; `staged` carries
+        the resulting pin(s). A stale re-proposal (409 `changeset_stale`) keeps the reason of
+        the changeset it replaces.
+      enum: [user_edit, agent, drift, google_edit]
     BlockState: {type: string, enum: [planned, completed, skipped]}
     GcalSync: {type: string, enum: [pending, synced, failed]}
     MutationSource: {type: string, enum: [agent, manual, system]}
@@ -1307,15 +1352,20 @@ components:
         at proposal time. plan_id/plan/diff are null when no solve was possible yet (onboarding,
         before preferences exist). `narration` is deterministic template text for manual/system
         proposals; null for agent proposals (the agent's reply narrates).
-      required: [id, status, plan_id, staged, created_at, resolved_at, plan, diff, narration]
+      required: [id, status, reason, plan_id, staged, created_at, resolved_at, plan, diff, narration]
       additionalProperties: false
       properties:
         id: {type: string, format: uuid}
         status: {$ref: '#/components/schemas/ChangesetStatus'}
+        reason: {$ref: '#/components/schemas/ChangesetReason'}
         plan_id: {type: [string, 'null'], format: uuid}
         staged:
           type: array
-          minItems: 1
+          description: |
+            The staged mutations, unapplied until confirm. Empty ONLY when `reason` is `drift`
+            (a re-solve that changes no constraint; O11, resolved 2026-11-16 T4.3); every other
+            reason has at least one entry (enforced by the `if`/`then` below, 2026-11-16 T4.3).
+          minItems: 0
           items: {$ref: '#/components/schemas/StagedMutation'}
         created_at: {type: string, format: date-time}
         resolved_at: {type: [string, 'null'], format: date-time}
@@ -1324,6 +1374,11 @@ components:
         diff:
           oneOf: [{$ref: '#/components/schemas/PlanDiff'}, {type: 'null'}]
         narration: {type: [string, 'null']}
+      # 2026-11-16 (T4.3, D25): `staged` may be empty only for a drift re-solve.
+      if:
+        properties: {reason: {not: {const: drift}}}
+      then:
+        properties: {staged: {minItems: 1}}
 
     StagedMutation:
       description: |
@@ -1617,3 +1672,24 @@ components:
       properties:
         connection:
           oneOf: [{$ref: '#/components/schemas/GoogleConnection'}, {type: 'null'}]
+    GcalSyncResult:
+      type: object
+      description: POST /gcal/sync answer (2026-11-16, T4.3; NOTES D25).
+      required: [pending_changeset, outbox]
+      additionalProperties: false
+      properties:
+        pending_changeset:
+          description: The user's current pending changeset (at most one, D4), else null.
+          oneOf: [{$ref: '#/components/schemas/Changeset'}, {type: 'null'}]
+        outbox: {$ref: '#/components/schemas/OutboxCounts'}
+    OutboxCounts:
+      type: object
+      description: |
+        Write-back state of the blocks in live plans of the current and future weeks, after
+        the drain. `pending`: not yet written to Google (retried automatically); `synced`:
+        written. Both 0 when Google Calendar is not connected.
+      required: [pending, synced]
+      additionalProperties: false
+      properties:
+        pending: {type: integer, minimum: 0}
+        synced: {type: integer, minimum: 0}

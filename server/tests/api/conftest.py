@@ -69,16 +69,21 @@ def who(user_id: uuid.UUID) -> Who:  # noqa: F811
 
 
 @pytest.fixture
-def app(
+async def app(
     maker: async_sessionmaker[AsyncSession],  # noqa: F811
     clock: SettableClock,
     who: Who,
-) -> FastAPI:
+) -> AsyncIterator[FastAPI]:
     application = build_app()
     application.state.sessionmaker = maker
     application.state.clock = clock
     application.dependency_overrides[current_user_id] = lambda: who.user_id
-    return application
+    yield application
+    # T4.3a: confirm kicks a background write-back drain; let it finish before the schema
+    # (and its engine) is torn down.
+    registry = getattr(application.state, "gcal_outbox", None)
+    if registry is not None:
+        await registry.idle(30)
 
 
 @pytest.fixture

@@ -1,8 +1,14 @@
 """Recorded-HTTP Google Calendar for T4.2 tests (freeBusy, calendars.insert/delete) plus helpers
-that seed a Google connection row and install a gcal runtime. Nothing here talks to Google."""
+that seed a Google connection row and install a gcal runtime. Nothing here talks to Google.
+
+T4.3a adds an in-memory event store for the write-back (events.insert/update/delete), with
+Google's semantics as far as the worker relies on them: a client-supplied id that exists
+(even cancelled) → 409 on insert; update of a cancelled event revives it; delete of a cancelled
+event → 410; any event call on a calendar in `gone_calendars` → 404."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import Awaitable, Callable
@@ -28,6 +34,7 @@ from tests.gcal.fakes import EMAIL, REFRESH_TOKEN, FakeGoogle, Reply, settings
 CALENDAR_URL = "https://calendar.test/calendar/v3"
 FREEBUSY_URL = f"{CALENDAR_URL}/freeBusy"
 CALENDARS_URL = f"{CALENDAR_URL}/calendars"
+CALENDARS_PATH = httpx.URL(CALENDARS_URL).path
 
 
 def z(dt: datetime) -> str:
@@ -61,6 +68,15 @@ class FakeCalendar:
     )
     on_create: Callable[[], Awaitable[None]] | None = None
     requests: list[tuple[str, str, Any, str | None]] = field(default_factory=list)
+    # ---- events (T4.3a)
+    events: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
+    gone_calendars: set[str] = field(default_factory=set)
+    # (method, event_id) → a reply that replaces the normal answer, or None for normal.
+    event_fault: Callable[[str, str], Reply | None] | None = None
+    # Every event call waits on this when set (concurrency tests hold the drain mid-flight).
+    event_gate: asyncio.Event | None = None
+    event_started: asyncio.Event = field(default_factory=asyncio.Event)
+    _etags: int = 0
 
     @property
     def freebusy_bodies(self) -> list[Any]:
@@ -72,12 +88,70 @@ class FakeCalendar:
 
     @property
     def deleted(self) -> list[str]:
+        """Calendars deleted (events.delete calls are in `event_calls`)."""
         prefix = CALENDARS_URL + "/"
         return [
             httpx.URL(url).path.rsplit("/", 1)[1]
             for m, url, _, _ in self.requests
-            if m == "DELETE" and url.startswith(prefix)
+            if m == "DELETE" and url.startswith(prefix) and "/events" not in url
         ]
+
+    @property
+    def event_calls(self) -> list[tuple[str, str]]:
+        """(method, event id) of every events.* call, in order (insert: the body's id)."""
+        out = []
+        for m, url, body, _ in self.requests:
+            path = httpx.URL(url).path
+            if "/events" not in path:
+                continue
+            tail = path.split("/events", 1)[1].lstrip("/")
+            out.append((m, tail or (body or {}).get("id", "")))
+        return out
+
+    def calendar_events(self, calendar_id: str, *, include_cancelled: bool = False) -> dict:
+        return {
+            eid: ev
+            for (cal, eid), ev in self.events.items()
+            if cal == calendar_id and (include_cancelled or ev["status"] != "cancelled")
+        }
+
+    def _event(self, request: httpx.Request, body: Any) -> httpx.Response:
+        rest = request.url.path[len(CALENDARS_PATH) + 1 :]
+        calendar_id, _, event_part = rest.partition("/events")
+        event_id = event_part.lstrip("/") or (body or {}).get("id", "")
+        if self.event_fault is not None:
+            reply = self.event_fault(request.method, event_id)
+            if reply is not None:
+                if reply.raise_exc is not None:
+                    raise reply.raise_exc
+                return httpx.Response(reply.status, json=reply.json)
+        if calendar_id in self.gone_calendars:
+            return httpx.Response(404, json={"error": {"code": 404, "message": "Not Found"}})
+        key = (calendar_id, event_id)
+        existing = self.events.get(key)
+        if request.method == "POST":
+            if existing is not None:
+                return httpx.Response(409, json={"error": {"code": 409, "message": "duplicate"}})
+            return self._store(key, body)
+        if request.method == "PUT":
+            if existing is None:
+                return httpx.Response(404, json={"error": {"code": 404, "message": "Not Found"}})
+            return self._store(key, {"id": event_id, **body})
+        if request.method == "DELETE":
+            if existing is None:
+                return httpx.Response(404)
+            if existing["status"] == "cancelled":
+                return httpx.Response(410)
+            existing["status"] = "cancelled"
+            return httpx.Response(204)
+        return httpx.Response(405)
+
+    def _store(self, key: tuple[str, str], body: dict[str, Any]) -> httpx.Response:
+        self._etags += 1
+        event = {"kind": "calendar#event", **body, "etag": f'"{self._etags:06d}"'}
+        event.setdefault("status", "confirmed")
+        self.events[key] = event
+        return httpx.Response(200, json=event)
 
     async def handler(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -91,6 +165,11 @@ class FakeCalendar:
             reply = self.create or Reply(
                 json={"kind": "calendar#calendar", "id": self.ids.pop(0), "summary": "x"}
             )
+        elif url.startswith(CALENDARS_URL + "/") and "/events" in request.url.path:
+            self.event_started.set()
+            if self.event_gate is not None:
+                await self.event_gate.wait()
+            return self._event(request, body)
         elif request.method == "DELETE" and url.startswith(CALENDARS_URL + "/"):
             reply = self.delete
         else:

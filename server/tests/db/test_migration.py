@@ -157,3 +157,43 @@ async def test_metadata_columns_and_nullability_direct(engine: AsyncEngine) -> N
 
     async with engine.connect() as conn:
         await conn.run_sync(check)
+
+
+async def test_0002_changeset_reason_backfills_and_round_trips(schema: str) -> None:
+    """Migration 0002 (T4.3): existing changesets are backfilled `user_edit`; down drops the
+    column and its enum; up again restores both."""
+
+    def columns(conn: Connection) -> set[str]:
+        return {c["name"] for c in inspect(conn).get_columns("changesets")}
+
+    engine = await make_engine(schema)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(run_alembic, "upgrade", "0001_initial")
+            assert "reason" not in await conn.run_sync(columns)
+            await conn.execute(
+                text("INSERT INTO users (id) VALUES ('00000000-0000-4000-8000-000000000001')")
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO changesets (user_id, staged) VALUES"
+                    " ('00000000-0000-4000-8000-000000000001', '[]')"
+                )
+            )
+            await conn.run_sync(run_alembic, "upgrade", "head")
+            got = (await conn.execute(text("SELECT reason::text FROM changesets"))).all()
+            assert got == [("user_edit",)]
+            assert (await conn.run_sync(_enums, schema))["changeset_reason"] == [
+                "user_edit",
+                "agent",
+                "drift",
+                "google_edit",
+            ]
+            await conn.run_sync(run_alembic, "downgrade", "0001_initial")
+            assert "reason" not in await conn.run_sync(columns)
+            assert "changeset_reason" not in await conn.run_sync(_enums, schema)
+            await conn.run_sync(run_alembic, "upgrade", "head")
+            got = (await conn.execute(text("SELECT reason::text FROM changesets"))).all()
+            assert got == [("user_edit",)]
+    finally:
+        await engine.dispose()

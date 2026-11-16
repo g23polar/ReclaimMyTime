@@ -1,0 +1,23 @@
+{
+  "operation": "syncGcal",
+  "method": "POST",
+  "path": "/gcal/sync",
+  "case": "ok",
+  "description": "Foreground sync with nothing pending: the outbox drained (every block of the live week is in the app calendar) and no changeset awaits review.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "pending_changeset": null,
+      "outbox": {
+        "pending": 0,
+        "synced": 9
+      }
+    }
+  }
+}

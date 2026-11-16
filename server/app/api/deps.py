@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
-from fastapi import Body, Depends, Request
+from fastapi import Body, Depends, FastAPI, Request
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -29,9 +29,13 @@ from app.db.session import get_sessionmaker
 from app.errors import AppError
 
 
-def get_maker(request: Request) -> async_sessionmaker[AsyncSession]:
-    maker = getattr(request.app.state, "sessionmaker", None)
+def maker_for_app(app: FastAPI) -> async_sessionmaker[AsyncSession]:
+    maker = getattr(app.state, "sessionmaker", None)
     return maker if maker is not None else get_sessionmaker()
+
+
+def get_maker(request: Request) -> async_sessionmaker[AsyncSession]:
+    return maker_for_app(request.app)
 
 
 Maker = Annotated[async_sessionmaker[AsyncSession], Depends(get_maker)]
@@ -53,9 +57,13 @@ async def get_tx(maker: Maker) -> AsyncIterator[AsyncSession]:
 Tx = Annotated[AsyncSession, Depends(get_tx, scope="function")]
 
 
+def clock_for_app(app: FastAPI) -> Clock:
+    clock: Clock | None = getattr(app.state, "clock", None)
+    return clock or SystemClock()
+
+
 def get_now(request: Request) -> datetime:
-    clock: Clock = getattr(request.app.state, "clock", None) or SystemClock()
-    return clock.now()
+    return clock_for_app(request.app).now()
 
 
 Now = Annotated[datetime, Depends(get_now)]

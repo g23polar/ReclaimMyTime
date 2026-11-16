@@ -126,7 +126,8 @@ server/
 | iOS app: onboarding chat, timetable week/day views, drag/resize/delete as staged edits, diff review, trade-off sheet, notifications | Done, running against a fixture-backed mock transport |
 | Google Calendar: OAuth connect (PKCE, bearer-bound completion), status, disconnect with revocation | Done |
 | Google Calendar: free/busy reads on every solve (primary calendar; fails closed when Google is unreachable or the grant is revoked) | Done |
-| Google Calendar: write-back to the app calendar, drift detection | In progress |
+| Google Calendar: write-back of confirmed blocks to a dedicated "ReclaimMyTime" calendar (idempotent outbox, retried on sync) | Done |
+| Google Calendar: edits made in Google flow back as pins, drift detection | In progress |
 | Live end-to-end integration (iOS app against the real server) | Not started |
 | Onboarding intent-narrative illustrations | Placeholder in the app |
 

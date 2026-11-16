@@ -16,12 +16,13 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.busy import Busy, BusyWindow, fetch_window
 from app.api.deps import Maker, Now, Tx, UserId, transaction
+from app.api.outbox import kick_outbox
 from app.api.views import changeset_view
 from app.auth.dependencies import require_timezone
 from app.db.models import Changeset, WeekPlan
@@ -47,7 +48,12 @@ router = APIRouter(tags=["changesets"], dependencies=[Depends(require_timezone)]
 
 @router.post("/changesets/{changeset_id}/confirm", operation_id="confirmChangeset")
 async def confirm(
-    user_id: UserId, maker: Maker, now: Now, busy: Busy, changeset_id: uuid.UUID
+    request: Request,
+    user_id: UserId,
+    maker: Maker,
+    now: Now,
+    busy: Busy,
+    changeset_id: uuid.UUID,
 ) -> dict[str, Any]:
     # T4.2: fresh busy time, read before the confirm transaction and its advisory lock, with
     # no pooled connection held across the Google call (review round 1).
@@ -56,7 +62,11 @@ async def confirm(
         async with transaction(maker) as tx:
             busy_now = None if fresh is None else fresh.intervals
             await confirm_changeset(tx, user_id, changeset_id, now=now, busy=busy_now)
-            return await changeset_view(tx, user_id, changeset_id)
+            body = await changeset_view(tx, user_id, changeset_id)
+        # Committed: drain the write-back outbox in the background (T4.3a). Fire-and-forget,
+        # so it never delays or fails this response; leftovers wait for the next kick/sync.
+        kick_outbox(request.app, user_id)
+        return body
     except ChangesetStale as stale:  # the confirm transaction has rolled back
         async with transaction(maker) as tx:
             outcome = await _restage(
@@ -67,8 +77,9 @@ async def confirm(
                 now=now,
                 busy=() if fresh is None else fresh.intervals,
             )
-            if isinstance(outcome, dict):  # confirmed by a concurrent request: idempotent 200
-                return outcome
+        if isinstance(outcome, dict):  # confirmed by a concurrent request: idempotent 200
+            kick_outbox(request.app, user_id)
+            return outcome
         raise AppError(
             409,
             "changeset_stale",
@@ -124,7 +135,7 @@ async def _restage(
     await lock_user(tx, user_id)
     rows = (
         await tx.execute(
-            select(Changeset.id, Changeset.status, Changeset.staged).where(
+            select(Changeset.id, Changeset.status, Changeset.staged, Changeset.reason).where(
                 Changeset.user_id == user_id,
                 or_(Changeset.id == changeset_id, Changeset.status == "pending"),
             )
@@ -141,15 +152,25 @@ async def _restage(
         raise ChangesetNotPending("expired")
     staged = parse_staged(mine.staged)
     source = staged[0].source if staged else "system"
+    reason = mine.reason  # the fresh proposal answers the same question (T4.3 contract)
     try:
         async with tx.begin_nested():
             return await stage_changeset(
-                tx, user_id, staged, stale.fresh_input, stale.fresh_output, now=now, source=source
+                tx,
+                user_id,
+                staged,
+                stale.fresh_input,
+                stale.fresh_output,
+                now=now,
+                source=source,
+                reason=reason,
             )
     except InvalidMutation:
         # The stale proposal's week is no longer the current one (or the live plan moved):
         # solve the same staged list afresh over the current week instead.
-        return await propose_changeset(tx, user_id, staged, now=now, busy=busy, source=source)
+        return await propose_changeset(
+            tx, user_id, staged, now=now, busy=busy, source=source, reason=reason
+        )
 
 
 @router.post("/changesets/{changeset_id}/reject", operation_id="rejectChangeset")

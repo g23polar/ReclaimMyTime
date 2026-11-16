@@ -228,6 +228,7 @@ def test_changeset_out_planless_onboarding() -> None:
                  "preferred_windows": None, "preferred_strict": False, "requirements": []}}}
         ],
         status="pending",
+        reason="user_edit",
         created_at=T,
         resolved_at=None,
     )  # fmt: skip

@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 from sqlalchemy import select
@@ -27,6 +27,7 @@ from app.api.deps import (
     validation_failed,
 )
 from app.api.mappers import project_out
+from app.api.outbox import kick_outbox
 from app.api.staging import manual, stage_request
 from app.auth.dependencies import require_timezone
 from app.db.models import Project
@@ -103,7 +104,13 @@ async def get_project(user_id: UserId, tx: Tx, now: Now, project_id: uuid.UUID) 
 
 @router.patch("/projects/{project_id}", operation_id="updateProject", status_code=202)
 async def update_project(
-    user_id: UserId, maker: Maker, now: Now, busy: Busy, project_id: uuid.UUID, body: RawBody
+    request: Request,
+    user_id: UserId,
+    maker: Maker,
+    now: Now,
+    busy: Busy,
+    project_id: uuid.UUID,
+    body: RawBody,
 ) -> JSONResponse:
     patch = parse_body(_PATCH, body)
     payload = {
@@ -124,13 +131,18 @@ async def update_project(
         if patch.model_fields_set == {"name"} and row.status != "staged":
             # D2 softer option: name is not a scheduling input → applied directly, 200 +
             # Project (updateProject 200, contracts 9679c03). No solve, so no busy read.
+            # The rename re-pends the project's not-yet-ended live blocks (event titles,
+            # T4.3a) in this transaction; the drain is kicked after commit, below.
             await apply_mutation(tx, user_id, mutation, now=now)
             updated = await _get(tx, user_id, project_id)
             assert updated is not None
             return JSONResponse(status_code=200, content=project_out(updated))
         return [mutation]
 
-    return await stage_request(maker, user_id, build, now=now, busy=busy)
+    response = await stage_request(maker, user_id, build, now=now, busy=busy)
+    if response.status_code == 200:  # applied directly and committed: refresh event titles
+        kick_outbox(request.app, user_id)
+    return response
 
 
 @router.delete("/projects/{project_id}", operation_id="archiveProject", status_code=202)

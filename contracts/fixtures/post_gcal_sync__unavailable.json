@@ -1,0 +1,22 @@
+{
+  "operation": "syncGcal",
+  "method": "POST",
+  "path": "/gcal/sync",
+  "case": "unavailable",
+  "description": "Google Calendar failed partway through the write-back. Events already written stay written; the rest stay pending and are retried by the next confirm or sync.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    }
+  },
+  "response": {
+    "status": 503,
+    "body": {
+      "error": {
+        "code": "gcal_unavailable",
+        "message": "Google Calendar could not be reached. Please try again."
+      }
+    }
+  }
+}

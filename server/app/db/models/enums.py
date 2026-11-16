@@ -11,6 +11,8 @@ DAY_DIVERSITY = ("focused", "mixed")
 PIN_KIND = ("pin", "forbid")
 PLAN_STATUS = ("proposed", "live", "superseded", "rejected")
 CHANGESET_STATUS = ("pending", "confirmed", "rejected", "expired")
+# Why a changeset was proposed (migration 0002, T4.3 contract 2026-11-16).
+CHANGESET_REASON = ("user_edit", "agent", "drift", "google_edit")
 BLOCK_STATE = ("planned", "completed", "skipped")
 GCAL_SYNC = ("pending", "synced", "failed")
 MUTATION_SOURCE = ("agent", "manual", "system")
@@ -37,6 +39,7 @@ ENUMS: dict[str, tuple[str, ...]] = {
     "pin_kind": PIN_KIND,
     "plan_status": PLAN_STATUS,
     "changeset_status": CHANGESET_STATUS,
+    "changeset_reason": CHANGESET_REASON,
     "block_state": BLOCK_STATE,
     "gcal_sync": GCAL_SYNC,
     "mutation_source": MUTATION_SOURCE,

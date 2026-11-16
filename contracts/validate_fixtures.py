@@ -25,7 +25,8 @@ Checks: request params/headers/body and response status/headers/body against the
 schemas (format assertions on); bearer auth present when the op is secured; SSE streams end in
 exactly one terminal event; a few cross-field invariants the schema cannot express (changeset
 plan/diff ids agree, spans are start < end everywhere incl. staged mutation payloads, staged
-exceptions satisfy the blocks_all/blocks_tags CHECK, blocks lie in the horizon and do not overlap);
+exceptions satisfy the blocks_all/blocks_tags CHECK, blocks lie in the horizon and do not overlap,
+only a `drift` changeset has an empty `staged` (2026-11-16, T4.3));
 every operation has at least one fixture.
 """
 
@@ -169,6 +170,9 @@ def check_changeset(cs: dict, where: str, errs: list[str]) -> None:
         check_diff(diff, f"{where}.diff", errs, plan)
     if (cs["status"] == "pending") != (cs["resolved_at"] is None):
         errs.append(f"{where}: resolved_at must be null iff status is pending")
+    # 2026-11-16 (T4.3, D25): only a drift re-solve may stage nothing.
+    if cs["staged"] == [] and cs.get("reason") != "drift":
+        errs.append(f"{where}: staged may be empty only when reason is drift")
 
 
 def check_staged(m: dict, where: str, errs: list[str]) -> None:

@@ -84,6 +84,7 @@ __all__ = [
     "InvalidMutation",
     "PlanVerificationError",
     "PreferencesNotSet",
+    "Reason",
     "WritePathError",
     "apply_mutation",
     "carry_forward",
@@ -100,6 +101,23 @@ __all__ = [
     "sweep_past_blocks",
     "user_lock_statement",
 ]
+
+
+# Why a changeset was proposed (`changesets.reason`, migration 0002; T4.3 contract). REST
+# staging is `user_edit`, agent turns `agent`; `drift` / `google_edit` come from T4.3 part (b).
+Reason = Literal["user_edit", "agent", "drift", "google_edit"]
+_REASON_BY_SOURCE: dict[str, Reason] = {"agent": "agent", "manual": "user_edit"}
+
+
+def _reason_for(source: str, reason: Reason | None) -> Reason:
+    """An explicit `reason` wins. Otherwise it follows the staging source (the agent route and
+    REST staging pass none); a `system` source has no implied reason and must name one."""
+    if reason is not None:
+        return reason
+    try:
+        return _REASON_BY_SOURCE[source]
+    except KeyError:
+        raise ValueError(f"source {source!r} requires an explicit changeset reason") from None
 
 
 # ---------------------------------------------------------------- errors
@@ -424,6 +442,28 @@ def _decimal(v: float | None) -> Decimal | None:
     return None if v is None else Decimal(str(v))
 
 
+async def _repend_project_events(
+    tx: AsyncSession, user_id: uuid.UUID, project_id: uuid.UUID, now: datetime
+) -> None:
+    """A rename changes the event title (= project name, T4.3a): the project's live blocks
+    that have not ended go back to `pending` so the write-back outbox updates their events.
+    Ended blocks keep the old title (Principle 4: past events are never rewritten). Inside a
+    confirm this runs before the live plan is superseded, so the promoted plan inherits the
+    `pending` (`_inherit_from_live`). The caller kicks the drain after commit."""
+    live = select(WeekPlan.id).where(WeekPlan.user_id == user_id, WeekPlan.status == "live")
+    await tx.execute(
+        update(Block)
+        .where(
+            Block.user_id == user_id,
+            Block.project_id == project_id,
+            Block.gcal_status == "synced",
+            func.upper(Block.span) > now,
+            Block.plan_id.in_(live.scalar_subquery()),
+        )
+        .values(gcal_status="pending")
+    )
+
+
 async def apply_mutation(
     tx: AsyncSession,
     user_id: uuid.UUID,
@@ -494,11 +534,14 @@ async def apply_mutation(
             raise InvalidMutation(
                 "validation_failed", "min_block_minutes must be <= max_block_minutes"
             )
+        renamed = "name" in sent and sent["name"] != row.name
         await tx.execute(
             update(Project).where(Project.id == pid, Project.user_id == user_id).values(**values)
         )
         if "requirements" in sent:
             await _add_tags(tx, user_id, sent["requirements"])
+        if renamed:
+            await _repend_project_events(tx, user_id, pid, now)
 
     elif isinstance(mutation, ProjectArchived):
         pid = mutation.payload.project_id
@@ -749,6 +792,7 @@ async def stage_changeset(
     now: datetime,
     timezone: str | None = None,
     source: Literal["agent", "manual", "system"] = "agent",
+    reason: Reason | None = None,
 ) -> uuid.UUID:
     """Insert a pending changeset (+ its proposed plan when a solve was possible).
 
@@ -760,11 +804,14 @@ async def stage_changeset(
 
     `solver_input`/`solver_output` must both be given or both be None (onboarding before
     preferences: plan_id null). `timezone` defaults to the overlaid preferences timezone.
-    TODO(contracts): `staged` has minItems 1 in the contract; an empty list (a drift
-    re-solve with no constraint change, T4.3) is accepted here pending a decision.
+    `reason` (contract `Changeset.reason`) defaults from `source` (`_reason_for`). An empty
+    `staged` list is allowed only for a `drift` re-solve (contract D25, resolving O11).
     """
     if (solver_input is None) != (solver_output is None):
         raise ValueError("solver_input and solver_output go together")
+    reason = _reason_for(source, reason)
+    if not staged_mutations and reason != "drift":
+        raise InvalidMutation("validation_failed", "only a drift changeset may stage no mutations")
     await lock_user(tx, user_id)
     if solver_input is not None:
         # M1+M2 gate: ended work is `completed` before anything is stored against it.
@@ -834,6 +881,7 @@ async def stage_changeset(
             plan_id=plan_id,
             staged=dump_staged(staged),
             status="pending",
+            reason=reason,
             created_at=now,
         )
     )
@@ -921,6 +969,7 @@ async def propose_changeset(
     horizon: Interval | None = None,
     busy: Sequence[Interval] = (),
     source: Literal["agent", "manual", "system"] = "agent",
+    reason: Reason | None = None,
 ) -> uuid.UUID:
     """Convenience for T2.3/T3: solve the hypothetical state (committed + staged) over the
     current preference week (`expected_horizon` of the overlaid preferences, unless an
@@ -935,7 +984,7 @@ async def propose_changeset(
     staged = parse_staged(staged_mutations)
     state = overlay(await load_constraint_state(tx, user_id), staged)
     if state.preferences is None:
-        return await stage_changeset(tx, user_id, staged, now=now, source=source)
+        return await stage_changeset(tx, user_id, staged, now=now, source=source, reason=reason)
     tz = state.preferences.timezone
     if horizon is None:
         horizon = expected_horizon(now, tz, state.preferences.week_start)
@@ -943,7 +992,15 @@ async def propose_changeset(
     previous = await load_previous(tx, user_id, horizon, now)
     solver_output = pack(solver_input, previous)
     return await stage_changeset(
-        tx, user_id, staged, solver_input, solver_output, now=now, timezone=tz, source=source
+        tx,
+        user_id,
+        staged,
+        solver_input,
+        solver_output,
+        now=now,
+        timezone=tz,
+        source=source,
+        reason=reason,
     )
 
 
