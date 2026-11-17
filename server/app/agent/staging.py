@@ -34,6 +34,7 @@ from app.agent.schemas import (
     StageProjectCreate,
     StageProjectUpdate,
     WeekWindows,
+    unwire,
 )
 from app.db.models.staged import (
     DAY_KEYS,
@@ -127,7 +128,11 @@ class TurnStaging:
             # Postgres rejects NUL and unpaired surrogates; refuse before any write path.
             raise ToolError("text fields must be valid UTF-8 without NUL characters")
         try:
-            draft = entry[0].model_validate(raw)
+            wired = unwire(name, raw)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+        try:
+            draft = entry[0].model_validate(wired)
         except ValidationError as exc:
             raise ToolError(_describe(exc)) from None
         handler: Callable[[Any], str] = getattr(self, f"_{name}")
