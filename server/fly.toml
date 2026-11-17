@@ -1,0 +1,29 @@
+# Fly.io config for the API. Secrets are set with `fly secrets set` (never in this file).
+# Migrations are NOT run on deploy yet; run them explicitly against Neon first.
+app = "reclaimmytime"
+primary_region = "iad"  # Neon is us-east-1; keep compute next to the database
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
