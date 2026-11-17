@@ -91,7 +91,7 @@ struct MainTabView: View {
             ChatView() // draws the banner itself, below its composer
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
                 .tag(AppTab.chat)
-            ProjectsPlaceholderView()
+            ProjectsView()
                 .pendingChangesetBanner()
                 .tabItem { Label("Projects", systemImage: "folder") }
                 .tag(AppTab.projects)

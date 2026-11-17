@@ -20,6 +20,8 @@ final class AppModel {
     let calendar: CalendarConnectionModel
     let chat: ChatModel
     let timetable: TimetableModel
+    /// The Projects tab's list (`GET /projects`). Separate from `projects`, which caches cards.
+    let projectList: ProjectsModel
     /// Local notifications: the 48-hour window, warnings setting, permission pre-prompt (T5.4).
     let notifications: NotificationScheduler
     /// The time-zone change prompt (T5.4).
@@ -91,6 +93,7 @@ final class AppModel {
         self.chat = chat
         let timetable = TimetableModel(api: api, pending: pending, navigation: navigation, directory: projects)
         self.timetable = timetable
+        self.projectList = ProjectsModel(api: api)
         let notifications = NotificationScheduler(center: notificationCenter ?? SystemNotificationCenter(), defaults: defaults)
         self.notifications = notifications
         let timezone = TimezoneMonitor(api: api, pending: pending, defaults: defaults)
@@ -355,6 +358,7 @@ final class AppModel {
         projects.reset()
         calendar.activate(userId: nil)
         timetable.reset()
+        projectList.reset()
         timezone.reset()
         notifications.signOut()
         navigation.isReviewingProposal = false
