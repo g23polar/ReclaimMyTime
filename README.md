@@ -129,7 +129,9 @@ server/
 | Google Calendar: free/busy reads on every solve (primary calendar; fails closed when Google is unreachable or the grant is revoked) | Done |
 | Google Calendar: write-back of confirmed blocks to a dedicated "ReclaimMyTime" calendar (idempotent outbox, retried on sync) | Done |
 | Google Calendar: edits made in Google flow back as pins (applied directly when nothing else moves, otherwise proposed), drift detection | Done |
-| Live end-to-end integration (iOS app against the real server) | In progress |
+| iOS app: Projects tab listing real projects (archived toggle, pull-to-refresh) | Done |
+| Live end-to-end integration (iOS app against the real server) | In progress: Google sign-in, calendar connect and sync verified live; agent intake, plan, edit and changeset flows not yet |
+| Deployment: Fly.io config (`server/fly.toml`, Dockerfile) | Config written, not yet deployed |
 | Onboarding intent-narrative illustrations | Placeholder in the app |
 
 Explicitly out of scope for v1: Android or web clients, calendar providers other than
