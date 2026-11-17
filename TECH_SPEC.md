@@ -120,7 +120,7 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 
 ## Progress checklist
 
-*Maintained by the main session; a task is checked only when committed to `main` after local checks + review. Last updated 2026-11-16.*
+*Maintained by the main session; a task is checked only when committed to `main` after local checks + review. Last updated 2026-11-17.*
 
 **M0 — Foundations**
 - [x] T0.1 API contracts — `9b94804`, frozen `86024f2`
@@ -161,6 +161,12 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 - [ ] Intent-narrative panels (product owner)
 
 **M6 — Integration & hardening**
-- [x] T6.0 Google sign-in replaces Sign in with Apple
-- [ ] T6.1 Live integration
+- [x] T6.0 Google sign-in replaces Sign in with Apple — `a6d1d3a`; README `9d78726`
+- [ ] T6.1 Live integration — in progress (local server + Simulator)
+  - [x] Google sign-in + calendar connect, `/gcal/status`, `/gcal/sync` — verified live 2026-11-16
+  - [x] `/agent/message` seams: model API failures logged `efc6dbe`; tool schemas within grammar limits `c8dcafd` — end-to-end intake not yet confirmed live
+  - [x] Projects tab backed by `GET /projects` — `18ea4f7`, `3cdd262`
+  - [x] Fly.io deploy config — `6536918` (not yet deployed)
+  - [ ] Live pass still owed: changeset confirm/reject, `/plans/current` + diff, block PATCH, pins, exceptions, preferences, `/me` + delete, sessions, `DELETE /gcal`
+  - [ ] Config: live base URL per build configuration (defaults to `localhost:8000`); scheme still passes `-UseMockAPI YES`; fixtures bundled in Release
 - [ ] T6.2 Journey walkthrough + guards
