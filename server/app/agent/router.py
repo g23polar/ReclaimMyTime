@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import datetime
@@ -24,7 +25,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.context import load_turn
-from app.agent.loop import AgentTurn, DryRun, Event, Solve, StaleBase, TurnAborted
+from app.agent.loop import (
+    AgentTurn,
+    DryRun,
+    Event,
+    Solve,
+    StaleBase,
+    TurnAborted,
+    upstream_summary,
+)
 from app.agent.narration import narrate, project_names
 from app.agent.prompt import render_snapshot
 from app.agent.settings import AgentSettings
@@ -118,6 +127,10 @@ async def post_agent_message(
         # gives up during an upstream stall would otherwise leave this call running.
         await asyncio.wait_for(turn.open(), settings.open_timeout_seconds)
     except (anthropic.APIError, TimeoutError) as exc:
+        if isinstance(exc, anthropic.APIError):
+            log.warning("agent open failed: %s", upstream_summary(exc))
+        else:
+            log.warning("agent open timed out after %ss", settings.open_timeout_seconds)
         raise AppError(503, "agent_unavailable", _UNAVAILABLE_PRE) from exc
     return StreamingResponse(
         sse(turn.events(), heartbeat=settings.heartbeat_seconds),
@@ -125,6 +138,8 @@ async def post_agent_message(
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
+
+log = logging.getLogger(__name__)
 
 _UNAVAILABLE_PRE = "The assistant is temporarily unavailable. Try again in a moment."
 

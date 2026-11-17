@@ -160,7 +160,7 @@ class AgentTurn:
             log.warning("agent turn exceeded %ss", self._settings.turn_timeout_seconds)
             await queue.put(_error("agent_unavailable", UNAVAILABLE))
         except anthropic.APIError as exc:
-            log.warning("agent upstream failure: %s", type(exc).__name__)
+            log.warning("agent upstream failure: %s", upstream_summary(exc))
             await queue.put(_error("agent_unavailable", UNAVAILABLE))
         except StaleBase:
             await queue.put(_error("changeset_stale", STALE))
@@ -300,3 +300,13 @@ def _result(tool_use_id: str, content: str, *, error: bool = False) -> dict[str,
 
 def _error(code: str, message: str) -> Event:
     return "error", {"error": {"code": code, "message": message}}
+
+
+def upstream_summary(exc: BaseException) -> str:
+    """Status, class and request id of an Anthropic failure, for logs only.
+
+    Never the message: API error text can echo request content, and the request id is
+    what Anthropic support needs to find the call."""
+    status = getattr(exc, "status_code", None)
+    request_id = getattr(exc, "request_id", None)
+    return f"status={status} type={type(exc).__name__} request_id={request_id}"

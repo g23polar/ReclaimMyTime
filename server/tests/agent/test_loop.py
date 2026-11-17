@@ -17,6 +17,7 @@ from app.agent.loop import (
     DryRun,
     Solve,
     StaleBase,
+    upstream_summary,
 )
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.schemas import tool_definitions
@@ -460,3 +461,29 @@ async def test_unpaired_surrogate_is_a_tool_error():
     staging = _turn()
     with pytest.raises(ToolError, match="valid UTF-8"):
         staging.call("stage_project_create", _create(name="Nov\ud800el"))
+
+
+# ---------------------------------------------------------------- upstream log summary
+
+
+def test_upstream_summary_has_status_class_and_request_id_but_no_message():
+    import anthropic
+    import httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.test/v1/messages")
+    response = httpx.Response(400, request=request, headers={"request-id": "req_123"})
+    exc = anthropic.BadRequestError("secret user text", response=response, body=None)
+
+    summary = upstream_summary(exc)
+
+    assert summary == "status=400 type=BadRequestError request_id=req_123"
+    assert "secret user text" not in summary
+
+
+def test_upstream_summary_handles_errors_without_a_response():
+    import anthropic
+    import httpx
+
+    exc = anthropic.APIConnectionError(request=httpx.Request("POST", "https://x.test"))
+
+    assert upstream_summary(exc) == "status=None type=APIConnectionError request_id=None"
