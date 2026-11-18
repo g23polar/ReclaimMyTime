@@ -173,6 +173,6 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
   - [ ] Destructive, last: `DELETE /gcal`, `DELETE /me` (revokes the Google grant)
   - [x] Finding (1) fixed 2026-11-17: strict preferred windows replace availability for their project (solver 1.1.0; slack rule measured inside work hours); agent prompt/tool text steers one-project time to strict windows. Verified live: hours narrowed to 08–18 with Reading kept at 18–22.
   - [x] Findings (2) repeated pin narration and (3) agent deferring to the card — fixed `566d19c`
-  - [ ] Findings to triage: (4) `test_stress_properties` has a seed-dependent long tail (some generated inputs take 3s+ per pack; one random-seed run stalled 9+ min) — pre-existing; (5) strict project with empty windows gets 0 time with no "turn off strict" relaxation
+  - [ ] Findings to triage: (5) strict project with empty windows gets 0 time with no "turn off strict" relaxation
   - [ ] Config: live base URL per build configuration (defaults to `localhost:8000`); scheme still passes `-UseMockAPI YES`; fixtures bundled in Release
 - [ ] T6.2 Journey walkthrough + guards
