@@ -5,9 +5,14 @@ result does not depend on the order of the input list. Spans are half-open
 [start, end); touching intervals do not overlap.
 
 Violation kinds, in output sort order: before_now, block_length, buffer, busy,
-duplicate_lineage, exception, forbid, horizon, overlap, pin_missing,
-pin_unmatched, preferred_window, unknown_project, window. Output is sorted by
-kind, then block lineage ids.
+duplicate_lineage, exception, forbid, horizon, overlap, perennial_daily,
+pin_missing, pin_unmatched, preferred_window, unknown_project, window. Output is
+sorted by kind, then block lineage ids.
+
+`perennial_daily`: a perennial project (weekly target) has an ordinary planned block (not
+pin-realizing) on a day (24 h from horizon.start) where it has any other planned or frozen
+block. The rule binds the solver, not the user: pinned+pinned and pinned+frozen days are
+allowed (user decision 2026-11-18).
 
 Pins (contracts D7/O6) are matched by exact endpoints, never containment: a
 planned block realizes a `pin`-kind Pin iff it has the pin's project_id and
@@ -340,6 +345,35 @@ def verify(plan: Sequence[PlannedBlock], input: SolverInput) -> list[Violation]:
             pair(a.lineage_id, a.span, b.lineage_id, b.span, [a, b])
         for f in frozen:
             pair(a.lineage_id, a.span, f.lineage_id, f.span, [a, f])
+
+    # Perennial projects: at most one block per day. Days are 24 h slices from
+    # horizon.start, the solver's own day boundaries (pack._day). The rule binds the solver,
+    # not the user: frozen blocks are the immutable past and a realized pin is the user's
+    # placement, so a day is a violation only when an ordinary planned block shares it with
+    # another block of the project.
+    one_day = timedelta(days=1)
+    perennial_days: dict[tuple[str, int], list[PlannedBlock | FrozenBlock]] = {}
+    for item in [*blocks, *frozen]:
+        project = projects.get(item.project_id)
+        if project is None or project.weekly_target_minutes is None:
+            continue
+        day = (item.span.start - input.horizon.start) // one_day
+        perennial_days.setdefault((item.project_id, day), []).append(item)
+    for (pid, day), members in sorted(perennial_days.items()):
+        ordinary = [
+            m for m in members if isinstance(m, PlannedBlock) and not _realized_pin_ids(m, pins)
+        ]
+        if len(members) < 2 or not ordinary:
+            continue
+        on = (input.horizon.start + day * one_day).date().isoformat()
+        add(
+            "perennial_daily",
+            f"perennial project {pid} has {len(members)} blocks on the day starting {on} "
+            "(at most one per day)",
+            [m.lineage_id for m in members],
+            [pid],
+            members,
+        )
 
     # Pins must be realized: a planned or frozen block with exactly the pin's project and span.
     # An unrealizable pin (ARCH §3: invalidated by something above it) is reported by the

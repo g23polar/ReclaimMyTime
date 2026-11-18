@@ -26,6 +26,7 @@ from tests.db.conftest import (
     at,
     bootstrap,
     confirm,
+    deadline_project,
     exception_added,
     prefs,
     propose,
@@ -96,11 +97,14 @@ async def test_refuses_to_drop_future_blocks_outside_the_new_horizon(
     maker: Maker, user_id: uuid.UUID
 ) -> None:
     """Week start moves BACK (Tue → Mon): the old Tue–Tue plan's Monday-23 blocks are in the
-    future and outside the new Mon 16–Mon 23 horizon. Superseding would silently drop them."""
+    future and outside the new Mon 16–Mon 23 horizon. Superseding would silently drop them.
+    A deadline project (9 h due Nov 30: 270 min this week, three 90-min sittings), because a
+    perennial now gets at most one block a day and Monday is the only open day."""
     monday_only = {"mon": [["08:00", "20:00"]]}
     onboard = at(1, "06:00")
     cs = await propose(
-        maker, user_id, [prefs(week_start=2, schedulable_windows=monday_only), workout()],
+        maker, user_id,
+        [prefs(week_start=2, schedulable_windows=monday_only), deadline_project(hours=9.0)],
         onboard, TUE_WEEK,
     )  # fmt: skip
     old = (await confirm(maker, user_id, cs, onboard)).plan_id

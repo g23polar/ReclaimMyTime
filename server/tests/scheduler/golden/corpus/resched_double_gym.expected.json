@@ -1,11 +1,11 @@
 {
   "fingerprint": {
-    "solver_version": "1.1.0",
+    "solver_version": "1.2.0",
     "input_schema_version": 1
   },
   "output": {
     "input_schema_version": 1,
-    "solver_version": "1.1.0",
+    "solver_version": "1.2.0",
     "blocks": [
       {
         "lineage_id": "05b302f1-12ee-5a37-aed5-426ce0ab1e07",
@@ -62,15 +62,6 @@
         "pinned": false
       },
       {
-        "lineage_id": "b5d6b75a-c3d4-50f4-a1a0-0d7fcd5baf62",
-        "project_id": "workout",
-        "span": {
-          "start": "2026-11-19T12:45:00Z",
-          "end": "2026-11-19T13:45:00Z"
-        },
-        "pinned": false
-      },
-      {
         "lineage_id": "4ddb4c79-a26d-5e58-8272-2d5320063c19",
         "project_id": "workout",
         "span": {
@@ -94,15 +85,6 @@
         "span": {
           "start": "2026-11-20T11:30:00Z",
           "end": "2026-11-20T12:30:00Z"
-        },
-        "pinned": false
-      },
-      {
-        "lineage_id": "80cc2c59-e794-5ba9-888e-2c55e9f5d1eb",
-        "project_id": "workout",
-        "span": {
-          "start": "2026-11-20T12:45:00Z",
-          "end": "2026-11-20T13:45:00Z"
         },
         "pinned": false
       },
@@ -134,6 +116,49 @@
         "pinned": false
       }
     ],
-    "infeasibility": null
+    "infeasibility": {
+      "violations": [
+        {
+          "kind": "demand_shortfall",
+          "project_id": "workout",
+          "required_minutes": 420,
+          "scheduled_minutes": 300,
+          "shortfall_minutes": 120
+        }
+      ],
+      "relaxations": [
+        {
+          "kind": "raise_max_block_minutes",
+          "description": "Allow workout sittings up to 120 min",
+          "affected_ids": [
+            "workout"
+          ],
+          "recovers_minutes": 120,
+          "project_id": "workout",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": 120
+        },
+        {
+          "kind": "reduce_weekly_target",
+          "description": "Lower workout's weekly target to 360 min",
+          "affected_ids": [
+            "workout"
+          ],
+          "recovers_minutes": 120,
+          "project_id": "workout",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": 360,
+          "max_block_minutes": null
+        }
+      ],
+      "verify_violations": []
+    }
   }
 }

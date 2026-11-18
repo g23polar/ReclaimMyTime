@@ -28,6 +28,7 @@ from app.scheduler import (
 )
 
 from .conftest import PACK_FIXTURES_DIR, load_case, load_pack_input
+from .golden.corpus_io import input_path
 
 
 def _t(day: int, h: int, m: int = 0) -> datetime:
@@ -56,7 +57,7 @@ def _pack_verified(inp: SolverInput, previous: list[PlannedBlock] | None = None)
 @pytest.mark.parametrize("name", sorted(p.stem for p in PACK_FIXTURES_DIR.glob("*.json")))
 def test_every_pack_fixture_verifies_clean(name: str) -> None:
     out = _pack_verified(load_pack_input(name))
-    assert out.solver_version == SOLVER_VERSION == "1.1.0"
+    assert out.solver_version == SOLVER_VERSION == "1.2.0"
 
 
 # ------------------------------------------------------------ (a) max block
@@ -126,6 +127,269 @@ def test_mixed_avoids_back_to_back_and_spreads_deadline_sessions() -> None:
     for pid in ("alpha", "beta", "gamma"):
         days = [b.span.start.date() for b in _by_project(out, pid)]
         assert len(days) == len(set(days))  # one sitting per day
+
+
+# ---------------------------------- perennials: one block per day (solver 1.2.0)
+
+
+def _guitar(**kw: object) -> ProjectInput:
+    """The prod case (2026-11-18): 5 h/week, 45-min sittings, no requirements."""
+    fields: dict[str, object] = {
+        "remaining_minutes": 0,
+        "weekly_target_minutes": 300,
+        "max_block_minutes": 45,
+        "min_block_minutes": 30,
+    }
+    fields.update(kw)
+    return ProjectInput(id="guitar", **fields)  # type: ignore[arg-type]
+
+
+def _deck(**kw: object) -> ProjectInput:
+    fields: dict[str, object] = {
+        "remaining_minutes": 360,
+        "max_block_minutes": 120,
+        "min_block_minutes": 60,
+        "target_date": date(2026, 11, 22),
+        "deadline": _t(7, 0),
+    }
+    fields.update(kw)
+    return ProjectInput(id="deck", **fields)  # type: ignore[arg-type]
+
+
+def _guitar_week(**kw: object) -> SolverInput:
+    fields: dict[str, object] = {
+        "schedulable": tuple(_span(d, 9, 18) for d in range(7)),
+        "projects": (_guitar(), _deck()),
+        "day_diversity": "focused",
+        "buffer_minutes": 15,
+    }
+    fields.update(kw)
+    return _week(**fields)
+
+
+def _days(blocks: list[PlannedBlock]) -> list[date]:
+    return [b.span.start.date() for b in blocks]
+
+
+def _minutes(blocks: list[PlannedBlock]) -> int:
+    return sum(b.span.duration_minutes for b in blocks)
+
+
+def _one_per_day(blocks: list[PlannedBlock]) -> bool:
+    return len(set(_days(blocks))) == len(blocks)
+
+
+def test_focused_perennial_gets_one_block_per_day() -> None:
+    # Before 1.2.0 the focused same-day bonus stacked all 7 sittings back to back on one day.
+    out = _pack_verified(_guitar_week())
+    guitar = _by_project(out, "guitar")
+    assert _minutes(guitar) == 300
+    assert len(guitar) == 7 and _one_per_day(guitar)
+    assert out.infeasibility is None
+    # The deadline project still themes: all of deck lands on one day.
+    assert len(set(_days(_by_project(out, "deck")))) == 1
+
+
+def test_focused_perennial_short_of_days_reports_a_shortfall_with_real_fixes() -> None:
+    # The prod case from Wednesday: 5 days left hold 5 x 45 = 225 of 300 minutes.
+    inp = _guitar_week(now=_t(2, 0))
+    out = _pack_verified(inp)
+    guitar = _by_project(out, "guitar")
+    assert len(guitar) == 5 and _one_per_day(guitar)
+    short = _shortfalls(out)["guitar"]
+    assert (short.scheduled_minutes, short.shortfall_minutes) == (225, 75)
+    assert out.infeasibility is not None
+    relax = {r.kind: r for r in out.infeasibility.relaxations if r.project_id == "guitar"}
+    # Longer single sittings are how more fits: ceil(300 / 5 days) = 60 clears the whole
+    # shortfall, priced by a re-pack under the daily rule.
+    raise_max = relax["raise_max_block_minutes"]
+    assert (raise_max.max_block_minutes, raise_max.recovers_minutes) == (60, 75)
+    lower = relax["reduce_weekly_target"]
+    assert (lower.weekly_target_minutes, lower.recovers_minutes) == (225, 75)
+    _assert_relaxations_exact(inp, out)
+
+
+@pytest.mark.parametrize(("day", "blocks"), [(5, 2), (6, 1)])
+def test_a_perennial_short_of_days_is_reported_never_stacked(day: int, blocks: int) -> None:
+    out = _pack_verified(_guitar_week(now=_t(day, 0), projects=(_guitar(),)))
+    guitar = _by_project(out, "guitar")
+    assert len(guitar) == blocks and _one_per_day(guitar)
+    assert _shortfalls(out)["guitar"].shortfall_minutes == 300 - 45 * blocks
+
+
+def test_the_daily_rule_outranks_slack() -> None:
+    # Tue already carries 420 of its 540 work-hours minutes (slack bound 459). Guitar may not
+    # stack on Mon, so its second sitting goes to Tue past slack; the third is a shortfall.
+    pin = Pin(id="deck-tue", kind="pin", span=_span(1, 9, 16), project_id="deck")
+    inp = _guitar_week(
+        horizon=Interval(start=_t(0, 0), end=_t(2, 0)),
+        schedulable=(_span(0, 9, 18), _span(1, 9, 18)),
+        projects=(_guitar(weekly_target_minutes=135), _deck(remaining_minutes=420)),
+        pins=(pin,),
+    )
+    out = _pack_verified(inp)
+    guitar = _by_project(out, "guitar")
+    assert set(_days(guitar)) == {_t(0, 0).date(), _t(1, 0).date()}
+    assert _one_per_day(guitar)
+    assert _shortfalls(out)["guitar"].shortfall_minutes == 45
+
+
+def test_mixed_perennial_spreads_even_against_a_single_preferred_day() -> None:
+    # A non-strict preferred window on Monday only (+200) used to outweigh the mixed
+    # same-day penalty (150): the project stacked there.
+    inp = _guitar_week(
+        day_diversity="mixed",
+        projects=(_guitar(weekly_target_minutes=180, preferred_windows=(_span(0, 9, 18),)),),
+    )
+    out = _pack_verified(inp)
+    guitar = _by_project(out, "guitar")
+    assert _minutes(guitar) == 180
+    assert len(guitar) == 4 and _one_per_day(guitar)
+    assert _t(0, 0).date() in _days(guitar)
+    assert out.infeasibility is None
+
+
+def test_resolve_unstacks_a_previously_stacked_perennial() -> None:
+    # A 1.1.0 plan with guitar stacked on Thursday: stability (+400) does not keep the stack.
+    inp = _guitar_week(projects=(_guitar(),))
+    stacked = [
+        PlannedBlock(
+            lineage_id=f"L{i}",
+            project_id="guitar",
+            span=Interval(
+                start=_t(3, 9, 45) + timedelta(minutes=60 * i),
+                end=_t(3, 10, 30) + timedelta(minutes=60 * i),
+            ),
+            pinned=False,
+        )
+        for i in range(7)
+    ]
+    out = _pack_verified(inp, stacked)
+    guitar = _by_project(out, "guitar")
+    assert _minutes(guitar) == 300
+    assert len(guitar) == 7 and _one_per_day(guitar)
+
+
+def test_a_frozen_session_today_takes_the_day() -> None:
+    # Guitar was done this morning: no second sitting this afternoon.
+    done = FrozenBlock(
+        lineage_id="F-am", project_id="guitar", span=_span(0, 9, 9, 0, 45), state="completed"
+    )
+    out = _pack_verified(_guitar_week(now=_t(0, 12), frozen=(done,), projects=(_guitar(),)))
+    guitar = _by_project(out, "guitar")
+    assert _t(0, 0).date() not in _days(guitar)
+    assert len(guitar) == 6 and _one_per_day(guitar)
+    assert out.infeasibility is None  # 45 frozen + 6 x 45 placed = 300
+
+
+def test_pinned_second_perennial_block_on_a_day_is_kept() -> None:
+    # The rule binds the solver, not the user: two user pins on Monday both stay; the solver
+    # adds nothing on Monday and one sitting on each other day.
+    pins = (
+        Pin(id="g1", kind="pin", span=_span(0, 9, 10), project_id="guitar"),
+        Pin(id="g2", kind="pin", span=_span(0, 14, 15), project_id="guitar"),
+    )
+    out = _pack_verified(_guitar_week(projects=(_guitar(max_block_minutes=60),), pins=pins))
+    guitar = _by_project(out, "guitar")
+    assert [b.span for b in guitar if b.pinned] == [p.span for p in pins]
+    assert _minutes(guitar) == 300
+    unpinned = [b for b in guitar if not b.pinned]
+    assert _t(0, 0).date() not in _days(unpinned)
+    assert _one_per_day(unpinned)
+    assert out.infeasibility is None
+
+
+def test_a_pin_on_an_occupied_day_moves_the_planned_block() -> None:
+    # Guitar had one sitting a day; the user pins a second one on Thursday. The pin stays,
+    # Thursday's planned sitting leaves Thursday (never a second ordinary block there), and
+    # the pin's 45 minutes count toward the week, so nothing is short.
+    inp = _guitar_week(projects=(_guitar(),))
+    first = _pack_verified(inp)
+    thu = _t(3, 0).date()
+    [planned_thu] = [b for b in _by_project(first, "guitar") if b.span.start.date() == thu]
+    pin_span = _span(3, 16, 16, 0, 45)
+    assert not pin_span.overlaps(planned_thu.span)
+    pinned = inp.model_copy(
+        update={"pins": (Pin(id="g-thu", kind="pin", span=pin_span, project_id="guitar"),)}
+    )
+    out = _pack_verified(pinned, list(first.blocks))
+    guitar = _by_project(out, "guitar")
+    on_thu = [b for b in guitar if b.span.start.date() == thu]
+    assert [(b.span, b.pinned) for b in on_thu] == [(pin_span, True)]
+    assert len(guitar) == 7 and _one_per_day(guitar)
+    assert out.infeasibility is None  # the pin replaces Thursday's 45 minutes
+
+
+def test_double_gym_raise_max_recovers_the_whole_shortfall() -> None:
+    # Re-solve against the previous plan: stability keeps old 60-min sittings, so
+    # ceil(420 / 5) = 85 is not enough; the smallest length that clears it is offered.
+    raw = json.loads(input_path("resched_double_gym").read_text())
+    inp = SolverInput.model_validate(raw["solver_input"])
+    previous = [PlannedBlock.model_validate(b) for b in raw["previous"]]
+    out = _pack_verified(inp, previous)
+    short = _shortfalls(out)["workout"].shortfall_minutes
+    assert out.infeasibility is not None
+    [r] = [x for x in out.infeasibility.relaxations if x.kind == "raise_max_block_minutes"]
+    assert (r.project_id, r.recovers_minutes) == ("workout", short)
+    projects = tuple(
+        p.model_copy(update={"max_block_minutes": r.max_block_minutes}) if p.id == "workout" else p
+        for p in inp.projects
+    )
+    after = _pack_verified(inp.model_copy(update={"projects": projects}), previous)
+    assert after.infeasibility is None
+    assert _one_per_day(_by_project(after, "workout"))
+
+
+def test_perennial_raise_max_over_the_cap_offers_the_cap_as_a_partial() -> None:
+    # Sunday only: full recovery needs one 300-min sitting, over 2 x 45 = 90, so exactly 90
+    # is tried and offered as a partial (priced by re-pack), beside reduce_weekly_target.
+    inp = _guitar_week(now=_t(6, 0), projects=(_guitar(),))
+    out = _pack_verified(inp)
+    assert out.infeasibility is not None
+    relax = {r.kind: r for r in out.infeasibility.relaxations if r.project_id == "guitar"}
+    assert set(relax) == {"raise_max_block_minutes", "reduce_weekly_target"}
+    raise_max = relax["raise_max_block_minutes"]
+    assert raise_max.max_block_minutes == 90
+    assert raise_max.recovers_minutes == 45  # one 90-min sitting instead of 45
+    assert raise_max.recovers_minutes < _shortfalls(out)["guitar"].shortfall_minutes
+    _assert_relaxations_exact(inp, out)
+
+
+def test_perennial_raise_max_within_the_cap_may_be_partial() -> None:
+    # pack_forbid_span: reading (600/week, max 120) can only clear its shortfall with a
+    # 720-min sitting; within the 240 cap the best offer recovers part of it.
+    inp = load_pack_input("forbid_span")
+    out = _pack_verified(inp)
+    assert out.infeasibility is not None
+    [r] = [
+        x
+        for x in out.infeasibility.relaxations
+        if x.kind == "raise_max_block_minutes" and x.project_id == "reading"
+    ]
+    assert r.max_block_minutes == 240
+    assert 0 < r.recovers_minutes < _shortfalls(out)["reading"].shortfall_minutes
+    _assert_relaxations_exact(inp, out)
+
+
+def test_perennial_raise_search_is_bounded_per_pack(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The prod case from Wednesday offers a 60-min raise; with the per-pack() re-pack budget
+    # spent (0), no perennial raise is solved or offered and the other relaxations remain.
+    import sys
+
+    pack_module = sys.modules["app.scheduler.pack"]
+    inp = _guitar_week(now=_t(2, 0))
+    monkeypatch.setattr(pack_module, "MAX_PERENNIAL_RAISE_REPACKS", 0)
+    out = _pack_verified(inp)
+    assert out.infeasibility is not None
+    kinds = {r.kind for r in out.infeasibility.relaxations if r.project_id == "guitar"}
+    assert kinds == {"reduce_weekly_target"}
+
+
+def test_deadline_projects_still_stack_a_themed_day() -> None:
+    # The daily rule is for perennials only: focused deadline work keeps its themed days.
+    out = _pack_verified(load_pack_input("diversity_focused"))
+    for pid in ("alpha", "beta", "gamma"):
+        assert len(set(_days(_by_project(out, pid)))) < len(_by_project(out, pid))
 
 
 def test_perennial_rhythm_keeps_the_same_time_of_day() -> None:
@@ -803,7 +1067,8 @@ def test_minted_lineage_never_collides_with_unmatched_previous_monday_to_friday(
         busy=(_span(0, 8, 23),),  # Monday is gone
         schedulable=(_span(0, 8, 23), _span(4, 8, 12)),  # Friday only, > 24h away
         frozen=(frozen,),
-        projects=(_project("P", weekly_target_minutes=120, max_block_minutes=60), _project("Q")),
+        # P is not perennial: two Friday sittings must stay legal (one perennial block a day).
+        projects=(_project("P", remaining_minutes=120, max_block_minutes=60), _project("Q")),
     )
     out = _pack_verified(inp, monday)
     ids = [b.lineage_id for b in out.blocks]
@@ -931,13 +1196,14 @@ def test_extend_deadline_is_capped_two_years_out() -> None:
 
 
 def test_demand_relaxation_recovery_is_measured_by_repacking() -> None:
-    """A (perennial, 360/week) and B (deadline, 480) share 10 h; cutting B's estimate to
-    what was scheduled lets A take back the slack, so B's shortfall only falls by 180."""
+    """A (perennial, 360/week, one sitting a day of up to 240) and B (720) share 10 h over
+    two days; B is 240 short. Cutting B's estimate to what was scheduled lets A take back
+    the slack, so B's shortfall only falls by 180."""
     inp = _week(
         schedulable=(_span(0, 8, 13), _span(1, 8, 13)),
         projects=(
-            _project("A", weekly_target_minutes=360),
-            _project("B", remaining_minutes=480, min_block_minutes=120, max_block_minutes=240),
+            _project("A", weekly_target_minutes=360, max_block_minutes=240),
+            _project("B", remaining_minutes=720, min_block_minutes=120, max_block_minutes=240),
         ),
     )
     out = _pack_verified(inp)

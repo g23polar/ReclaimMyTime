@@ -183,7 +183,8 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
   - [ ] E2E of the three PRD journeys (prod, 2026-11-18)
     - [x] J3 rescheduling: "no laptop" → clarifying question → exception (`blocks_tags: [laptop]`) + HomeBase tagged → diff → confirm → plan v8 synced. First run staged a pin instead; prompt/tool text fixed (`stage_exception_add` for availability statements), Fly v5
     - [x] J2 pieces: drag → pin → confirm → Google write-back; skip; trade-off sheet → reject
-    - [ ] J1 conversational intake with follow-ups + summary card (new project); J2 Google-side edit flowing back
+    - [x] J1 intake on prod: "Guitar practice" perennial created via chat follow-ups; exposed perennial stacking under `focused` → solver 1.2.0: perennials at most one block per day (hard; user placement wins; shortfall + capped 2× raise offer), D28; re-plan verified (one session per day Wed–Sat)
+    - [ ] J2 Google-side edit flowing back (move an event in Google Calendar → sync)
     - [ ] Minor: agent staged two `project_updated` for one project (tag create + tag assign)
   - [ ] `architect-reviewer` final pass
   - [ ] Finding: question-only answers ignore today's already-completed blocks ("Reading 1h short" with the Tue block done)

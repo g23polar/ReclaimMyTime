@@ -1,11 +1,11 @@
 {
   "fingerprint": {
-    "solver_version": "1.1.0",
+    "solver_version": "1.2.0",
     "input_schema_version": 1
   },
   "output": {
     "input_schema_version": 1,
-    "solver_version": "1.1.0",
+    "solver_version": "1.2.0",
     "blocks": [
       {
         "lineage_id": "69f4f2cd-822b-5f85-ae49-65ef46e7a9fa",
@@ -35,15 +35,6 @@
         "pinned": false
       },
       {
-        "lineage_id": "aa073f4c-08ed-57a6-a6b2-b544ba9cefd1",
-        "project_id": "walk",
-        "span": {
-          "start": "2026-11-16T15:30:00Z",
-          "end": "2026-11-16T16:15:00Z"
-        },
-        "pinned": false
-      },
-      {
         "lineage_id": "35d195b4-ed71-5fbd-8700-8e3a37daf498",
         "project_id": "grant",
         "span": {
@@ -66,8 +57,8 @@
           "kind": "demand_shortfall",
           "project_id": "walk",
           "required_minutes": 120,
-          "scheduled_minutes": 90,
-          "shortfall_minutes": 30
+          "scheduled_minutes": 45,
+          "shortfall_minutes": 75
         }
       ],
       "relaxations": [
@@ -78,7 +69,7 @@
             "grant",
             "walk"
           ],
-          "recovers_minutes": 390,
+          "recovers_minutes": 375,
           "project_id": "grant",
           "pin_id": null,
           "exception_id": null,
@@ -108,7 +99,7 @@
           "affected_ids": [
             "grant"
           ],
-          "recovers_minutes": 45,
+          "recovers_minutes": 90,
           "project_id": "grant",
           "pin_id": null,
           "exception_id": null,
@@ -119,17 +110,17 @@
         },
         {
           "kind": "reduce_weekly_target",
-          "description": "Lower walk's weekly target to 90 min",
+          "description": "Lower walk's weekly target to 45 min",
           "affected_ids": [
             "walk"
           ],
-          "recovers_minutes": 30,
+          "recovers_minutes": 75,
           "project_id": "walk",
           "pin_id": null,
           "exception_id": null,
           "target_date": null,
           "remaining_minutes": null,
-          "weekly_target_minutes": 90,
+          "weekly_target_minutes": 45,
           "max_block_minutes": null
         }
       ],

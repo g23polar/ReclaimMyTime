@@ -31,6 +31,7 @@ ALL_KINDS = {
     "forbid",
     "horizon",
     "overlap",
+    "perennial_daily",
     "pin_missing",
     "pin_unmatched",
     "preferred_window",
@@ -427,11 +428,19 @@ def valid_scenarios(draw: st.DrawFn) -> tuple[SolverInput, list[PlannedBlock]]:
         hi = max(lengths, default=60)
         min_block = draw(st.integers(1, lo))
         max_block = draw(st.integers(hi, hi + 120))
+        # A perennial may not share a day between an ordinary block and any other of its
+        # blocks (perennial_daily); pinned and frozen blocks alone may share.
+        per_day: dict[int, list[str]] = {}
+        for s, _, proj, mode in segments:
+            if proj == p:
+                per_day.setdefault(s // (24 * 60), []).append(mode)
+        may_be_perennial = all(len(m) < 2 or "free" not in m for m in per_day.values())
+        weekly = st.none() | st.integers(0, 3000) if may_be_perennial else st.none()
         projects.append(
             ProjectInput(
                 id=f"P{p}",
                 remaining_minutes=draw(st.integers(0, 6000)),
-                weekly_target_minutes=draw(st.none() | st.integers(0, 3000)),
+                weekly_target_minutes=draw(weekly),
                 max_block_minutes=max_block,
                 min_block_minutes=min_block,
                 requirement_tags=tuple(project_tags[p]),
@@ -623,3 +632,72 @@ def test_pin_conflicting_with_another_realized_pin_is_not_missing() -> None:
     rest = [b for b in plan if b.lineage_id != "L-pin"]
     missing = [v for v in verify(rest, inp) if v.kind == "pin_missing"]
     assert {i for v in missing for i in v.related_ids} >= {"pin-1", "pin-2"}
+
+
+# ------------------------------------- perennial_daily: binds the solver, not the user
+
+
+def _daily_case(*members: tuple[str, int, int, str]) -> list:  # type: ignore[type-arg]
+    """Blocks of perennial P2 on Monday from the perennial_daily fixture's input.
+    Each member is (lineage, start hour, end hour, mode) with mode ordinary|pinned|frozen."""
+    case = load_case("perennial_daily")
+    day = datetime(2026, 11, 16, tzinfo=UTC)
+    plan: list[PlannedBlock] = []
+    frozen: list[FrozenBlock] = []
+    pins: list[Pin] = [p for p in case.input.pins if p.kind == "forbid"]
+    for lid, h0, h1, mode in members:
+        span = Interval(start=day + timedelta(hours=h0), end=day + timedelta(hours=h1))
+        if mode == "frozen":
+            frozen.append(
+                FrozenBlock(lineage_id=lid, project_id="P2", span=span, state="completed")
+            )
+            continue
+        plan.append(
+            PlannedBlock(lineage_id=lid, project_id="P2", span=span, pinned=mode == "pinned")
+        )
+        if mode == "pinned":
+            pins.append(Pin(id=f"pin-{lid}", kind="pin", span=span, project_id="P2"))
+    inp = case.input.model_copy(update={"now": day, "pins": tuple(pins), "frozen": tuple(frozen)})
+    return [v.kind for v in verify(plan, inp)]
+
+
+@pytest.mark.parametrize(
+    ("modes", "flagged"),
+    [
+        (("pinned", "pinned"), False),
+        (("pinned", "frozen"), False),
+        (("frozen", "frozen"), False),
+        (("ordinary", "pinned"), True),
+        (("ordinary", "frozen"), True),
+        (("ordinary", "ordinary"), True),
+    ],
+)
+def test_perennial_daily_binds_the_solver_not_the_user(
+    modes: tuple[str, str], flagged: bool
+) -> None:
+    kinds = _daily_case(("L-a", 9, 10, modes[0]), ("L-b", 14, 15, modes[1]))
+    assert ("perennial_daily" in kinds) is flagged
+    assert set(kinds) <= {"perennial_daily"}
+
+
+def test_perennial_daily_days_start_at_horizon_start() -> None:
+    # 22:00-23:00 Monday and 00:15-01:00 Tuesday are different days.
+    case = load_case("perennial_daily")
+    mon = datetime(2026, 11, 16, tzinfo=UTC)
+    plan = [
+        PlannedBlock(
+            lineage_id="L-late",
+            project_id="P2",
+            span=Interval(start=mon + timedelta(hours=22), end=mon + timedelta(hours=23)),
+        ),
+        PlannedBlock(
+            lineage_id="L-next",
+            project_id="P2",
+            span=Interval(
+                start=mon + timedelta(hours=24, minutes=15), end=mon + timedelta(hours=25)
+            ),
+        ),
+    ]
+    schedulable = (Interval(start=mon, end=mon + timedelta(days=2)),)
+    inp = case.input.model_copy(update={"now": mon, "schedulable": schedulable, "pins": ()})
+    assert verify(plan, inp) == []

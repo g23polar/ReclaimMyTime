@@ -24,6 +24,9 @@ Pipeline:
 4. Remaining demand is packed one block at a time: pick the project under the most pressure
    (demand left / free minutes left), generate snapped candidates in its free time, score
    them with the weights below, place the best. A project with no candidate is stuck.
+   A perennial gets at most one block per day (24 h from horizon.start; frozen, pinned or
+   placed): its taken days are cut from its free time, so it never stacks and a week without
+   enough days becomes a shortfall. `focused` theming scores deadline projects only.
 5. Lineages: pins keep `created_from_lineage_id`; other blocks reuse an unmatched previous
    block's lineage (same project, overlapping or within 24h, nearest start first), else mint
    uuid5("{project}:{ordinal}:{salt}") with the salt raised until the id differs from every
@@ -63,7 +66,7 @@ from .models import (
 )
 from .verify import verify
 
-SOLVER_VERSION = "1.1.0"
+SOLVER_VERSION = "1.2.0"
 
 # ------------------------------------------------------------------ scoring weights
 # Candidate score = sum of the terms below; the highest score wins, ties go to the earliest
@@ -76,8 +79,8 @@ W_PREFERRED = 200  # candidate inside a non-strict preferred window
 W_RHYTHM_PER_30 = 10  # perennial: per 30 min of time-of-day drift from its other blocks
 RHYTHM_CAP = 120  # max rhythm penalty, so rhythm never beats spacing
 W_MIXED_VARIETY = 40  # mixed: per distinct other project already that day (capped at 3)
-W_FOCUSED_SAME_DAY = 200  # focused: project already has a block that day (themed day)
-W_FOCUSED_OTHER = 120  # focused: per distinct other project already that day
+W_FOCUSED_SAME_DAY = 200  # focused, deadline only: project already has a block that day
+W_FOCUSED_OTHER = 120  # focused, deadline only: per distinct other project already that day
 W_OVER_SLACK = 100_000  # day past SLACK_PERCENT of its free time: only when nothing else fits
 W_STABLE_SAME_SPAN = 400  # candidate equals a previous block of the project (stable re-solve)
 W_STABLE_OVERLAP = 100  # candidate overlaps a previous block of the project
@@ -86,6 +89,14 @@ W_STABLE_OVERLAP = 100  # candidate overlaps a previous block of the project
 # Relaxation work bounds (bounded so one pack() stays interactive with many pins).
 MAX_PIN_COUNTERFACTUALS = 8  # remove_pin: re-packs considered, ranked by overlap
 EXTEND_DEADLINE_CAP_DAYS = 730  # extend_deadline never proposes past horizon.start + this
+PERENNIAL_RAISE_CAP_FACTOR = 2  # perennial raise_max_block_minutes: at most 2x current max
+# Perennial raise_max_block_minutes search: re-packs per pack() call, across all perennials.
+# Candidates are distinct sizes in (max, 2x max] at or above ceil(owed / usable days): at
+# most 3 per project (that floor, 1.5x, 2x), tried smallest first, stopping at the first
+# that clears the shortfall; when that floor is over 2x, only 2x is tried.
+# Over-cap sizes are never solved. Once the budget is spent, the
+# remaining short perennials get no raise offer (the other relaxations still apply).
+MAX_PERENNIAL_RAISE_REPACKS = 4
 
 SLACK_PERCENT = 85
 BACK_TO_BACK_GAP = 60  # minutes
@@ -616,9 +627,10 @@ def _score(ctx: _Context, snap: _Snapshot, d: _Demand, span: Span) -> int:
 
     score = W_MINUTES * (e - s)
     if ctx.inp.day_diversity == "focused":
-        # Themed days: join the project's day, avoid days owned by other projects.
-        score += W_FOCUSED_SAME_DAY if same_day else 0
-        score -= W_FOCUSED_OTHER * others
+        # Themed days (deadline projects): join the project's day, avoid other projects' days.
+        if not perennial:
+            score += W_FOCUSED_SAME_DAY if same_day else 0
+            score -= W_FOCUSED_OTHER * others
     else:
         score -= W_SPREAD_SAME_DAY * same_day
         score += W_MIXED_VARIETY * min(3, others)
@@ -736,6 +748,17 @@ def _solve(inp: SolverInput, previous: Sequence[PlannedBlock]) -> _Result:
             on_time_end=on_time_end,
         )
 
+    # Perennials: the solver never adds a block on a day the perennial already occupies
+    # (frozen, pinned or placed), a hard rule. The rule binds the solver, not the user: pins
+    # are placed first and may share a day; an ordinary block then goes elsewhere. Taken days
+    # are cut from the free time, so it never stacks; when the days run out it is stuck and
+    # the rest is a DemandShortfall (with relaxations).
+    taken_days: dict[str, set[int]] = {
+        p.id: {_day(b.span[0]) for b in occupied if b.project_id == p.id}
+        for p in inp.projects
+        if p.weekly_target_minutes is not None
+    }
+
     while True:
         expanded = _merge((s - buffer, e + buffer) for s, e in (b.span for b in occupied))
         best: tuple[int, str, list[Span]] | None = None
@@ -744,11 +767,15 @@ def _solve(inp: SolverInput, previous: Sequence[PlannedBlock]) -> _Result:
             if d.left <= 0 or d.stuck or d.lengths is None:
                 continue
             free = _subtract(d.base, expanded)
-            room = _total(free)
-            if room < d.lengths[0]:
+            # Pressure is measured on free time before the daily cut, so the placement order
+            # (and every plan without a stacked perennial) is the same as before the rule.
+            pressure_room = _total(free)
+            if pid in taken_days:
+                free = _subtract(free, [(x * DAY, (x + 1) * DAY) for x in sorted(taken_days[pid])])
+            if _total(free) < d.lengths[0]:
                 d.stuck = True
                 continue
-            pressure = d.left * PRESSURE_SCALE // room
+            pressure = d.left * PRESSURE_SCALE // pressure_room
             if best is None or pressure > best[0]:
                 best = (pressure, pid, free)
         if best is None:
@@ -763,6 +790,8 @@ def _solve(inp: SolverInput, previous: Sequence[PlannedBlock]) -> _Result:
         span = min(cands, key=lambda c: (-_score(ctx, snap, d, c), c[0], c[1] - c[0]))
         occupied.append(_Placed(pid, span, False))
         d.left -= span[1] - span[0]
+        if pid in taken_days:
+            taken_days[pid].add(_day(span[0]))
 
     blocks = [b for b in occupied if b.pinned or b.lineage_id is None]
     _assign_lineages(blocks, previous, clk, used)
@@ -851,6 +880,28 @@ def _shift_deadline(
         return None
 
 
+def _perennial_sitting(d: _Demand, result: _Result, inp: SolverInput, clk: _Clock) -> int | None:
+    """Sitting length (grid-snapped up) that places a perennial's minutes still owed to
+    ordinary blocks at one sitting per usable day: ceil(owed / days). A usable day is not
+    already taken by a frozen or pinned block of the project and holds at least a minimum
+    sitting of its static allowed time. None when nothing is owed or no day is usable."""
+    pid = d.project.id
+    pinned = [b for b in result.blocks if b.project_id == pid and b.pinned]
+    owed = d.required - sum(d.on_time(b.span) for b in pinned)
+    taken = {_day(b.span[0]) for b in pinned}
+    taken |= {_day(clk.span(f.span)[0]) for f in inp.frozen if f.project_id == pid}
+    lo = _ceil_div(d.project.min_block_minutes, GRID) * GRID
+    days: set[int] = set()
+    for s, e in d.base:
+        for day in range(_day(s), _day(e - 1) + 1):
+            ds, de = max(s, day * DAY), min(e, (day + 1) * DAY)
+            if day not in taken and clk.down(de) - clk.up(ds) >= lo:
+                days.add(day)
+    if owed <= 0 or not days:
+        return None
+    return _ceil_div(_ceil_div(owed, len(days)), GRID) * GRID
+
+
 def _relaxations(
     inp: SolverInput, previous: Sequence[PlannedBlock], base: _Result
 ) -> list[Relaxation]:
@@ -923,7 +974,17 @@ def _relaxations(
                     target_date=new_date,
                 )
 
-    # Structural: max block length, first rung of the ladder that recovers time.
+    # Structural: max block length. Deadline projects get the first ladder rung that recovers
+    # time. A perennial (one sitting a day) gets the smallest length, from ceil(owed / usable
+    # days) up through the ladder rungs above it, whose re-pack clears its whole shortfall
+    # (stable re-solves can keep old sittings short, so the formula alone may fall short);
+    # failing that, the length that recovers most. Perennial sizes are capped at
+    # PERENNIAL_RAISE_CAP_FACTOR x the current max (user decision 2026-11-18). When full
+    # recovery needs more than the cap, exactly the cap is tried and offered as a partial if
+    # it recovers anything; with nothing within the cap that recovers time, no raise is
+    # offered and the other relaxations carry the trade-off. Bounded by
+    # MAX_PERENNIAL_RAISE_REPACKS.
+    raise_budget = MAX_PERENNIAL_RAISE_REPACKS
     for pid in short:
         d = base.demands[pid]
         p = d.project
@@ -935,6 +996,39 @@ def _relaxations(
                 longest,
             }
         )
+        sitting = (
+            _perennial_sitting(d, base, inp, clk) if p.weekly_target_minutes is not None else None
+        )
+        if sitting is not None:
+            floor = min(longest, sitting)
+            sizes = sorted({floor, *ladder})
+            chosen: tuple[int, int, _Result] | None = None  # (size, gain, result)
+            cap = PERENNIAL_RAISE_CAP_FACTOR * p.max_block_minutes
+            if floor <= cap:
+                candidates = [x for x in sizes if floor <= x <= cap]
+            else:  # full recovery is over the cap: try exactly the cap, for a partial
+                candidates = [min(longest, cap)]
+            for size in (x for x in candidates if x > p.max_block_minutes):
+                if raise_budget <= 0:
+                    break
+                raise_budget -= 1
+                trial = counterfactual(projects=with_project(pid, max_block_minutes=size))
+                gain, _ = _gain(base, trial)
+                if gain > 0 and trial.shortfall(pid) == 0:
+                    chosen = (size, gain, trial)
+                    break
+                if gain > 0 and (chosen is None or gain > chosen[1]):
+                    chosen = (size, gain, trial)
+            if chosen is not None:
+                size, _, trial = chosen
+                offer(
+                    trial,
+                    kind="raise_max_block_minutes",
+                    description=f"Allow {pid} sittings up to {size} min",
+                    project_id=pid,
+                    max_block_minutes=size,
+                )
+            continue
         for proposed in (x for x in ladder if x > p.max_block_minutes):
             if offer(
                 counterfactual(projects=with_project(pid, max_block_minutes=proposed)),

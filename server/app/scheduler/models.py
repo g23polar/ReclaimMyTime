@@ -62,6 +62,7 @@ ViolationKind = Literal[
     "forbid",
     "horizon",
     "overlap",
+    "perennial_daily",
     "pin_missing",
     "pin_unmatched",
     "preferred_window",

@@ -218,16 +218,18 @@ async def test_move_case_i_goes_live_directly_and_is_not_rewritten(
     app, stable, client, maker, cal: FakeCalendar, caplog
 ):
     caplog.set_level(logging.DEBUG)
+    # Onto Sunday, the one day without a Workout: a perennial gets one block a day, so a
+    # move onto Thursday would make Thursday's own Workout move too (no longer case i).
     wed = await block_at(maker, stable, 2, "08:00")
     others = [s for s in await spans(maker, stable) if s[1] != wed.span.lower]
-    etag = cal.user_move(CAL1, eid(wed), at(3, "10:00"), at(3, "11:00"))
+    etag = cal.user_move(CAL1, eid(wed), at(6, "10:00"), at(6, "11:00"))
 
     body = await sync(client)
     assert body["pending_changeset"] is None  # nothing for review: nothing else moved
-    moved = await block_at(maker, stable, 3, "10:00")
+    moved = await block_at(maker, stable, 6, "10:00")
     assert moved.lineage_id == wed.lineage_id
     assert (moved.gcal_status, moved.gcal_event_id, moved.gcal_etag) == ("synced", eid(wed), etag)
-    assert [s for s in await spans(maker, stable) if s[1] != at(3, "10:00")] == others
+    assert [s for s in await spans(maker, stable) if s[1] != at(6, "10:00")] == others
     pins = await rows(
         maker, "SELECT kind::text, project_id, created_from_block_id, span::text FROM block_pins"
     )
@@ -250,7 +252,7 @@ async def test_move_case_i_goes_live_directly_and_is_not_rewritten(
     await settle(app)
     assert len(cal.event_calls) == writes
     ev = cal.events[(CAL1, eid(wed))]
-    assert (ev["start"], ev["etag"]) == ({"dateTime": z(at(3, "10:00"))}, etag)
+    assert (ev["start"], ev["etag"]) == ({"dateTime": z(at(6, "10:00"))}, etag)
     # Privacy: no event title or description ever reaches a log line.
     assert not [r for r in caplog.records if "Workout" in r.getMessage()]
 
@@ -357,9 +359,10 @@ async def test_delete_applies_a_forbid_and_proposes_the_replacement(
 async def test_delete_without_room_to_replace_stages_nothing(
     maker, who, cipher, clock, client, cal: FakeCalendar
 ):
-    """Workout only; exceptions leave only Wednesday 08:00–10:50 free, holding two Workouts.
-    The deleted one's hour is forbidden for Workout and the rest is too short, so the
-    re-solve wants no change and nothing is proposed."""
+    """Workout only; exceptions leave only Wednesday and Thursday 08:00–09:20 free, one
+    Workout each (one perennial block a day). The deleted Wednesday hour is forbidden for
+    Workout, the rest of Wednesday is too short and Thursday already has its Workout, so
+    the re-solve wants no change and nothing is proposed."""
     await make_world(
         maker,
         who.user_id,
@@ -369,13 +372,14 @@ async def test_delete_without_room_to_replace_stages_nothing(
         projects=[workout(hours=6.0)],
         extra=[
             exception_added(NOW, at(2, "08:00"), uuid.uuid4()),
-            exception_added(at(2, "10:50"), at(7, "00:00"), uuid.uuid4()),
+            exception_added(at(2, "09:20"), at(3, "08:00"), uuid.uuid4()),
+            exception_added(at(3, "09:20"), at(7, "00:00"), uuid.uuid4()),
         ],
     )
     future = [b for b in await live_blocks(maker, who.user_id) if b.span.lower > NOW]
     assert [(b.span.lower, b.span.upper) for b in future] == [
         (at(2, "08:00"), at(2, "09:00")),
-        (at(2, "09:15"), at(2, "10:15")),
+        (at(3, "08:00"), at(3, "09:00")),
     ]
     target = future[0]
     cal.user_delete(CAL1, eid(target))
@@ -412,6 +416,14 @@ def workout_minutes(plan: dict[str, Any]) -> int:
     return sum(minutes(b["span"]) for b in plan["blocks"] if b["project_id"] == str(WORKOUT))
 
 
+def plan_shortfall(plan: dict[str, Any]) -> int:
+    return sum(
+        v["shortfall_minutes"]
+        for v in ((plan.get("infeasibility") or {}).get("violations") or [])
+        if v["kind"] == "demand_shortfall" and v["project_id"] == str(WORKOUT)
+    )
+
+
 async def test_direct_edit_while_pending_restages_the_pending_changeset(
     app, stable, client, maker, cal: FakeCalendar
 ):
@@ -439,12 +451,14 @@ async def test_direct_edit_while_pending_restages_the_pending_changeset(
     assert (await block_at(maker, stable, 2, "08:00")).lineage_id == wed.lineage_id
     assert [c for c in await changesets(maker) if c[0] == "google_edit"] == []
     # The knock-on is inside the user's proposal: the shortened Friday stays as the user set
-    # it, and the lost 30 minutes are placed again (same Workout total as before).
+    # it. With Wednesday off, Workout already holds Thu-Sun (one block a day), so the lost 30
+    # minutes have no day left: the restaged plan carries them as 30 more minutes short.
     fri_blocks = [
         b["span"] for b in fresh["plan"]["blocks"] if b["lineage_id"] == str(fri.lineage_id)
     ]
     assert fri_blocks == [{"start": z(at(4, "08:00")), "end": z(at(4, "08:30"))}]
-    assert workout_minutes(fresh["plan"]) == workout_minutes(pending["plan"])
+    assert workout_minutes(fresh["plan"]) == workout_minutes(pending["plan"]) - 30
+    assert plan_shortfall(fresh["plan"]) == plan_shortfall(pending["plan"]) + 30
 
     # Rejecting it is now an informed decision on the knock-on: the Google edit stays live
     # and pinned, nothing is re-pended, nothing is written back, nothing else is pending.
@@ -598,9 +612,10 @@ async def test_a_failed_lookup_keeps_the_edits_already_read(
 async def test_listing_follows_every_page(stable, client, maker, cal: FakeCalendar):
     cal.list_page_size = 2
     wed = await block_at(maker, stable, 2, "08:00")
-    cal.user_move(CAL1, eid(wed), at(3, "10:00"), at(3, "11:00"))
+    # Sunday has no Workout, so the move applies directly (one perennial block a day).
+    cal.user_move(CAL1, eid(wed), at(6, "10:00"), at(6, "11:00"))
     assert (await sync(client))["pending_changeset"] is None
-    assert (await block_at(maker, stable, 3, "10:00")).lineage_id == wed.lineage_id
+    assert (await block_at(maker, stable, 6, "10:00")).lineage_id == wed.lineage_id
     assert any("pageToken" in params for e, params in cal.event_reads if e == "")
 
 
@@ -831,7 +846,8 @@ async def test_a_slow_drain_skips_the_ingest_but_still_answers(
             text("UPDATE blocks SET gcal_status = 'pending' WHERE id = :b"), {"b": thu.id}
         )
     wed = await block_at(maker, stable, 2, "08:00")
-    cal.user_move(CAL1, eid(wed), at(3, "10:00"), at(3, "11:00"))
+    # Sunday has no Workout, so the move applies directly (one perennial block a day).
+    cal.user_move(CAL1, eid(wed), at(6, "10:00"), at(6, "11:00"))
     reads = len(cal.event_reads)
     gate = cal.event_gate = asyncio.Event()
     body = await sync(client)  # the drain is held on Google: no listing this time
@@ -839,7 +855,7 @@ async def test_a_slow_drain_skips_the_ingest_but_still_answers(
     gate.set()
     await settle(app)
     await sync(client)  # the next sync ingests
-    assert (await block_at(maker, stable, 3, "10:00")).lineage_id == wed.lineage_id
+    assert (await block_at(maker, stable, 6, "10:00")).lineage_id == wed.lineage_id
 
 
 async def test_never_connected_skips_ingest_and_drift(maker, who, clock, client, cal):

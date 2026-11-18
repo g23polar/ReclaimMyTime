@@ -1,11 +1,11 @@
 {
   "fingerprint": {
-    "solver_version": "1.1.0",
+    "solver_version": "1.2.0",
     "input_schema_version": 1
   },
   "output": {
     "input_schema_version": 1,
-    "solver_version": "1.1.0",
+    "solver_version": "1.2.0",
     "blocks": [
       {
         "lineage_id": "c1a7d354-156a-5930-a3a6-88f3eb7d13ab",
@@ -136,6 +136,21 @@
           "max_block_minutes": null
         },
         {
+          "kind": "raise_max_block_minutes",
+          "description": "Allow gym sittings up to 120 min",
+          "affected_ids": [
+            "gym"
+          ],
+          "recovers_minutes": 60,
+          "project_id": "gym",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": null,
+          "max_block_minutes": 120
+        },
+        {
           "kind": "remove_exception",
           "description": "Drop availability exception trip",
           "affected_ids": [
@@ -149,21 +164,6 @@
           "remaining_minutes": null,
           "weekly_target_minutes": null,
           "max_block_minutes": null
-        },
-        {
-          "kind": "raise_max_block_minutes",
-          "description": "Allow gym sittings up to 90 min",
-          "affected_ids": [
-            "gym"
-          ],
-          "recovers_minutes": 30,
-          "project_id": "gym",
-          "pin_id": null,
-          "exception_id": null,
-          "target_date": null,
-          "remaining_minutes": null,
-          "weekly_target_minutes": null,
-          "max_block_minutes": 90
         }
       ],
       "verify_violations": []

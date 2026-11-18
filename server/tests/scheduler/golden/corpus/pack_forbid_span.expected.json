@@ -1,11 +1,11 @@
 {
   "fingerprint": {
-    "solver_version": "1.1.0",
+    "solver_version": "1.2.0",
     "input_schema_version": 1
   },
   "output": {
     "input_schema_version": 1,
-    "solver_version": "1.1.0",
+    "solver_version": "1.2.0",
     "blocks": [
       {
         "lineage_id": "abaea0b4-32e4-56ca-a039-6c227aa5e97f",
@@ -26,15 +26,6 @@
         "pinned": false
       },
       {
-        "lineage_id": "203737bf-ad50-5517-b5a6-749dc4b0e913",
-        "project_id": "reading",
-        "span": {
-          "start": "2026-11-16T13:30:00Z",
-          "end": "2026-11-16T14:15:00Z"
-        },
-        "pinned": false
-      },
-      {
         "lineage_id": "05b302f1-12ee-5a37-aed5-426ce0ab1e07",
         "project_id": "portfolio",
         "span": {
@@ -44,7 +35,7 @@
         "pinned": false
       },
       {
-        "lineage_id": "c76cc552-56c3-53d0-9516-0822c5bd8ceb",
+        "lineage_id": "203737bf-ad50-5517-b5a6-749dc4b0e913",
         "project_id": "reading",
         "span": {
           "start": "2026-11-16T16:45:00Z",
@@ -62,25 +53,7 @@
         "pinned": false
       },
       {
-        "lineage_id": "7ed4ef21-3512-5104-9f55-03a87e171b65",
-        "project_id": "reading",
-        "span": {
-          "start": "2026-11-17T12:00:00Z",
-          "end": "2026-11-17T12:30:00Z"
-        },
-        "pinned": false
-      },
-      {
-        "lineage_id": "916503fd-459d-5530-b343-b8cea8603e4b",
-        "project_id": "reading",
-        "span": {
-          "start": "2026-11-17T13:30:00Z",
-          "end": "2026-11-17T15:30:00Z"
-        },
-        "pinned": false
-      },
-      {
-        "lineage_id": "a1a1b6f6-ac0b-5800-b3ee-c1df7d486360",
+        "lineage_id": "c76cc552-56c3-53d0-9516-0822c5bd8ceb",
         "project_id": "reading",
         "span": {
           "start": "2026-11-17T16:30:00Z",
@@ -107,15 +80,6 @@
         "pinned": false
       },
       {
-        "lineage_id": "812307f4-1792-55b2-9e4d-52b0baab8065",
-        "project_id": "reading",
-        "span": {
-          "start": "2026-11-18T13:30:00Z",
-          "end": "2026-11-18T14:15:00Z"
-        },
-        "pinned": false
-      },
-      {
         "lineage_id": "08c5539c-52e8-57aa-ba67-99e3c191282c",
         "project_id": "portfolio",
         "span": {
@@ -125,7 +89,7 @@
         "pinned": false
       },
       {
-        "lineage_id": "fa07a410-9541-516d-aa97-143b93c4a96a",
+        "lineage_id": "7ed4ef21-3512-5104-9f55-03a87e171b65",
         "project_id": "reading",
         "span": {
           "start": "2026-11-18T16:45:00Z",
@@ -151,23 +115,46 @@
           "required_minutes": 900,
           "scheduled_minutes": 840,
           "shortfall_minutes": 60
+        },
+        {
+          "kind": "demand_shortfall",
+          "project_id": "reading",
+          "required_minutes": 600,
+          "scheduled_minutes": 360,
+          "shortfall_minutes": 240
         }
       ],
       "relaxations": [
         {
-          "kind": "pause_project",
-          "description": "Pause reading this week",
+          "kind": "reduce_weekly_target",
+          "description": "Lower reading's weekly target to 360 min",
           "affected_ids": [
-            "portfolio"
+            "portfolio",
+            "reading"
           ],
-          "recovers_minutes": 60,
+          "recovers_minutes": 225,
+          "project_id": "reading",
+          "pin_id": null,
+          "exception_id": null,
+          "target_date": null,
+          "remaining_minutes": null,
+          "weekly_target_minutes": 360,
+          "max_block_minutes": null
+        },
+        {
+          "kind": "raise_max_block_minutes",
+          "description": "Allow reading sittings up to 240 min",
+          "affected_ids": [
+            "reading"
+          ],
+          "recovers_minutes": 120,
           "project_id": "reading",
           "pin_id": null,
           "exception_id": null,
           "target_date": null,
           "remaining_minutes": null,
           "weekly_target_minutes": null,
-          "max_block_minutes": null
+          "max_block_minutes": 240
         },
         {
           "kind": "raise_max_block_minutes",
