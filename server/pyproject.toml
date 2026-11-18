@@ -59,3 +59,25 @@ name = "llm-only-behind-agent-route"
 type = "forbidden"
 source_modules = ["app.api", "app.db", "app.scheduler", "app.auth", "app.agent.narration", "app.agent.staging", "app.agent.schemas"]
 forbidden_modules = ["anthropic", "app.agent.loop", "app.agent.router"]
+
+[[tool.importlinter.contracts]]
+# M6 gate finding 9: app.auth never orchestrates calendar persistence or reaches back into
+# the API layer (Google sign-in composes auth + gcal in app.api.google_signin). Account
+# deletion still revokes the Google grant, so app.gcal.client / errors / settings stay
+# allowed; a full `app.auth -/-> app.gcal` ban needs those moved first (M6 gate report).
+name = "auth-does-not-orchestrate-gcal"
+type = "forbidden"
+source_modules = ["app.auth"]
+forbidden_modules = [
+    "app.api",
+    "app.agent",
+    "app.gcal.service",
+    "app.gcal.repository",
+    "app.gcal.runtime",
+    "app.gcal.state",
+    "app.gcal.calendar",
+    "app.gcal.app_calendar",
+    "app.gcal.busy",
+    "app.gcal.ingest",
+    "app.gcal.writeback",
+]

@@ -14,13 +14,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.agent_turns import (
+    PURGE_BATCH,
     RETENTION,
     AgentTurnOutcome,
     AgentTurnRecord,
     record_agent_turn,
     tokens_used_since,
 )
-from app.db.models import User
+from app.db.models import AgentTurnRow, User
 from app.db.models.agent import AGENT_TURN_OUTCOMES
 from tests.db.conftest import T0, bootstrap, requires_db, rows
 
@@ -146,6 +147,46 @@ async def test_purge_is_global_and_keeps_exactly_30_days(maker: Maker, user_id: 
     await write(maker, record(user_id), now=T0)
     assert await turn_times(maker, user_id) == [edge, recent, T0]
     assert await turn_times(maker, other) == [edge, recent]  # inactive user's old row purged
+
+
+async def test_purge_is_bounded_and_drains_a_backlog_oldest_first(
+    maker: Maker, user_id: uuid.UUID
+) -> None:
+    """Finding 5 (M6 gate): one write deletes at most PURGE_BATCH expired rows, oldest
+    first, so a backlog larger than a batch drains over several turns instead of one
+    unbounded DELETE that could blow the caller's best-effort timeout on every turn."""
+    backlog = 2 * PURGE_BATCH + PURGE_BATCH // 2
+    base = T0 - RETENTION - timedelta(days=10)
+    expired = [base + timedelta(seconds=i) for i in range(backlog)]  # ascending
+    async with maker() as s, s.begin():
+        await s.execute(
+            insert(AgentTurnRow),
+            [
+                {
+                    "user_id": user_id,
+                    "created_at": t,
+                    "model": "m",
+                    "outcome": "completed",
+                    "model_calls": 0,
+                    "transcript_len": 0,
+                    "staged": [],
+                }
+                for t in expired
+            ],
+        )
+    edge = T0 - RETENTION
+    await write(maker, record(user_id), now=edge)  # kept throughout (not expired)
+
+    async def remaining_expired() -> list[Any]:
+        return [t for t in await turn_times(maker, user_id) if t < edge]
+
+    await write(maker, record(user_id), now=T0)
+    assert await remaining_expired() == expired[PURGE_BATCH:]  # the oldest batch went
+    await write(maker, record(user_id), now=T0)
+    assert await remaining_expired() == expired[2 * PURGE_BATCH :]
+    await write(maker, record(user_id), now=T0)
+    assert await remaining_expired() == []
+    assert await turn_times(maker, user_id) == [edge, T0, T0, T0]
 
 
 async def test_purge_rolls_back_with_the_insert(maker: Maker, user_id: uuid.UUID) -> None:

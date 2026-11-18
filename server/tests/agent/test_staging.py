@@ -116,7 +116,10 @@ def _create(**over):
         "new_tags": [],
         "interpretation": "Write the novel five hours a week.",
     }
-    return base | over
+    out = base | over
+    if out["preferred_windows"] is not None:
+        out["preferred_windows_set"] = True  # the wire flag; without it windows are dropped
+    return out
 
 
 def _update(**over):

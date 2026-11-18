@@ -1,13 +1,14 @@
 """Postgres-backed fixtures for the DB layer (T2.1).
 
-Every DB test is skipped unless TEST_DATABASE_URL is set. Each test gets a throwaway schema
-migrated by the REAL Alembic migration (not `create_all`), so the invariants are tested
-against the shipped DDL. Extensions are installed once in `public` (shared by schemas).
+Every DB test is skipped unless TEST_DATABASE_URL is set; it must name a dedicated test
+database and never falls back to DATABASE_URL (tests/dbguard.py, M6 gate finding 7). Each
+test gets a throwaway schema migrated by the REAL Alembic migration (not `create_all`), so
+the invariants are tested against the shipped DDL. Extensions are installed once in
+`public` (shared by schemas).
 """
 
 from __future__ import annotations
 
-import os
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
@@ -29,8 +30,9 @@ from app.db.models import User
 from app.db.models.staged import StagedMutation, parse_staged
 from app.db.solver_io import week_horizon
 from app.scheduler import Interval
+from tests.dbguard import resolve_test_database_url
 
-DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+DATABASE_URL = resolve_test_database_url()
 requires_db = pytest.mark.skipif(not DATABASE_URL, reason="TEST_DATABASE_URL not set")
 SERVER_DIR = Path(__file__).resolve().parents[2]
 

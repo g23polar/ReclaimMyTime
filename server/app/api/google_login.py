@@ -1,5 +1,5 @@
 """Sign in with Google routes (`auth` tag; T6.0, contracts/NOTES.md D26). Thin: the logic is
-in app.auth.google_signin. Both routes are unauthenticated and, like POST /auth/apple, need
+in app.api.google_signin. Both routes are unauthenticated and, like POST /auth/apple, need
 no X-Timezone (D11). They live here rather than in app.auth.router because they compose the
 auth runtime with the gcal runtime and the shared sessionmaker, as app.api.gcal does.
 
@@ -16,8 +16,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from app.api.deps import Maker, RawBody, parse_body
 from app.api.gcal import GcalConnectUrlOut, get_gcal_runtime
+from app.api.google_signin import GoogleSignInService
 from app.auth.dependencies import RuntimeDep
-from app.auth.google_signin import GoogleSignInService
 from app.auth.router import session_out, user_out
 from app.auth.schemas import AuthSessionOut
 from app.gcal.runtime import GcalRuntime

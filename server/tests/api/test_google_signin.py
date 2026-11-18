@@ -36,7 +36,7 @@ from app.gcal.client import HttpGoogleOAuthClient, HttpGoogleRevoker
 from app.gcal.runtime import GcalRuntime, build_gcal_runtime
 from app.gcal.settings import GcalSettings
 from app.gcal.state import LOGIN, nonce_hash, s256_challenge
-from tests.api.conftest import SettableClock
+from tests.api.conftest import SettableClock, Who
 from tests.api.contract import SPEC, assert_conforms
 from tests.db.conftest import DATABASE_URL, requires_db
 from tests.gcal.fakes import (
@@ -401,7 +401,10 @@ async def test_no_refresh_token_signs_in_without_connection(
 
 
 async def test_returning_google_identity_is_the_same_user(
-    anon: httpx.AsyncClient, google: FakeGoogle, maker: async_sessionmaker[AsyncSession]
+    anon: httpx.AsyncClient,
+    google: FakeGoogle,
+    maker: async_sessionmaker[AsyncSession],
+    cipher: TokenCipher,
 ) -> None:
     exchange(google)
     first = (await sign_in(anon, code="4/0A-one")).json()
@@ -421,6 +424,8 @@ async def test_returning_google_identity_is_the_same_user(
     assert await count(maker, User) == 2  # the fixture's user + this one
     (conn,) = await rows(maker, GoogleConnection, user_id=uid)
     assert conn.app_calendar_id == "c_app@group.calendar"  # same account keeps it (T4.1)
+    # Same account: the connection is refreshed with the new grant (finding 1: unchanged).
+    assert cipher.decrypt(conn.refresh_token_enc) == "1//0g-second" and conn.status == "active"
     assert google.revoked == []
 
 
@@ -444,31 +449,123 @@ async def test_returning_user_unticking_calendar_keeps_existing_connection(
     assert google.revoked == []
 
 
-async def test_sign_in_with_another_calendar_account_replaces_and_revokes_old(
+async def _connect_other_account(
+    maker: async_sessionmaker[AsyncSession],
+    cipher: TokenCipher,
+    uid: uuid.UUID,
+    *,
+    email: str = "other@gmail.com",
+    status: str = "active",
+) -> None:
+    """Point `uid`'s stored connection at a different Google account, as an explicit
+    GET /gcal/connect switch would have."""
+    async with maker() as s, s.begin():
+        await s.execute(
+            GoogleConnection.__table__.update()
+            .where(GoogleConnection.user_id == uid)
+            .values(
+                google_email=email,
+                refresh_token_enc=cipher.encrypt("1//0g-other"),
+                app_calendar_id="c_other",
+                status=status,
+            )
+        )
+
+
+async def test_sign_in_keeps_an_active_connection_to_another_account(
     anon: httpx.AsyncClient,
     google: FakeGoogle,
     maker: async_sessionmaker[AsyncSession],
     cipher: TokenCipher,
 ) -> None:
-    """A user who connected another Google account via /gcal/connect, then signs in with
-    calendar scopes: the T4.1 persist path replaces it and revokes the old account."""
+    """M6 gate finding 1 (user decision 2026-11-18, "keep B"): a user who connected calendar
+    B via /gcal/connect and then signs in as A with calendar scopes keeps B. A's grant is
+    not stored; nobody holds A, so it is revoked (the `discard` rule)."""
     exchange(google)
     uid = uuid.UUID((await sign_in(anon)).json()["user"]["id"])
-    async with maker() as s, s.begin():
-        await s.execute(
-            GoogleConnection.__table__.update().values(
-                google_email="other@gmail.com",
-                refresh_token_enc=cipher.encrypt("1//0g-other"),
-                app_calendar_id="c_other",
-            )
-        )
+    await _connect_other_account(maker, cipher, uid)
+    exchange(google, refresh_token="1//0g-new")
+    resp = await sign_in(anon, nonce="another-nonce-0123456789", code="4/0A-two")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["user"]["id"] == str(uid) and resp.json()["gcal_connected"] is True
+    (conn,) = await rows(maker, GoogleConnection, user_id=uid)
+    assert (conn.google_email, conn.app_calendar_id, conn.status) == (
+        "other@gmail.com",
+        "c_other",
+        "active",
+    )
+    assert cipher.decrypt(conn.refresh_token_enc) == "1//0g-other"
+    assert google.revoked == ["1//0g-new"]  # A's grant discarded; B untouched
+
+
+async def test_sign_in_with_a_revoked_connection_to_another_account_connects_the_new_one(
+    anon: httpx.AsyncClient,
+    google: FakeGoogle,
+    maker: async_sessionmaker[AsyncSession],
+    cipher: TokenCipher,
+) -> None:
+    """Finding 1 scope: only an ACTIVE connection is kept. A revoked one to B is replaced by
+    the T4.1 persist path as before (B's dead grant revoked, app calendar cleared)."""
+    exchange(google)
+    uid = uuid.UUID((await sign_in(anon)).json()["user"]["id"])
+    await _connect_other_account(maker, cipher, uid, status="revoked")
     exchange(google, refresh_token="1//0g-new")
     resp = await sign_in(anon, nonce="another-nonce-0123456789", code="4/0A-two")
     assert resp.status_code == 200 and resp.json()["gcal_connected"] is True
     (conn,) = await rows(maker, GoogleConnection, user_id=uid)
-    assert (conn.google_email, conn.app_calendar_id) == (EMAIL, None)
+    assert (conn.google_email, conn.app_calendar_id, conn.status) == (EMAIL, None, "active")
     assert cipher.decrypt(conn.refresh_token_enc) == "1//0g-new"
     assert google.revoked == ["1//0g-other"]
+
+
+async def test_returning_user_without_a_connection_connects_on_sign_in(
+    anon: httpx.AsyncClient,
+    google: FakeGoogle,
+    maker: async_sessionmaker[AsyncSession],
+    cipher: TokenCipher,
+) -> None:
+    exchange(google, scope=NO_CALENDAR, refresh_token="1//0g-partial")
+    first = (await sign_in(anon)).json()
+    assert first["gcal_connected"] is False
+    uid = uuid.UUID(first["user"]["id"])
+    assert await rows(maker, GoogleConnection, user_id=uid) == []
+    exchange(google, refresh_token="1//0g-new")
+    resp = await sign_in(anon, nonce="another-nonce-0123456789", code="4/0A-two")
+    assert resp.status_code == 200 and resp.json()["gcal_connected"] is True
+    assert resp.json()["user"]["id"] == str(uid)
+    (conn,) = await rows(maker, GoogleConnection, user_id=uid)
+    assert (conn.google_email, conn.status) == (EMAIL, "active")
+    assert cipher.decrypt(conn.refresh_token_enc) == "1//0g-new"
+    assert google.revoked == ["1//0g-partial"]  # only the first, unticked grant
+
+
+async def test_explicit_gcal_connect_still_switches_accounts(
+    anon: httpx.AsyncClient,
+    google: FakeGoogle,
+    maker: async_sessionmaker[AsyncSession],
+    cipher: TokenCipher,
+    who: Who,
+) -> None:
+    """Finding 1: switching calendars stays an explicit reconnect. A signed-in user connected
+    to A runs GET /gcal/connect + POST /gcal/complete with B: B replaces A (T4.1 rules)."""
+    exchange(google)
+    signed = await sign_in(anon)
+    uid = uuid.UUID(signed.json()["user"]["id"])
+    who.user_id = uid  # the bearer routes resolve to this user (conftest override)
+    url = (await anon.get("/gcal/connect", headers=bearer(signed))).json()["authorization_url"]
+    location = await callback(anon, state=query(url)["state"], code="4/0A-b", scope=ALL_SCOPES)
+    q = query(location)
+    exchange(google, sub="sub-b", email="b@gmail.com", refresh_token="1//0g-b")
+    resp = await anon.post(
+        "/gcal/complete",
+        json={"auth_code": q["auth_code"], "state": q["state"]},
+        headers=bearer(signed),
+    )
+    assert resp.status_code == 200, resp.text
+    (conn,) = await rows(maker, GoogleConnection, user_id=uid)
+    assert conn.google_email == "b@gmail.com"
+    assert cipher.decrypt(conn.refresh_token_enc) == "1//0g-b"
+    assert google.revoked == [REFRESH_TOKEN]  # A's grant, replaced
 
 
 async def test_no_account_merging_by_email(
@@ -569,25 +666,26 @@ async def test_unticked_sign_in_revokes_when_other_users_hold_different_accounts
     assert google.revoked == [REFRESH_TOKEN]
 
 
-async def test_sign_in_replacing_an_account_another_user_still_holds_does_not_revoke_it(
+async def test_sign_in_kept_connection_does_not_revoke_an_account_another_user_holds(
     anon: httpx.AsyncClient,
     google: FakeGoogle,
     maker: async_sessionmaker[AsyncSession],
     cipher: TokenCipher,
 ) -> None:
+    """Finding 1 + the T6.0 cross-user rule: the user keeps connection x; the discarded
+    grant is for account A, which another user holds, so it is NOT revoked (grant-wide)."""
     exchange(google)
     uid = uuid.UUID((await sign_in(anon)).json()["user"]["id"])
-    async with maker() as s, s.begin():
-        await s.execute(
-            GoogleConnection.__table__.update()
-            .where(GoogleConnection.user_id == uid)
-            .values(google_email="x@gmail.com", refresh_token_enc=cipher.encrypt("1//0g-x"))
-        )
-    await _other_user_connected(maker, cipher, "x@gmail.com")
+    await _connect_other_account(maker, cipher, uid, email="x@gmail.com")
+    other = await _other_user_connected(maker, cipher, EMAIL)
     exchange(google, refresh_token="1//0g-new")
     resp = await sign_in(anon, nonce="another-nonce-0123456789", code="4/0A-two")
     assert resp.status_code == 200 and resp.json()["gcal_connected"] is True
     assert google.revoked == []
+    (mine,) = await rows(maker, GoogleConnection, user_id=uid)
+    assert (mine.google_email, mine.status) == ("x@gmail.com", "active")
+    (held,) = await rows(maker, GoogleConnection, user_id=other)
+    assert held.status == "active"
 
 
 # ---------------------------------------------------------------- complete: rejections

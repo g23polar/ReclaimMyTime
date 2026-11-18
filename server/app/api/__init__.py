@@ -1,6 +1,6 @@
 """Scheduling REST API (T2.3): projects, preferences, exceptions, pins, blocks, plans,
 changesets — per contracts/openapi.yaml — plus the thin gcal connection routes (T4.1; logic
-in app.gcal) and the Google sign-in routes (T6.0; logic in app.auth.google_signin). The other
+in app.gcal) and the Google sign-in routes (T6.0; logic in app.api.google_signin). The other
 auth routes live in app.auth; the agent route (M3) is not here."""
 
 from __future__ import annotations

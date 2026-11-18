@@ -1,6 +1,10 @@
 """Sign in with Google (T6.0, contracts/NOTES.md D26): one combined consent creates or finds
 the user, issues a session, and stores the calendar connection.
 
+Lives in app.api beside its only caller (app.api.google_login, the composition point of the
+auth and gcal runtimes) rather than in app.auth, so app.auth does not orchestrate gcal
+persistence (M6 gate finding 9; moved from app.auth.google_signin).
+
 Reuses the T4.1 web flow: the consent URL, PKCE, the Fernet `state` (purpose `login`, bound
 to the hash of an app-held nonce instead of a bearer user), the shared GET /gcal/callback,
 the code exchange, the id_token checks, and the connection persist path.
@@ -10,6 +14,13 @@ any DB transaction and without the per-user lock. The code is exchanged first; t
 transaction takes the lock (for an existing identity), finds or creates the user, issues
 the session and, when the calendar scopes and a refresh token came back, stores the
 connection; after commit, grants we will not keep are revoked best-effort.
+
+A sign-in never switches calendars (M6 gate finding 1, user decision 2026-11-18): when the
+user already has an ACTIVE connection to a DIFFERENT Google account, that connection is
+kept and the new grant is discarded by the same rule as an unticked grant (revoked unless
+some user holds a connection to that account). Switching is an explicit reconnect via
+GET /gcal/connect, which keeps the T4.1 replace semantics. Same account, a revoked
+connection, or none: the T4.1 persist path stores or refreshes it as before.
 """
 
 from __future__ import annotations
@@ -44,7 +55,8 @@ logger = logging.getLogger(__name__)
 class GoogleSignInResult:
     sign_in: SignInResult
     # The user has an active calendar connection after this sign-in: the one just stored,
-    # or (calendar scopes unticked) one that already existed.
+    # or one that already existed (calendar scopes unticked, or an active connection to a
+    # different Google account, which a sign-in never replaces).
     gcal_connected: bool
 
 
@@ -117,6 +129,21 @@ class GoogleSignInService:
                 )
                 user_id = result.user.id
                 if keep_calendar:
+                    # Under the per-user lock (re-entrant; persist_connection takes it too),
+                    # so a concurrent connect cannot slip in between this read and the write.
+                    await gcal_repo.lock_user(s, user_id)
+                    current = await gcal_repo.get_connection(s, user_id)
+                    if (
+                        current is not None
+                        and current.status == "active"
+                        and not gcal_repo.same_account(current.google_email, identity.email)
+                    ):
+                        logger.info(
+                            "google sign-in with an account other than the connected calendar;"
+                            " connection kept, new grant discarded"
+                        )
+                        keep_calendar = False
+                if keep_calendar:
                     _, replaced = await persist_connection(
                         s,
                         user_id,
@@ -136,7 +163,9 @@ class GoogleSignInService:
         if replaced is not None:
             await self._gcal_service().revoke_replaced_account(user_id, *replaced)
         if not keep_calendar:
-            # Same-account rule (T4.1 `_discard`): a stored connection of this same Google
-            # account shares the grant, so it is not revoked then.
+            # Same-account rule (T4.1 `_discard`): a stored connection (of any user) of this
+            # same Google account shares the grant, so it is not revoked then. This covers
+            # unticked or token-less grants and a grant refused because a different
+            # account's connection was kept.
             await self._gcal_service().discard(user_id, tokens, identity.email)
         return GoogleSignInResult(sign_in=result, gcal_connected=connected)

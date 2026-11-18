@@ -79,8 +79,10 @@ paths:
         then the server exchanges the code (PKCE), checks the id_token, and finds or creates
         the user for the Google account (`sub`; no account merging). Always 200 with
         `is_new_user` (as D21). When both calendar scopes were granted and a refresh token
-        came back, the calendar connection is stored too; otherwise the user is signed in
-        without a new connection and the partial grant is revoked best-effort.
+        came back, the calendar connection is stored too, unless the user already has an
+        active connection to a different Google account: that one is kept and the new grant
+        is discarded (D26). Otherwise the user is signed in without a new connection and the
+        partial grant is revoked best-effort.
         `gcal_connected` says whether the user has an active calendar connection after this
         call (false → show the existing connect prompt, GET /gcal/connect). Errors: 400
         `gcal_state_invalid` (bad, expired or connect state, or nonce mismatch — not

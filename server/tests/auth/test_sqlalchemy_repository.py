@@ -1,13 +1,13 @@
 """Integration tests for SqlAlchemyAuthRepository against real Postgres.
 
-Skipped unless TEST_DATABASE_URL is set (e.g. postgresql+asyncpg://.../test). Tables are
+Skipped unless TEST_DATABASE_URL is set (e.g. postgresql+asyncpg://.../test); it must name a
+test database (tests/dbguard.py). Tables are
 created from the models (T2.1 owns the real migration) in a throwaway schema.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 from collections.abc import AsyncIterator
 from datetime import timedelta
@@ -27,8 +27,9 @@ from app.db.base import Base
 from app.db.models import auth as _models  # noqa: F401  (registers tables)
 from tests.auth.conftest import T0
 from tests.auth.fixtures import FrozenClock
+from tests.dbguard import resolve_test_database_url
 
-DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+DATABASE_URL = resolve_test_database_url()
 pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="TEST_DATABASE_URL not set")
 
 
@@ -207,7 +208,11 @@ async def test_touch_session_never_moves_backwards(session: AsyncSession) -> Non
 @pytest.mark.parametrize("index", ["sessions_user_id_idx", "identities_user_id_idx"])
 async def test_user_id_indexes_exist(session: AsyncSession, index: str) -> None:
     rows = await session.execute(
-        text("SELECT indexdef FROM pg_indexes WHERE indexname = :name"), {"name": index}
+        text(
+            "SELECT indexdef FROM pg_indexes"
+            " WHERE schemaname = current_schema() AND indexname = :name"
+        ),
+        {"name": index},
     )
     (indexdef,) = rows.one()
     assert "(user_id)" in indexdef

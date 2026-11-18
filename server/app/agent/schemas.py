@@ -444,10 +444,10 @@ def unwire(name: str, raw: Any) -> Any:
         return raw
     out = dict(raw)
     for field, flag in spec["flags"].items():
-        if flag in out:
-            is_set = out.pop(flag)
-            if is_set is not True:
-                out[field] = None
+        # A missing flag means unset: the non-strict tools may omit it, and passing the field
+        # through would let stray empty values wipe tags or windows (M6 gate, finding 3).
+        if out.pop(flag, False) is not True:
+            out[field] = None
     for field, sentinel in spec["sentinels"].items():
         value = out.get(field)
         if value is not None and not isinstance(value, bool) and value == sentinel:

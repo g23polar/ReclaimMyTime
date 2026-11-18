@@ -162,8 +162,8 @@ async def test_confirm_rechecks_planless_changeset(maker: Maker, user_id: uuid.U
 async def test_pending_changeset_partial_index_exists(maker: Maker) -> None:
     got = await rows(
         maker,
-        "SELECT indexdef FROM pg_indexes WHERE tablename = 'changesets'"
-        " AND indexname = 'changesets_user_id_pending_idx'",
+        "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema()"
+        " AND tablename = 'changesets' AND indexname = 'changesets_user_id_pending_idx'",
     )
     assert len(got) == 1
     assert "(user_id)" in got[0][0] and "WHERE (status = 'pending'" in got[0][0]

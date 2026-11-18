@@ -13,10 +13,17 @@ goes on the next turn after that. Retention therefore lags by the gap between tu
 app-wide; with zero agent traffic nothing is purged, which is acceptable because then
 nothing new is captured either.
 
+The purge is bounded (M6 gate finding 5): one call deletes at most `PURGE_BATCH` expired
+rows, oldest first. The caller runs this under a short best-effort timeout that rolls back
+the insert and the purge together; an unbounded purge of a large backlog could exceed it on
+every turn, so nothing would ever be recorded or purged again. Bounded, a backlog drains
+over several turns instead. Rows another transaction is already purging are skipped
+(`SKIP LOCKED`), so concurrent turns delete disjoint batches rather than wait on each other.
+
 Transaction discipline matches write_paths: the caller owns `tx` and commits; nothing reads
 the clock (`now` is injected and stamps `created_at`). No advisory lock is taken: the row is
 an append-only log, not scheduling state, and the purge only touches expired log rows that
-nothing reads; concurrent purges deleting the same row just find it gone (no error).
+nothing reads; concurrent purges skip each other's locked rows (no waiting, no error).
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import AgentTurnRow
 
 __all__ = [
+    "PURGE_BATCH",
     "RETENTION",
     "AgentTurnOutcome",
     "AgentTurnRecord",
@@ -43,6 +51,8 @@ __all__ = [
 AgentTurnOutcome = Literal["completed", "refused", "error"]
 
 RETENTION = timedelta(days=30)
+# Max expired rows one record_agent_turn call deletes (finding 5: bounded purge).
+PURGE_BATCH = 1000
 
 
 @dataclass(frozen=True)
@@ -66,8 +76,9 @@ class AgentTurnRecord:
 
 
 async def record_agent_turn(tx: AsyncSession, record: AgentTurnRecord, *, now: datetime) -> None:
-    """Insert the row, then delete every user's agent_turns rows older than now - RETENTION
-    (same transaction). Caller owns the transaction and commit."""
+    """Insert the row, then delete up to PURGE_BATCH of every user's agent_turns rows older
+    than now - RETENTION, oldest first (same transaction). Caller owns the transaction and
+    commit."""
     await tx.execute(
         insert(AgentTurnRow).values(
             user_id=record.user_id,
@@ -89,7 +100,14 @@ async def record_agent_turn(tx: AsyncSession, record: AgentTurnRecord, *, now: d
             snapshot=record.snapshot,
         )
     )
-    await tx.execute(delete(AgentTurnRow).where(AgentTurnRow.created_at < now - RETENTION))
+    expired = (
+        select(AgentTurnRow.id)
+        .where(AgentTurnRow.created_at < now - RETENTION)
+        .order_by(AgentTurnRow.created_at)
+        .limit(PURGE_BATCH)
+        .with_for_update(skip_locked=True)
+    )
+    await tx.execute(delete(AgentTurnRow).where(AgentTurnRow.id.in_(expired)))
 
 
 async def tokens_used_since(tx: AsyncSession, user_id: uuid.UUID, since: datetime) -> int:

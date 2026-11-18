@@ -144,6 +144,19 @@ def test_unwire_unset_flag_drops_the_window_value():
     assert unwire("stage_project_create", raw)["preferred_windows"] is None
 
 
+def test_unwire_missing_flag_means_unset():
+    # Non-strict tools may omit the flag: stray empty values must not wipe tags or windows.
+    update = unwire(
+        "stage_project_update",
+        {"project": "P1", "requirements": [], "preferred_windows": {}, "interpretation": "x"},
+    )
+    assert update["requirements"] is None and update["preferred_windows"] is None
+    create = unwire("stage_project_create", {"preferred_windows": {"mon": ["18:00-22:00"]}})
+    assert create["preferred_windows"] is None
+    prefs = unwire("stage_preferences", {"schedulable_windows": {"mon": ["09:00-17:00"]}})
+    assert prefs["schedulable_windows"] is None
+
+
 def test_unwire_preferences_sentinels_and_flag():
     raw = {
         "schedulable_windows": {}, "schedulable_windows_set": False,

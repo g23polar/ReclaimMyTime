@@ -10,6 +10,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.scheduler import SOLVER_VERSION
 from tests.db.conftest import (
     WORKOUT,
     bootstrap,
@@ -44,7 +45,7 @@ async def test_onboarding_planless_changeset_then_first_plan(
         " FROM week_plans WHERE id = :p",
         p=live,
     )
-    assert got == [("live", 1, True, "1.1.0")]
+    assert got == [("live", 1, True, SOLVER_VERSION)]
     minutes = await rows(
         maker,
         "SELECT sum(extract(epoch FROM upper(span) - lower(span)) / 60)::int, "

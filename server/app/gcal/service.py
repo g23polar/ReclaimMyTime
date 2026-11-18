@@ -1,7 +1,7 @@
 """Google connection lifecycle (T4.1): connect URL, callback redirect, bearer-bound
 completion (D24), status, disconnect, and on-demand access tokens for T4.2/T4.3. The
 callback is shared with Google sign-in (T6.0, D26): a `login` state is handed back to the
-app's sign-in callback instead; app.auth.google_signin completes it and reuses
+app's sign-in callback instead; app.api.google_signin completes it and reuses
 `persist_connection` and the best-effort revoke helpers below.
 
 Transactions are short and never held across a Google call (same discipline as
