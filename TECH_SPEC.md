@@ -176,3 +176,8 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
   - [x] Finding (5) strict project with empty windows → logged as an OPEN question in PRD §10 (to figure out; not blocking T6.1)
   - [ ] Config: live base URL per build configuration (defaults to `localhost:8000`); scheme still passes `-UseMockAPI YES`; fixtures bundled in Release
 - [ ] T6.2 Journey walkthrough + guards
+  - [x] Eval-capture plumbing — `agent_turns` (migration 0004): one row per agent turn (outcome, error code, calls, token sums, staged, changeset/plan); user message + snapshot only with `AGENT_CAPTURE_TURNS` (decision 2026-11-17); 30-day purge; verified live (cache read on turn 2)
+  - [ ] Per-user daily token budget — deferred per ARCH §9 (no TestFlight); will sum `agent_turns` via `tokens_used_since`
+  - [ ] E2E of the three PRD journeys (needs Simulator sign-in)
+  - [ ] `architect-reviewer` final pass
+  - [ ] Finding: question-only answers ignore today's already-completed blocks ("Reading 1h short" with the Tue block done)
