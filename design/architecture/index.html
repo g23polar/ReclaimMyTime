@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      (function () {
+        var t = new URLSearchParams(location.search).get("theme");
+        if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+      })();
+    </script>
+    <title>ReclaimMyTime: architecture</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        --bg: #f7f7f8;
+        --fg: #1d1f23;
+        --muted: #646a73;
+        --panel: #ffffff;
+        --border: #d9dce1;
+        --band: #eef0f3;
+        --node: #ffffff;
+        --node-sel: #1d1f23;
+        --chip: #eef0f3;
+        --mark: #ffe58a;
+        --alert-bg: #fdecee;
+        --alert-fg: #8f1d2c;
+        --note-bg: #fff6e0;
+        --edge-import: #5b6b82;
+        --edge-reference: #3f8f8a;
+        --edge-http: #d7862a;
+        --edge-forbidden: #d63a4c;
+        --edge-violation: #e0182d;
+        --ok: #16704a;
+        --bad: #d63a4c;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --bg: #15171b;
+          --fg: #e6e8eb;
+          --muted: #9aa1ab;
+          --panel: #1d2026;
+          --border: #343943;
+          --band: #20242b;
+          --node: #262a32;
+          --node-sel: #f2f3f5;
+          --chip: #2b3039;
+          --mark: #7a5d00;
+          --alert-bg: #3a1a20;
+          --alert-fg: #ffb3bd;
+          --note-bg: #332a14;
+          --edge-import: #9fb0c8;
+          --edge-reference: #5fc2bb;
+          --edge-http: #f0a24a;
+          --edge-forbidden: #ff6b7c;
+          --edge-violation: #ff3049;
+          --ok: #4cc28c;
+          --bad: #ff6b7c;
+        }
+      }
+      /* ?theme=light|dark forces a theme regardless of the OS setting */
+      :root[data-theme="dark"] {
+          --bg: #15171b;
+          --fg: #e6e8eb;
+          --muted: #9aa1ab;
+          --panel: #1d2026;
+          --border: #343943;
+          --band: #20242b;
+          --node: #262a32;
+          --node-sel: #f2f3f5;
+          --chip: #2b3039;
+          --mark: #7a5d00;
+          --alert-bg: #3a1a20;
+          --alert-fg: #ffb3bd;
+          --note-bg: #332a14;
+          --edge-import: #9fb0c8;
+          --edge-reference: #5fc2bb;
+          --edge-http: #f0a24a;
+          --edge-forbidden: #ff6b7c;
+          --edge-violation: #ff3049;
+          --ok: #4cc28c;
+          --bad: #ff6b7c;
+        }
+      :root { color-scheme: light dark; }
+      :root[data-theme="light"] { color-scheme: light; }
+      :root[data-theme="dark"] { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; background: var(--bg); color: var(--fg); overflow-x: hidden; }
+      body { font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+      code, .sig { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+      .app { padding: 12px 16px 24px; max-width: 1800px; margin: 0 auto; }
+      .top { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: flex-end; justify-content: space-between; }
+      h1 { font-size: 20px; margin: 0; }
+      h2 { font-size: 17px; margin: 4px 0 8px; }
+      h3 { font-size: 13px; margin: 16px 0 6px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+      .muted { color: var(--muted); }
+      .small { font-size: 12px; font-weight: normal; }
+      .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; }
+      .legend-item { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+      .layout { display: grid; grid-template-columns: minmax(0, 2.3fr) minmax(320px, 1fr); gap: 16px; margin-top: 12px; }
+      @media (max-width: 1100px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+      .map-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 6px; min-width: 0; }
+      .map { width: 100%; height: auto; display: block; }
+      .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; min-width: 0;
+               overflow-wrap: anywhere; max-height: calc(100vh - 110px); overflow-y: auto; position: sticky; top: 8px; }
+      @media (max-width: 1100px) { .panel { max-height: none; position: static; } }
+      .region-title { font-size: 19px; font-weight: 700; fill: var(--fg); }
+      .region-sub { font-size: 12.5px; fill: var(--muted); }
+      .divider { stroke: var(--border); stroke-dasharray: 4 4; }
+      .band { fill: var(--band); }
+      .band-label { font-size: 12px; font-weight: 600; paint-order: stroke; stroke: var(--band); stroke-width: 5px; stroke-linejoin: round; fill: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+      .node { cursor: pointer; outline: none; }
+      .node-box { fill: var(--node); stroke: var(--border); stroke-width: 1.2; }
+      .node.external .node-box { stroke-dasharray: 4 3; }
+      .node.selected .node-box, .node:focus-visible .node-box { stroke: var(--node-sel); stroke-width: 2.4; }
+      .node.violator .node-box { stroke: var(--edge-violation); stroke-width: 2.4; }
+      .node.dim { opacity: 0.35; }
+      .node-name { font-size: 14.5px; font-weight: 600; fill: var(--fg); }
+      .node-meta { font-size: 12.5px; fill: var(--muted); }
+      .edge { cursor: pointer; }
+      .edge.dim { opacity: 0.07; }
+      .edge.lit path:not(.edge-hit) { opacity: 0.85; }
+      .edge:hover path:not(.edge-hit), .edge.picked path:not(.edge-hit) { opacity: 1; stroke-width: 3; }
+      .edge-hit { fill: none; stroke: transparent; stroke-width: 10; }
+      .violating { filter: drop-shadow(0 0 3px var(--edge-violation)); }
+      .tooltip { position: fixed; z-index: 10; max-width: 390px; background: var(--panel); color: var(--fg);
+                 border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px;
+                 box-shadow: 0 6px 24px rgba(0,0,0,0.18); pointer-events: none; overflow-wrap: anywhere; }
+      .tooltip ul { margin: 6px 0 0; padding-left: 16px; font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+      .tt-head { font-weight: 600; }
+      .kind-tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; color: #fff; margin-right: 6px; text-transform: uppercase; }
+      .k-import { background: var(--edge-import); }
+      .k-reference { background: var(--edge-reference); }
+      .k-http { background: var(--edge-http); }
+      .k-forbidden { background: var(--edge-forbidden); }
+      .badge { display: inline-block; font-size: 10px; padding: 0 5px; margin-left: 4px; border-radius: 4px; background: var(--chip); color: var(--muted); }
+      .badge.bad { background: var(--alert-bg); color: var(--alert-fg); }
+      .chip { font: inherit; font-size: 12px; border: 1px solid var(--border); background: var(--chip); color: var(--fg);
+              border-radius: 12px; padding: 1px 9px; margin: 2px 4px 2px 0; cursor: pointer; }
+      .chip-bad { border-color: var(--bad); color: var(--bad); }
+      .edge-group { margin: 4px 0; }
+      .back { font: inherit; font-size: 12px; background: none; border: none; color: var(--muted); cursor: pointer; padding: 0; }
+      .alert { background: var(--alert-bg); color: var(--alert-fg); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+      .note { background: var(--band); border-radius: 8px; padding: 8px 10px; margin: 6px 0; }
+      .note p { margin: 4px 0; }
+      .note.warn { background: var(--note-bg); }
+      .status { font-size: 11px; font-weight: 600; text-transform: uppercase; }
+      .status.ok { color: var(--ok); }
+      .status.bad { color: var(--bad); }
+      .detail-list { margin: 4px 0; padding-left: 18px; }
+      .detail-list li { margin: 2px 0; }
+      .filter { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); margin-bottom: 6px; }
+      ul.files, ul.symbols, ul.members { list-style: none; margin: 0; padding: 0; }
+      ul.symbols { padding-left: 14px; }
+      ul.members { padding-left: 16px; border-left: 1px solid var(--border); margin-left: 4px; }
+      li.file { border-top: 1px solid var(--border); padding: 5px 0; }
+      .disclosure { font: inherit; background: none; border: none; color: inherit; cursor: pointer; padding: 0; text-align: left; max-width: 100%; overflow-wrap: anywhere; }
+      .file-head { display: flex; flex-wrap: wrap; gap: 0 6px; align-items: baseline; width: 100%; }
+      .chev { display: inline-block; width: 12px; color: var(--muted); }
+      .dir { color: var(--muted); font-size: 12px; }
+      .counts { color: var(--muted); font-size: 11px; margin-left: auto; }
+      .sym { margin: 3px 0; }
+      .sig { white-space: pre-wrap; overflow-wrap: anywhere; }
+      .kw { color: var(--muted); font-size: 12px; }
+      .bases { color: var(--muted); font-size: 12px; }
+      .decorators { color: var(--edge-http); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+      .doc { color: var(--muted); font-size: 12px; margin-left: 14px; }
+      .line { color: var(--muted); font-size: 10px; }
+      mark { background: var(--mark); color: inherit; border-radius: 2px; }
+      .boot { padding: 24px; }
+    </style>
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"
+      integrity="sha512-QVs8Lo43F9lSuBykadDb0oSXDL/BbZ588urWVCRwSIoewQv/Ewg1f84mK3U790bZ0FfhFa1YSQUmIhG+pIRKeg=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    ></script>
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"
+      integrity="sha512-6a1107rTlA4gYpgHAqbwLAtxmWipBdJFcq8y5S/aTge3Bp+VAklABm2LO+Kg51vOWR9JMZq1Ovjl5tpluNpTeQ=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    ></script>
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"
+      integrity="sha512-hX7KzoYtNHhNJsz8TAHyddcegokOwhmYiFWCDHqFkcoNVsYwCziO+NISSRlNKpfOYaqyQxm2+MTCJqSaHssJTA=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    ></script>
+  </head>
+  <body>
+    <div id="root"><p class="boot muted">Loading architecture map…</p></div>
+    <noscript>This page needs JavaScript.</noscript>
+    <script type="text/babel" data-presets="react" src="ArchitectureMap.jsx"></script>
+    <script type="text/babel" data-presets="react">
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      const load = (name) =>
+        fetch(name, { cache: "no-store" }).then((r) => {
+          if (!r.ok) throw new Error(`${name}: HTTP ${r.status}`);
+          return r.json();
+        });
+      Promise.all([load("architecture.json"), load("overlay.json")])
+        .then(([data, overlay]) => root.render(<window.ArchitectureMap data={data} overlay={overlay} />))
+        .catch((err) =>
+          root.render(
+            <div className="boot">
+              <h1>Could not load the architecture data</h1>
+              <p>{String(err)}</p>
+              <p>
+                architecture.json is generated and not committed. From the repo root, regenerate it and serve
+                this directory over HTTP (file:// blocks the fetches):
+              </p>
+              <pre>
+                <code>cd server && python3 scripts/arch_extract.py && python3 -m http.server -b 127.0.0.1 -d ../design/architecture 8765</code>
+              </pre>
+              <p className="muted">Then open http://127.0.0.1:8765.</p>
+            </div>
+          )
+        );
+    </script>
+  </body>
+</html>

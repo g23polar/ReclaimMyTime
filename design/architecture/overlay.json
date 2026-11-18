@@ -1,0 +1,232 @@
+{
+  "_readme": "Curated by the architecture agent. Descriptions must be verifiable from code or ARCHITECTURE.md. Layer `row` orders bands top-to-bottom per side; package `order` orders nodes inside a row. architecture.json is generated - never hand-edit it.",
+  "layers": [
+    {"id": "composition", "side": "server", "row": 0, "label": "Composition root", "color": "#8a8f98"},
+    {"id": "llm", "side": "server", "row": 1, "label": "LLM layer", "color": "#b45fd6"},
+    {"id": "api", "side": "server", "row": 2, "label": "API", "color": "#2f7fd8"},
+    {"id": "solver", "side": "server", "row": 3, "label": "Solver", "color": "#1f9d6b"},
+    {"id": "integrations", "side": "server", "row": 3, "label": "Integrations", "color": "#d7862a"},
+    {"id": "persistence", "side": "server", "row": 4, "label": "Persistence", "color": "#c2455a"},
+    {"id": "shared", "side": "server", "row": 5, "label": "Shared", "color": "#8a8f98"},
+    {"id": "ios-app", "side": "ios", "row": 0, "label": "iOS app", "color": "#8a8f98"},
+    {"id": "ios-features", "side": "ios", "row": 1, "label": "Features", "color": "#2f7fd8"},
+    {"id": "ios-core", "side": "ios", "row": 2, "label": "Core", "color": "#1f9d6b"},
+    {"id": "ios-foundation", "side": "ios", "row": 3, "label": "Models & mocks", "color": "#c2455a"}
+  ],
+  "packages": {
+    "server:main": {
+      "layer": "composition",
+      "order": 0,
+      "description": "Builds the FastAPI app: installs the error-envelope handlers and access-log redaction, then mounts the auth router, the scheduling API (app.api.install) and the agent router. Owns no logic of its own.",
+      "notes": [
+        "GET /health is served here and is not in contracts/openapi.yaml (extractor http_issues: server_routes_not_in_contract)."
+      ]
+    },
+    "server:agent": {
+      "layer": "llm",
+      "order": 0,
+      "description": "The LLM layer (ARCH §8): POST /agent/message, the manual tool-use turn loop, the static prompt and per-turn snapshot, strict tool schemas, in-memory staging and deterministic fallback narration. It stages mutations and asks the solver to propose; it never emits blocks or times. loop.py and router.py are the only importers of anthropic.",
+      "notes": [
+        "Boundary pressure: agent/router.py imports app.api.busy, deps, outbox and views, while api/views.py imports app.agent.narration, so api and agent form a package-level cycle. No contract forbids it, because narration is allowed and router/loop are not imported from api.",
+        "agent/router.py also imports app.gcal.busy and app.gcal.errors directly (busy time for the in-turn solve)."
+      ]
+    },
+    "external:anthropic": {
+      "layer": "llm",
+      "order": 1,
+      "description": "Anthropic Messages SDK (external). The llm-only-behind-agent-route contract forbids it in api, db, scheduler, auth and in agent.narration, staging and schemas, so only agent.loop and agent.router may import it.",
+      "notes": []
+    },
+    "server:api": {
+      "layer": "api",
+      "order": 0,
+      "description": "REST routers per contracts/openapi.yaml (projects, preferences, exceptions, pins, blocks, plans, changesets), the thin gcal connection and Google sign-in routes, and the one REST staging path (api/staging.py). State changes go through app.db write paths; staged writes return the pending changeset (202). It must not import anthropic, agent.loop or agent.router.",
+      "notes": [
+        "Composes auth and gcal for Google sign-in (api/google_signin.py), which is why auth itself is barred from orchestrating gcal."
+      ]
+    },
+    "server:auth": {
+      "layer": "api",
+      "order": 1,
+      "description": "Accounts and sessions: Google and optional Apple sign-in, opaque bearer sessions (pure token/expiry logic in sessions.py), account deletion that revokes the Google grant, refresh-token encryption and the injectable clock. Must not import app.api, app.agent or gcal's orchestration modules; only gcal.client, errors and settings are allowed.",
+      "notes": [
+        "auth and gcal form a package cycle: gcal/runtime.py, service.py and writeback.py import app.auth.clock, crypto and settings, while auth imports gcal.client, errors and settings. The contract comment in pyproject.toml records that a full auth -/-> gcal ban needs those modules moved first."
+      ]
+    },
+    "server:scheduler": {
+      "layer": "solver",
+      "order": 0,
+      "description": "Pure, deterministic solver (ARCH §4): pack(), verify(), the solver contract models and golden replay. It has no I/O, clock or env reads and imports nothing from agent, api, gcal or db (scheduler-purity). Every schedule comes from here.",
+      "notes": [
+        "No logging, by design (pure). Failure is returned as data: Infeasibility in SolverOutput and verify() violations."
+      ]
+    },
+    "server:gcal": {
+      "layer": "integrations",
+      "order": 1,
+      "description": "Google Calendar integration: OAuth with PKCE and stateless state, freeBusy busy time for solves, the app-owned calendar, the write-back outbox worker and ingest of edits made to our events in Google. Scopes are calendar.freebusy plus calendar.app.created only (gcal/settings.py), so other events' details never enter the system.",
+      "notes": []
+    },
+    "server:db": {
+      "layer": "persistence",
+      "order": 0,
+      "description": "Persistence: SQLAlchemy models (db/models rolls up here), the session factory, the DB-to-solver contract mapping (solver_io.py) and the only write paths (persist_plan and apply_mutation in write_paths.py, plus agent_turns and the outbox). It imports scheduler for contract types and verify(), and never imports api or agent.",
+      "notes": [
+        "No logging in db: failures surface as typed write-path exceptions that api/errors.py maps to the contract envelope."
+      ]
+    },
+    "server:errors": {
+      "layer": "shared",
+      "order": 0,
+      "description": "The app-wide error envelope {error: {code, message, details?}} (D12) and its handlers. It is a leaf and imports no app package.",
+      "notes": []
+    },
+    "server:log_redaction": {
+      "layer": "shared",
+      "order": 1,
+      "description": "A uvicorn access-log filter that strips the query string from GET /gcal/callback, so the OAuth code and state never reach logs. app.main installs it at import. It is a leaf.",
+      "notes": []
+    },
+    "ios:App": {
+      "layer": "ios-app",
+      "order": 0,
+      "description": "The composition root. AppModel builds the transport (mock or network), the typed client, the session store, auth state and app-wide observable state. AppConfig switches the whole app onto contract fixtures (-UseMockAPI).",
+      "notes": [
+        "Every feature package references AppModel directly, so features reach the composition root instead of going only through Core/State."
+      ]
+    },
+    "ios:Features/Chat": {
+      "layer": "ios-features",
+      "order": 0,
+      "description": "The Chat tab: onboarding intake and mid-week conversation over POST /agent/message (ChatModel), project summary cards, the project edit sheet and the preferences step.",
+      "notes": []
+    },
+    "ios:Features/Timetable": {
+      "layer": "ios-features",
+      "order": 1,
+      "description": "Week and day timetable. TimetableModel loads the plan, pins, projects, preferences and exceptions and draws what the server says. Edits go out as staged PATCH /blocks writes whose changesets land in PendingChangesetStore; nothing is placed client-side.",
+      "notes": []
+    },
+    "ios:Features/Proposals": {
+      "layer": "ios-features",
+      "order": 2,
+      "description": "Proposal review for the current pending changeset: narration, infeasibility trade-offs, the diff view and the confirm/reject bar (design/diff-and-infeasibility.md).",
+      "notes": [
+        "Features/Proposals and Features/Timetable form a cycle: review reuses the timetable grid views, and Timetable uses Proposals' RelaxationRequest and TradeOffContext."
+      ]
+    },
+    "ios:Features/Projects": {
+      "layer": "ios-features",
+      "order": 3,
+      "description": "The Projects tab: GET /projects in server order, with no client-side filtering, sorting or judging.",
+      "notes": []
+    },
+    "ios:Features/Onboarding": {
+      "layer": "ios-features",
+      "order": 4,
+      "description": "Onboarding: intro panels, Continue with Google sign-in (one consent for account, session and calendar) and the Google Calendar consent view.",
+      "notes": []
+    },
+    "ios:Features/Settings": {
+      "layer": "ios-features",
+      "order": 5,
+      "description": "Settings: Google Calendar connection, notifications, backend mode and sign-out, plus the revoked-calendar banner.",
+      "notes": []
+    },
+    "ios:Features/Notifications": {
+      "layer": "ios-features",
+      "order": 6,
+      "description": "The notification permission pre-prompt card, shown on the Week tab after the first week is confirmed.",
+      "notes": []
+    },
+    "ios:Core/Networking": {
+      "layer": "ios-core",
+      "order": 0,
+      "description": "The typed APIClient (one method per contract operationId), its URLSession implementation, the HTTPTransport seam (network vs mock), the SSE parser for the agent stream, JSON/RFC 3339 coding and APIError. Every server call goes through it.",
+      "notes": []
+    },
+    "ios:Core/State": {
+      "layer": "ios-core",
+      "order": 1,
+      "description": "App-wide observable state shared by features: tabs and navigation, the single PendingChangesetStore, the project directory and cards, the preferences form, the calendar connection and the timezone monitor.",
+      "notes": []
+    },
+    "ios:Core/Auth": {
+      "layer": "ios-core",
+      "order": 2,
+      "description": "AuthState (sign-in phases, sign-out, session revocation), nonce generation and the WebAuthenticationSession wrapper for the Google connect and sign-in flows.",
+      "notes": [
+        "GcalWebAuthenticator references Mocks.MockWebAuthenticator behind the runtime AppConfig.usesMock flag rather than #if DEBUG, so the mock authenticator is compiled into release builds."
+      ]
+    },
+    "ios:Core/Storage": {
+      "layer": "ios-core",
+      "order": 3,
+      "description": "Keychain-backed session persistence (SessionStore, KeychainStore). The token is redacted from descriptions so it cannot reach logs.",
+      "notes": [
+        "Layer inversion: SessionStore keys the Keychain service by App's AppConfig.Backend."
+      ]
+    },
+    "ios:Core/Notifications": {
+      "layer": "ios-core",
+      "order": 4,
+      "description": "Local notifications: the rolling 48-hour block-start window, 10-minute warnings, permission state and notification-response routing.",
+      "notes": [
+        "Layer inversion: BlockNotificationPlanner uses PinJoin, which is declared in Features/Timetable/BlockPresentation.swift.",
+        "Core/Background and Core/Notifications form a cycle through DriftNotification and the notification copy and route types."
+      ]
+    },
+    "ios:Core/Background": {
+      "layer": "ios-core",
+      "order": 5,
+      "description": "The only path to BGTaskScheduler, plus the drift check: POST /gcal/sync, then a drift alert notification.",
+      "notes": []
+    },
+    "ios:Core/DesignSystem": {
+      "layer": "ios-core",
+      "order": 6,
+      "description": "Design tokens: colors, typography, spacing, radius and hit targets, motion, and the project palette assignment.",
+      "notes": []
+    },
+    "ios:Core/Formatting": {
+      "layer": "ios-core",
+      "order": 7,
+      "description": "Display formatting for spans and durations in the device time zone. It only formats and never computes or adjusts a schedule (CLAUDE.md rule 1).",
+      "notes": []
+    },
+    "ios:Models": {
+      "layer": "ios-foundation",
+      "order": 0,
+      "description": "Codable mirrors of the contracts/openapi.yaml schemas (Project, Changeset, WeekPlan, AgentEvent, Infeasibility and more). It is a leaf and references no other package.",
+      "notes": []
+    },
+    "ios:Mocks": {
+      "layer": "ios-foundation",
+      "order": 1,
+      "description": "The contract-fixture transport (MockTransport, enabled by -UseMockAPI), the DEBUG-only DemoTransport screenshot scenarios and MockWebAuthenticator. Lives in the app target.",
+      "notes": []
+    }
+  },
+  "notes": [
+    {
+      "title": "Two-layer agent boundary holds",
+      "text": "Only app.agent imports anthropic (loop.py, router.py). The solver imports none of agent, api, gcal or db, and every block row is written by db.write_paths.persist_plan. All three import-linter contracts are shown as red dashed 'must not depend' edges.",
+      "packages": ["server:agent", "server:scheduler", "server:db", "external:anthropic"]
+    },
+    {
+      "title": "Package cycles allowed by the contracts",
+      "text": "There are twelve two-package cycles. Four are between peers: api <-> agent, auth <-> gcal, Features/Proposals <-> Features/Timetable and Core/Background <-> Core/Notifications. The other eight all involve App, the composition root: App <-> Core/Storage and App <-> seven Features packages (Chat, Notifications, Onboarding, Projects, Proposals, Settings, Timetable), because App builds the feature views and the views reference AppModel directly (see 'Features skip Core/State'). None breaks a contract. They mark where the next change is most likely to tangle.",
+      "packages": ["server:api", "server:agent", "server:auth", "server:gcal", "ios:Features/Proposals", "ios:Features/Timetable", "ios:Core/Background", "ios:Core/Notifications", "ios:App", "ios:Core/Storage"]
+    },
+    {
+      "title": "iOS Core depends upward",
+      "text": "Core/Storage references App (AppConfig), Core/Notifications references Features/Timetable (PinJoin) and Core/Auth references Mocks (MockWebAuthenticator). Core is otherwise below Features.",
+      "packages": ["ios:Core/Storage", "ios:Core/Notifications", "ios:Core/Auth"]
+    },
+    {
+      "title": "Heuristic limits",
+      "text": "Swift edges are inferred from top-level type names and skip comments and string literals. A type named only inside string interpolation is missed, and a project type that shared a name with an SDK type would be mis-attributed (the extractor lists ambiguous names). Contract violations are checked on direct imports only; lint-imports is authoritative for indirect chains.",
+      "packages": []
+    }
+  ]
+}
