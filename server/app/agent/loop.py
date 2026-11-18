@@ -106,7 +106,18 @@ class TurnSummary:
 
 
 Recorder = Callable[[TurnSummary], Awaitable[None]]
-_RECORD_TIMEOUT = 5.0  # seconds; the trace never holds up the stream's end for long
+_RECORD_TIMEOUT = 5.0  # seconds; a stuck trace write is abandoned, never retried
+
+# Trace writes run detached from the request: the app closes the SSE stream as soon as it
+# reads `done`, which cancels the response task, and a write inside it would be cut off
+# mid-transaction (seen on prod 2026-11-18). Strong refs keep the tasks alive until done.
+_TRACES: set[asyncio.Task[None]] = set()
+
+
+async def drain_traces() -> None:
+    """Wait for pending trace writes (tests, shutdown)."""
+    while pending := [t for t in _TRACES if not t.done()]:
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 class Proposer(Protocol):
@@ -166,7 +177,7 @@ class AgentTurn:
         """Trace a turn whose first model call failed before the 200 (the caller's 503)."""
         self.summary.error_code = "agent_unavailable"
         self._terminal = True
-        await self._record()
+        self._record()
 
     async def events(self) -> AsyncIterator[Event]:
         """The turn runs in its own task under one deadline (`turn_timeout_seconds`), so an
@@ -205,7 +216,7 @@ class AgentTurn:
             log.error("agent turn failed:\n%s", _redacted_trace(exc))
             await emit(_error("internal_error", INTERNAL))
         finally:
-            await self._record()
+            self._record()
             await queue.put(None)
 
     def _emitter(self, queue: asyncio.Queue[Event | None]) -> Callable[[Event], Awaitable[None]]:
@@ -224,19 +235,18 @@ class AgentTurn:
 
         return emit
 
-    async def _record(self) -> None:
-        """Best-effort: a failed or slow trace write is logged, never surfaced to the user."""
+    def _record(self) -> None:
+        """Schedule the trace write (synchronous, so it also works while this task is being
+        cancelled). Best-effort: failures are logged, never surfaced to the user."""
         if self._recorder is None:
             return
         s = self.summary
         if not self._terminal:
             s.error_code = "cancelled"  # the client went away before the turn ended
         s.staged = tuple(self._staging.mutations) if s.outcome == "completed" else ()
-        try:
-            async with asyncio.timeout(_RECORD_TIMEOUT):
-                await self._recorder(self.summary)
-        except Exception as exc:
-            log.warning("agent turn trace not recorded:\n%s", _redacted_trace(exc))
+        task = asyncio.create_task(_write_trace(self._recorder, s))
+        _TRACES.add(task)
+        task.add_done_callback(_TRACES.discard)
 
     # ------------------------------------------------------------ loop
 
@@ -343,6 +353,14 @@ class AgentTurn:
         s.output_tokens += usage.output_tokens or 0
         s.cache_read_tokens += getattr(usage, "cache_read_input_tokens", None) or 0
         s.cache_write_tokens += getattr(usage, "cache_creation_input_tokens", None) or 0
+
+
+async def _write_trace(recorder: Recorder, summary: TurnSummary) -> None:
+    try:
+        async with asyncio.timeout(_RECORD_TIMEOUT):
+            await recorder(summary)
+    except Exception as exc:
+        log.warning("agent turn trace not recorded:\n%s", _redacted_trace(exc))
 
 
 def _redacted_trace(exc: BaseException) -> str:

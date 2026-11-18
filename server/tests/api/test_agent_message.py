@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from jsonschema import Draft202012Validator
 from sqlalchemy import text
 
-from app.agent.loop import StaleBase
+from app.agent.loop import StaleBase, drain_traces
 from app.agent.router import DbProposer
 from app.agent.router import router as agent_router
 from app.agent.settings import AgentSettings
@@ -30,6 +30,14 @@ _EVENT = Draft202012Validator(
     registry=_REGISTRY,
     format_checker=_FORMATS,
 )
+
+
+@pytest.fixture(autouse=True)
+async def _traces_written():
+    """Trace writes run detached from the request; let them finish before the schema is
+    dropped, or teardown deadlocks with an in-flight agent_turns insert."""
+    yield
+    await drain_traces()
 
 
 @pytest.fixture
@@ -413,6 +421,7 @@ async def test_discarding_kicks_the_outbox_only_when_reject_repended(
 
 
 async def agent_turns(maker, uid) -> list[tuple[Any, ...]]:
+    await drain_traces()  # trace writes run detached from the request
     return await rows(
         maker,
         "SELECT outcome, error_code, model_calls, input_tokens, output_tokens, transcript_len,"

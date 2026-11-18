@@ -17,6 +17,7 @@ from app.agent.loop import (
     DryRun,
     Solve,
     StaleBase,
+    drain_traces,
     upstream_summary,
 )
 from app.agent.prompt import SYSTEM_PROMPT
@@ -91,6 +92,7 @@ async def run(
     )
     await turn.open()
     events = [e async for e in turn.events()]
+    await drain_traces()
     return events, proposer, staging
 
 
@@ -595,6 +597,7 @@ async def test_a_disconnect_is_traced_as_cancelled():
     events = turn.events()
     assert (await anext(events))[0] == "delta"
     await events.aclose()
+    await drain_traces()
     [s] = rec.summaries
     # The hanging second call was opened, so it counts; nothing was committed.
     assert (s.outcome, s.error_code, s.model_calls, tuple(s.staged)) == (
@@ -603,3 +606,34 @@ async def test_a_disconnect_is_traced_as_cancelled():
         2,
         (),
     )
+
+
+async def test_trace_survives_the_client_closing_right_after_done():
+    # The app closes the stream as soon as it reads `done` (prod, 2026-11-18): the trace
+    # write must not run inside the response task, or that close cancels it mid-write.
+    import asyncio
+
+    written = []
+
+    async def slow_recorder(summary) -> None:
+        await asyncio.sleep(0.05)
+        written.append(summary)
+
+    turn = AgentTurn(
+        client=FakeAnthropic(Call([Text("Sure.")])).client(),
+        settings=AgentSettings(),
+        transcript=[Msg("user", "hi")],
+        staging=_turn(),
+        snapshot="STATE",
+        proposer=FakeProposer(),
+        recorder=slow_recorder,
+    )
+    await turn.open()
+    events = turn.events()
+    async for name, _ in events:
+        if name == "done":
+            break
+    await events.aclose()
+    await drain_traces()
+    [s] = written
+    assert (s.outcome, s.error_code) == ("completed", None)
