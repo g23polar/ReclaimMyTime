@@ -17,6 +17,10 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY . .
 RUN uv sync --frozen --no-dev
 
+# Run as an unprivileged user (M6 gate finding 8); the app writes nothing to disk.
+RUN useradd --system --uid 10001 --no-create-home app
+USER app
+
 EXPOSE 8080
 # Fly injects PORT; 8080 matches internal_port in fly.toml.
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]

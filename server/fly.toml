@@ -1,10 +1,13 @@
 # Fly.io config for the API. Secrets are set with `fly secrets set` (never in this file).
-# Migrations are NOT run on deploy yet; run them explicitly against Neon first.
+# Every deploy migrates Neon first (release_command); a failed migration aborts the deploy.
 app = "reclaimmytime"
 primary_region = "iad"  # Neon is us-east-1; keep compute next to the database
 
 [build]
   dockerfile = "Dockerfile"
+
+[deploy]
+  release_command = "alembic upgrade head"
 
 [env]
   PORT = "8080"

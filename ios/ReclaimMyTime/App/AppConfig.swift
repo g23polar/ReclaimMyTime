@@ -2,14 +2,14 @@ import Foundation
 
 /// Runtime configuration. One flag switches the whole app onto contract fixtures:
 /// launch argument `-UseMockAPI` (or `-UseMockAPI YES`; `-UseMockAPI NO` forces live).
-/// The shared scheme enables it by default until live integration (T6.1).
+/// The shared scheme carries it disabled; a plain Run talks to prod.
 struct AppConfig: Sendable {
     enum Backend: Sendable, Equatable {
         case mock
         case live(URL)
     }
 
-    static let defaultLiveBaseURL = "http://localhost:8000"
+    static let defaultLiveBaseURL = "https://reclaimmytime.fly.dev"
     /// Placeholder origin for mock requests; never resolved.
     static let mockBaseURL = "https://mock.reclaimmytime.invalid"
 
@@ -32,8 +32,7 @@ struct AppConfig: Sendable {
             useMock = arguments.contains("-UseMockAPI")
         }
         if useMock { return AppConfig(backend: .mock) }
-        // TODO(T6.1): real base URL per build configuration; plain-http localhost may need an ATS
-        // NSAllowsLocalNetworking exception.
+        // Prod by default; the `APIBaseURL` user default still overrides it.
         let raw = defaults.string(forKey: "APIBaseURL") ?? Self.defaultLiveBaseURL
         return AppConfig(backend: .live(URL(string: raw) ?? URL(fileURLWithPath: "/")))
     }

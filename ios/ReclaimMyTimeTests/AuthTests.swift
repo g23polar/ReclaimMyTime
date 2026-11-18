@@ -174,4 +174,33 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(AppConfig.fromProcess(arguments: [], defaults: custom).backend, .live(URL(string: "https://api.example.test")!))
         XCTAssertEqual(AppConfig.fromProcess(arguments: [], defaults: defaults()).backend, .live(URL(string: AppConfig.defaultLiveBaseURL)!))
     }
+
+    func testDefaultLiveBackendIsProd() {
+        XCTAssertEqual(AppConfig.defaultLiveBaseURL, "https://reclaimmytime.fly.dev")
+        let config = AppConfig.fromProcess(arguments: ["app"], defaults: defaults())
+        XCTAssertFalse(config.usesMock)
+        XCTAssertEqual(config.baseURL, URL(string: "https://reclaimmytime.fly.dev")!)
+        XCTAssertEqual(config.baseURL.scheme, "https")
+    }
+
+    func testAPIBaseURLOverridesProd() {
+        let custom = defaults()
+        custom.set("http://localhost:8000", forKey: "APIBaseURL")
+        XCTAssertEqual(AppConfig.fromProcess(arguments: ["app"], defaults: custom).baseURL, URL(string: "http://localhost:8000")!)
+    }
+
+    func testMockFlagWinsOverAPIBaseURL() {
+        let custom = defaults()
+        custom.set("https://api.example.test", forKey: "APIBaseURL")
+        let config = AppConfig.fromProcess(arguments: ["app", "-UseMockAPI", "YES"], defaults: custom)
+        XCTAssertEqual(config.backend, .mock)
+        XCTAssertEqual(config.baseURL, URL(string: AppConfig.mockBaseURL)!)
+    }
+
+    func testProdSessionHasItsOwnKeychainService() {
+        let prod = SessionStore.service(for: .live(URL(string: AppConfig.defaultLiveBaseURL)!), prefix: "p")
+        XCTAssertEqual(prod, "p.live.reclaimmytime.fly.dev")
+        XCTAssertNotEqual(prod, SessionStore.service(for: .mock, prefix: "p"))
+        XCTAssertNotEqual(prod, SessionStore.service(for: .live(URL(string: "http://localhost:8000")!), prefix: "p"))
+    }
 }
