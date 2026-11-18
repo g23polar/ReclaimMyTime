@@ -187,6 +187,7 @@ not at import:
 | `GOOGLE_LOGIN_APP_CALLBACK_URL` | Optional; sign-in redirect target, default `reclaimmytime://auth/google/callback` |
 | `ANTHROPIC_API_KEY` | Read by the Anthropic SDK for `/agent/message` |
 | `AGENT_MODEL` | Optional model id override |
+| `AGENT_CAPTURE_TURNS` | Optional; `1` stores each agent turn's user message and state snapshot in `agent_turns` for evals (30-day retention). Counts and outcomes are stored regardless |
 | `APPLE_BUNDLE_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` | Optional, all or none. Sign in with Apple (identity-token audience, code exchange, revocation). Unset: `POST /auth/apple` answers 503 `apple_unavailable` |
 
 `server/.env.example` is a commented template for these. Copy it to `server/.env`

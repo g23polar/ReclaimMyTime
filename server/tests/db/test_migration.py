@@ -1,5 +1,5 @@
 """Alembic migrations: up/down/up on a scratch schema, migrated schema == Base.metadata, and the
-per-revision data checks (0002 reason backfill, 0003 google identities)."""
+per-revision data checks (0002 reason backfill, 0003 google identities, 0004 agent_turns)."""
 
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ TABLES = {
     "changesets",
     "blocks",
     "mutations",
+    "agent_turns",
 }
 
 
@@ -252,5 +253,54 @@ async def test_0003_google_identity_widens_provider_and_round_trips(schema: str)
                 await conn.execute(text("SELECT provider, subject FROM identities ORDER BY 1, 2"))
             ).all()
             assert got == [("apple", "apple-sub"), ("google", "g-sub-2")]
+    finally:
+        await engine.dispose()
+
+
+async def test_0004_agent_turns_round_trips(schema: str) -> None:
+    """Migration 0004 (T6.2): creates agent_turns with its two indexes; downgrade drops only that
+    table (existing rows elsewhere survive); up again recreates it empty."""
+    uid = "00000000-0000-4000-8000-000000000004"
+
+    def indexes(conn: Connection) -> set[str]:
+        return {i["name"] for i in inspect(conn).get_indexes("agent_turns")}
+
+    engine = await make_engine(schema)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(run_alembic, "upgrade", "0003_google_identity")
+            assert "agent_turns" not in await conn.run_sync(_tables)
+            await conn.execute(text(f"INSERT INTO users (id) VALUES ('{uid}')"))
+
+            await conn.run_sync(run_alembic, "upgrade", "head")
+            assert await conn.run_sync(_tables) == TABLES
+            assert await conn.run_sync(indexes) == {
+                "agent_turns_user_id_created_at_idx",
+                "agent_turns_created_at_idx",
+            }
+            await conn.execute(
+                text(
+                    "INSERT INTO agent_turns (user_id, model, outcome, model_calls,"
+                    f" transcript_len) VALUES ('{uid}', 'm', 'completed', 1, 1)"
+                )
+            )
+            got = (
+                await conn.execute(
+                    text(
+                        "SELECT input_tokens, output_tokens, cache_read_tokens,"
+                        " cache_write_tokens, staged::text, user_message, snapshot"
+                        " FROM agent_turns"
+                    )
+                )
+            ).all()
+            assert got == [(0, 0, 0, 0, "[]", None, None)]
+
+            await conn.run_sync(run_alembic, "downgrade", "0003_google_identity")
+            assert await conn.run_sync(_tables) == TABLES - {"agent_turns"}
+            assert (await conn.execute(text("SELECT count(*) FROM users"))).scalar_one() == 1
+            await conn.run_sync(run_alembic, "upgrade", "head")
+            assert await conn.run_sync(_tables) == TABLES
+            n = (await conn.execute(text("SELECT count(*) FROM agent_turns"))).scalar_one()
+            assert n == 0
     finally:
         await engine.dispose()

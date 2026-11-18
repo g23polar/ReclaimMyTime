@@ -19,7 +19,7 @@ import asyncio
 import contextlib
 import logging
 import traceback
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -88,6 +88,27 @@ class Solve:
     fingerprint: str | None  # what the user is shown, minus ids; None when no changeset
 
 
+@dataclass
+class TurnSummary:
+    """What a finished turn did, for the agent_turns trace (eval capture, token budget).
+    Filled as the turn runs; handed to the recorder once, after the terminal event."""
+
+    outcome: str = "error"  # "completed" | "refused" | "error"
+    error_code: str | None = None
+    stop_reason: str | None = None  # of the last model call
+    model_calls: int = 0  # streams opened; a call that fails mid-stream counts, its tokens don't
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    staged: Sequence[StagedMutation] = ()  # completed turns only: others change nothing
+    changeset: dict[str, Any] | None = None
+
+
+Recorder = Callable[[TurnSummary], Awaitable[None]]
+_RECORD_TIMEOUT = 5.0  # seconds; the trace never holds up the stream's end for long
+
+
 class Proposer(Protocol):
     async def dry_run(self, staged: Sequence[StagedMutation]) -> DryRun:
         """Solve on a rolled-back transaction. Raises ToolError when the staged list cannot
@@ -113,11 +134,15 @@ class AgentTurn:
         staging: TurnStaging,
         snapshot: str,
         proposer: Proposer,
+        recorder: Recorder | None = None,
     ) -> None:
         self._client = client
         self._settings = settings
         self._staging = staging
         self._proposer = proposer
+        self._recorder = recorder
+        self.summary = TurnSummary()
+        self._terminal = False  # a done/error event was emitted
         # The snapshot follows the last user message: a mid-conversation system message must
         # come after a user turn and before the assistant turn (cache-safe, no beta).
         self._messages: list[dict[str, Any]] = [
@@ -130,11 +155,18 @@ class AgentTurn:
     async def open(self) -> None:
         """Start the first model call. Called before the HTTP 200 so an upstream outage is a
         plain 503 (contract); raises anthropic.APIError."""
+        self.summary.model_calls += 1
         try:
             self._first = await self._stack.enter_async_context(self._stream())
         except BaseException:
             await self._stack.aclose()
             raise
+
+    async def record_failed_open(self) -> None:
+        """Trace a turn whose first model call failed before the 200 (the caller's 503)."""
+        self.summary.error_code = "agent_unavailable"
+        self._terminal = True
+        await self._record()
 
     async def events(self) -> AsyncIterator[Event]:
         """The turn runs in its own task under one deadline (`turn_timeout_seconds`), so an
@@ -152,27 +184,59 @@ class AgentTurn:
                 await task
 
     async def _produce(self, queue: asyncio.Queue[Event | None]) -> None:
+        emit = self._emitter(queue)
         try:
             async with self._stack, asyncio.timeout(self._settings.turn_timeout_seconds):
                 async for event in self._run():
-                    await queue.put(event)
+                    await emit(event)
         except TimeoutError:
             log.warning("agent turn exceeded %ss", self._settings.turn_timeout_seconds)
-            await queue.put(_error("agent_unavailable", UNAVAILABLE))
+            await emit(_error("agent_unavailable", UNAVAILABLE))
         except anthropic.APIError as exc:
             log.warning("agent upstream failure: %s", upstream_summary(exc))
-            await queue.put(_error("agent_unavailable", UNAVAILABLE))
+            await emit(_error("agent_unavailable", UNAVAILABLE))
         except StaleBase:
-            await queue.put(_error("changeset_stale", STALE))
+            await emit(_error("changeset_stale", STALE))
         except TurnAborted as exc:
-            await queue.put(_error(exc.code, exc.message))
+            await emit(_error(exc.code, exc.message))
         except Exception as exc:
             # Exception text (driver errors included) can quote user data: log types and
             # frames only. The engine also hides SQL parameters (session.py).
             log.error("agent turn failed:\n%s", _redacted_trace(exc))
-            await queue.put(_error("internal_error", INTERNAL))
+            await emit(_error("internal_error", INTERNAL))
         finally:
+            await self._record()
             await queue.put(None)
+
+    def _emitter(self, queue: asyncio.Queue[Event | None]) -> Callable[[Event], Awaitable[None]]:
+        """Queue an event, noting the terminal one in the summary."""
+
+        async def emit(event: Event) -> None:
+            name, data = event
+            self._terminal = self._terminal or name in ("done", "error")
+            if name == "done":
+                self.summary.outcome = data["outcome"]
+                self.summary.changeset = data["changeset"]
+            elif name == "error":
+                self.summary.outcome = "error"
+                self.summary.error_code = data["error"]["code"]
+            await queue.put(event)
+
+        return emit
+
+    async def _record(self) -> None:
+        """Best-effort: a failed or slow trace write is logged, never surfaced to the user."""
+        if self._recorder is None:
+            return
+        s = self.summary
+        if not self._terminal:
+            s.error_code = "cancelled"  # the client went away before the turn ended
+        s.staged = tuple(self._staging.mutations) if s.outcome == "completed" else ()
+        try:
+            async with asyncio.timeout(_RECORD_TIMEOUT):
+                await self._recorder(self.summary)
+        except Exception as exc:
+            log.warning("agent turn trace not recorded:\n%s", _redacted_trace(exc))
 
     # ------------------------------------------------------------ loop
 
@@ -198,6 +262,7 @@ class AgentTurn:
                 assert self._first is not None, "open() first"
                 stream = self._first
             else:
+                self.summary.model_calls += 1
                 stream = await self._stack.enter_async_context(self._stream())
             first_text = True
             async for event in stream:
@@ -214,6 +279,7 @@ class AgentTurn:
                     text.append(chunk)
                     yield "delta", {"text": chunk}
             message = await stream.get_final_message()
+            self._count(message)
 
             if message.stop_reason == "refusal":
                 # Haiku has no server-side fallback: decline, zero state change.
@@ -269,6 +335,14 @@ class AgentTurn:
             reply = f"{UPDATED} {solve.narration}"
         changeset = None if solve is None else solve.changeset
         yield "done", {"outcome": "completed", "reply": reply or FALLBACK, "changeset": changeset}
+
+    def _count(self, message: Any) -> None:
+        s, usage = self.summary, message.usage
+        s.stop_reason = message.stop_reason
+        s.input_tokens += usage.input_tokens or 0
+        s.output_tokens += usage.output_tokens or 0
+        s.cache_read_tokens += getattr(usage, "cache_read_input_tokens", None) or 0
+        s.cache_write_tokens += getattr(usage, "cache_creation_input_tokens", None) or 0
 
 
 def _redacted_trace(exc: BaseException) -> str:

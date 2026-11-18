@@ -407,3 +407,58 @@ async def test_discarding_kicks_the_outbox_only_when_reject_repended(
     solve = await proposer.commit([])
     assert (solve.changeset, solve.narration) == (None, None)
     assert kicks == ([1] if repended else [])
+
+
+# ---------------------------------------------------------------- turn trace (agent_turns)
+
+
+async def agent_turns(maker, uid) -> list[tuple[Any, ...]]:
+    return await rows(
+        maker,
+        "SELECT outcome, error_code, model_calls, input_tokens, output_tokens, transcript_len,"
+        " jsonb_array_length(staged), changeset_id, plan_id, user_message, snapshot"
+        " FROM agent_turns WHERE user_id = :u ORDER BY created_at",
+        u=uid,
+    )
+
+
+async def test_a_turn_is_traced_without_text_by_default(agent_app, client, fake, maker, who):
+    fake.script = [
+        Call([Tool("stage_exception_add", LAPTOP)], "tool_use"),
+        Call([Tool("propose_schedule", {})], "tool_use"),
+        Call([Text("I moved things around. OK?")]),
+    ]
+    events = await turn(client, ("user", "I don't have my laptop today or tomorrow."))
+    cs = events[-1]["data"]["changeset"]
+    [row] = await agent_turns(maker, who.user_id)
+    assert row == (
+        "completed", None, 3, 300, 60, 1, 1,
+        uuid.UUID(cs["id"]), uuid.UUID(cs["plan"]["id"]), None, None,
+    )  # fmt: skip
+
+
+async def test_capture_flag_stores_message_and_snapshot(agent_app, client, fake, maker, who):
+    agent_app.state.agent_settings = AgentSettings(capture_turns=True)
+    fake.script = [Call([Text("Sure, what would you like to change?")])]
+    await turn(client, ("user", "hi"), ("assistant", "Hello!"), ("user", "Can you help?"))
+    [row] = await agent_turns(maker, who.user_id)
+    assert row[:9] == ("completed", None, 1, 100, 20, 3, 0, None, None)
+    assert row[9] == "Can you help?"
+    assert row[10].startswith("Current state (read-only")
+
+
+async def test_a_refusal_is_traced(agent_app, client, fake, maker, who):
+    fake.script = [Call([], "refusal")]
+    await turn(client, ("user", "write me a poem"))
+    [row] = await agent_turns(maker, who.user_id)
+    assert row[:3] == ("refused", None, 1) and row[7:] == (None, None, None, None)
+
+
+async def test_an_upstream_outage_before_the_stream_is_traced(agent_app, client, fake, maker, who):
+    fake.script = [Failure(529)]
+    res = await client.post(
+        "/agent/message", json={"messages": [{"role": "user", "content": "hi"}]}
+    )
+    assert res.status_code == 503
+    [row] = await agent_turns(maker, who.user_id)
+    assert row[:3] == ("error", "agent_unavailable", 1)

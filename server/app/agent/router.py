@@ -29,9 +29,11 @@ from app.agent.loop import (
     AgentTurn,
     DryRun,
     Event,
+    Recorder,
     Solve,
     StaleBase,
     TurnAborted,
+    TurnSummary,
     upstream_summary,
 )
 from app.agent.narration import narrate, project_names
@@ -51,6 +53,7 @@ from app.api.deps import (
 )
 from app.api.outbox import kick_outbox
 from app.api.views import changeset_view
+from app.db.agent_turns import AgentTurnRecord, record_agent_turn
 from app.db.models import Changeset
 from app.db.models.staged import InvalidMutation, StagedMutation, dump_staged
 from app.db.write_paths import (
@@ -105,12 +108,13 @@ async def post_agent_message(
     async with transaction(maker) as tx:
         ctx = await load_turn(tx, user_id, now=now, device_tz=tz.key)
     settings = agent_settings(request)
+    snapshot = render_snapshot(ctx.staging, ctx.snapshot)
     turn = AgentTurn(
         client=anthropic_client(request),
         settings=settings,
         transcript=req.messages,
         staging=ctx.staging,
-        snapshot=render_snapshot(ctx.staging, ctx.snapshot),
+        snapshot=snapshot,
         proposer=DbProposer(
             maker,
             user_id,
@@ -121,12 +125,22 @@ async def post_agent_message(
             busy=busy,
             kick_outbox=lambda: kick_outbox(request.app, user_id),
         ),
+        recorder=_recorder(
+            maker,
+            user_id,
+            settings,
+            now=now,
+            message=req.messages[last].content,
+            snapshot=snapshot,
+            transcript_len=len(req.messages),
+        ),
     )
     try:
         # Bounded, retries included: the request is not streaming yet, so a client that
         # gives up during an upstream stall would otherwise leave this call running.
         await asyncio.wait_for(turn.open(), settings.open_timeout_seconds)
     except (anthropic.APIError, TimeoutError) as exc:
+        await turn.record_failed_open()
         if isinstance(exc, anthropic.APIError):
             log.warning("agent open failed: %s", upstream_summary(exc))
         else:
@@ -142,6 +156,55 @@ async def post_agent_message(
 log = logging.getLogger(__name__)
 
 _UNAVAILABLE_PRE = "The assistant is temporarily unavailable. Try again in a moment."
+
+
+# ---------------------------------------------------------------- turn trace
+
+
+def _recorder(
+    maker: async_sessionmaker[AsyncSession],
+    user_id: uuid.UUID,
+    settings: AgentSettings,
+    *,
+    now: datetime,
+    message: str,
+    snapshot: str,
+    transcript_len: int,
+) -> Recorder:
+    """Writes the agent_turns row (eval capture). User text and the snapshot are kept only
+    when `capture_turns` is on; counts and outcomes always."""
+
+    async def record(s: TurnSummary) -> None:
+        cs = s.changeset or {}
+        row = AgentTurnRecord(
+            user_id=user_id,
+            model=settings.model,
+            outcome=s.outcome,
+            error_code=s.error_code,
+            stop_reason=s.stop_reason,
+            model_calls=s.model_calls,
+            input_tokens=s.input_tokens,
+            output_tokens=s.output_tokens,
+            cache_read_tokens=s.cache_read_tokens,
+            cache_write_tokens=s.cache_write_tokens,
+            transcript_len=transcript_len,
+            staged=dump_staged(s.staged),
+            changeset_id=_uuid_or_none(cs.get("id")),
+            plan_id=_uuid_or_none(cs.get("plan_id")),
+            user_message=message if settings.capture_turns else None,
+            snapshot=snapshot if settings.capture_turns else None,
+        )
+        async with transaction(maker) as tx:
+            await record_agent_turn(tx, row, now=now)
+
+    return record
+
+
+def _uuid_or_none(value: Any) -> uuid.UUID | None:
+    try:
+        return None if value is None else uuid.UUID(str(value))
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------- seams (app.state)

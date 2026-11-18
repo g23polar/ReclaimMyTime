@@ -18,7 +18,14 @@ class AgentSettings:
     heartbeat_seconds: float = 15.0  # contract: `: ping` at least every 15 s
     open_timeout_seconds: float = 30.0  # first model call, retries included → else 503
     turn_timeout_seconds: float = 120.0  # whole turn after the 200 → else `error`
+    # Store the user's message and the state snapshot with each agent_turns row (eval
+    # capture, decision 2026-11-17). Off unless AGENT_CAPTURE_TURNS is set; counts and
+    # outcomes are stored either way.
+    capture_turns: bool = False
 
     @classmethod
     def from_env(cls) -> AgentSettings:
-        return cls(model=os.environ.get("AGENT_MODEL", cls.model))
+        return cls(
+            model=os.environ.get("AGENT_MODEL", cls.model),
+            capture_turns=os.environ.get("AGENT_CAPTURE_TURNS", "").lower() in ("1", "true", "yes"),
+        )

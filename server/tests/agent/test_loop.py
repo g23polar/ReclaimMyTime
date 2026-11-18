@@ -69,7 +69,14 @@ class FakeProposer:
 
 
 async def run(
-    fake: FakeAnthropic, *, staging=None, proposer=None, calls=8, transcript=None, deadline=120.0
+    fake: FakeAnthropic,
+    *,
+    staging=None,
+    proposer=None,
+    calls=8,
+    transcript=None,
+    deadline=120.0,
+    recorder=None,
 ):
     staging = staging or _turn()
     proposer = proposer or FakeProposer()
@@ -80,6 +87,7 @@ async def run(
         staging=staging,
         snapshot="STATE",
         proposer=proposer,
+        recorder=recorder,
     )
     await turn.open()
     events = [e async for e in turn.events()]
@@ -487,3 +495,111 @@ def test_upstream_summary_handles_errors_without_a_response():
     exc = anthropic.APIConnectionError(request=httpx.Request("POST", "https://x.test"))
 
     assert upstream_summary(exc) == "status=None type=APIConnectionError request_id=None"
+
+
+# ---------------------------------------------------------------- turn trace (eval capture)
+
+
+class Recorder:
+    def __init__(self, fail: bool = False) -> None:
+        self.fail = fail
+        self.summaries: list[Any] = []
+
+    async def __call__(self, summary) -> None:
+        self.summaries.append(summary)
+        if self.fail:
+            raise RuntimeError("db down")
+
+
+async def test_trace_sums_usage_and_records_the_committed_changeset():
+    fake = FakeAnthropic(
+        Call([Tool("stage_project_create", _create())], "tool_use"),
+        Call([Tool("propose_schedule", {})], "tool_use"),
+        Call([Text("Novel gets Mon and Wed mornings. OK?")]),
+    )
+    rec = Recorder()
+    events, _, staging = await run(fake, recorder=rec)
+    assert terminal(events)[1]["outcome"] == "completed"
+    [s] = rec.summaries
+    assert (s.outcome, s.error_code, s.stop_reason, s.model_calls) == (
+        "completed",
+        None,
+        "end_turn",
+        3,
+    )
+    # The fake reports 100 input / 20 output tokens per call, no cache fields.
+    assert (s.input_tokens, s.output_tokens, s.cache_read_tokens, s.cache_write_tokens) == (
+        300,
+        60,
+        0,
+        0,
+    )
+    assert s.changeset == CHANGESET and list(s.staged) == staging.mutations
+
+
+async def test_trace_records_a_refusal():
+    rec = Recorder()
+    await run(FakeAnthropic(Call([Text("I can")], "refusal")), recorder=rec)
+    [s] = rec.summaries
+    assert (s.outcome, s.stop_reason, s.model_calls, s.changeset) == ("refused", "refusal", 1, None)
+
+
+async def test_trace_records_the_error_code():
+    loop = Call(
+        [Tool("stage_project_archive", {"project": "P9", "interpretation": "x"})], "tool_use"
+    )
+    rec = Recorder()
+    await run(FakeAnthropic(loop, loop, loop), calls=3, recorder=rec)
+    [s] = rec.summaries
+    assert (s.outcome, s.error_code, s.model_calls) == ("error", "agent_unavailable", 3)
+
+
+async def test_a_failing_trace_never_reaches_the_user():
+    fake = FakeAnthropic(Call([Text("Sure.")]))
+    rec = Recorder(fail=True)
+    events, _, _ = await run(fake, recorder=rec)
+    assert terminal(events) == (
+        "done",
+        {"outcome": "completed", "reply": "Sure.", "changeset": None},
+    )
+    assert len(rec.summaries) == 1
+
+
+async def test_trace_of_a_refused_turn_keeps_nothing_staged():
+    fake = FakeAnthropic(
+        Call([Tool("stage_project_create", _create())], "tool_use"),
+        Call([], "refusal"),
+    )
+    rec = Recorder()
+    await run(fake, recorder=rec)
+    [s] = rec.summaries
+    assert (s.outcome, s.model_calls, tuple(s.staged)) == ("refused", 2, ())
+
+
+async def test_a_disconnect_is_traced_as_cancelled():
+    fake = FakeAnthropic(
+        Call([Text("Working on it"), Tool("stage_project_create", _create())], "tool_use"),
+        Hang(5),
+    )
+    rec = Recorder()
+    turn = AgentTurn(
+        client=fake.client(),
+        settings=AgentSettings(),
+        transcript=[Msg("user", "hi")],
+        staging=_turn(),
+        snapshot="STATE",
+        proposer=FakeProposer(),
+        recorder=rec,
+    )
+    await turn.open()
+    events = turn.events()
+    assert (await anext(events))[0] == "delta"
+    await events.aclose()
+    [s] = rec.summaries
+    # The hanging second call was opened, so it counts; nothing was committed.
+    assert (s.outcome, s.error_code, s.model_calls, tuple(s.staged)) == (
+        "error",
+        "cancelled",
+        2,
+        (),
+    )
