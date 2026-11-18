@@ -164,9 +164,14 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 - [x] T6.0 Google sign-in replaces Sign in with Apple — `a6d1d3a`; README `9d78726`
 - [ ] T6.1 Live integration — in progress (local server + Simulator)
   - [x] Google sign-in + calendar connect, `/gcal/status`, `/gcal/sync` — verified live 2026-11-16
-  - [x] `/agent/message` seams: model API failures logged `efc6dbe`; tool schemas within grammar limits `c8dcafd` — end-to-end intake not yet confirmed live
+  - [x] `/agent/message` seams: model API failures logged `efc6dbe`; tool schemas within grammar limits `c8dcafd`
+  - [x] Onboarding intake verified live 2026-11-17: 2 agent turns → changeset confirms → preferences PUT/confirm → `/plans/current` 200; 1 deadline project, 2 blocks written back to Google; sign-out + re-sign-in
   - [x] Projects tab backed by `GET /projects` — `18ea4f7`, `3cdd262`
   - [x] Fly.io deploy config — `6536918` (not yet deployed)
-  - [ ] Live pass still owed: changeset confirm/reject, `/plans/current` + diff, block PATCH, pins, exceptions, preferences, `/me` + delete, sessions, `DELETE /gcal`
+  - [x] API-level live pass 2026-11-17 (dev session, curl): multi-project intake with shortfall + relaxations; reject (state unchanged, confirm-after-reject 409); continue after reject; plan diff (+ unknown plan 404); block edit→pin, delete→forbid, skip/complete (future block 409); pin list/delete; exception create→`pin_invalidated` reported, delete→pin re-applies; project PATCH (wrong-kind 422) + archive; agent edit turns (clarifying question, exception + project update); newer proposal expires older (409); `/gcal/sync` outbox 15/15 synced; `GET /me`. No 5xx.
+  - [ ] Simulator pass (user): drag/resize, diff review screen, trade-off sheet, chat cards against real responses; eyeball Google Calendar that the archived project's events were deleted
+  - [ ] Destructive, last: `DELETE /gcal`, `DELETE /me` (revokes the Google grant)
+  - [x] Finding (1) fixed 2026-11-17: strict preferred windows replace availability for their project (solver 1.1.0; slack rule measured inside work hours); agent prompt/tool text steers one-project time to strict windows. Verified live: hours narrowed to 08–18 with Reading kept at 18–22.
+  - [ ] Findings to triage: (2) user-edit narration repeats itself ("X is pinned to T: X moves to T"); (3) agent defers to "check the card" instead of stating solver numbers; (4) `test_stress_properties` has a seed-dependent long tail (some generated inputs take 3s+ per pack; one random-seed run stalled 9+ min) — pre-existing; (5) strict project with empty windows gets 0 time with no "turn off strict" relaxation
   - [ ] Config: live base URL per build configuration (defaults to `localhost:8000`); scheme still passes `-UseMockAPI YES`; fixtures bundled in Release
 - [ ] T6.2 Journey walkthrough + guards
