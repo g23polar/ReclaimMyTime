@@ -169,12 +169,14 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
   - [x] Projects tab backed by `GET /projects` — `18ea4f7`, `3cdd262`
   - [x] Fly.io deploy config — `6536918` (not yet deployed)
   - [x] API-level live pass 2026-11-17 (dev session, curl): multi-project intake with shortfall + relaxations; reject (state unchanged, confirm-after-reject 409); continue after reject; plan diff (+ unknown plan 404); block edit→pin, delete→forbid, skip/complete (future block 409); pin list/delete; exception create→`pin_invalidated` reported, delete→pin re-applies; project PATCH (wrong-kind 422) + archive; agent edit turns (clarifying question, exception + project update); newer proposal expires older (409); `/gcal/sync` outbox 15/15 synced; `GET /me`. No 5xx.
-  - [ ] Simulator pass (user): drag/resize, diff review screen, trade-off sheet, chat cards against real responses; eyeball Google Calendar that the archived project's events were deleted
+  - [x] Prod only from 2026-11-18 (user directive): Fly v3 with `release_command` migrations + non-root image; Neon at 0004; iOS defaults to https://reclaimmytime.fly.dev, scheme mock disabled
+  - [x] Simulator pass on prod 2026-11-18: Google sign-in + calendar connected; skip past block; drag → pin → diff → confirm → plan v5 synced to Google; agent intake that doesn't fit → trade-off sheet → reject; agent_turns traced (cache read on call 2)
+  - [ ] Eyeball Google Calendar: moved block on Thu; archived "Grant application" events (local-dev era) gone
   - [ ] Destructive, last: `DELETE /gcal`, `DELETE /me` (revokes the Google grant)
   - [x] Finding (1) fixed 2026-11-17: strict preferred windows replace availability for their project (solver 1.1.0; slack rule measured inside work hours); agent prompt/tool text steers one-project time to strict windows. Verified live: hours narrowed to 08–18 with Reading kept at 18–22.
   - [x] Findings (2) repeated pin narration and (3) agent deferring to the card — fixed `566d19c`
   - [x] Finding (5) strict project with empty windows → logged as an OPEN question in PRD §10 (to figure out; not blocking T6.1)
-  - [ ] Config: live base URL per build configuration (defaults to `localhost:8000`); scheme still passes `-UseMockAPI YES`; fixtures bundled in Release
+  - [x] Config: live base URL → prod; scheme `-UseMockAPI` disabled. (Fixtures still bundled in Release — minor, open)
 - [ ] T6.2 Journey walkthrough + guards
   - [x] Eval-capture plumbing — `agent_turns` (migration 0004): one row per agent turn (outcome, error code, calls, token sums, staged, changeset/plan); user message + snapshot only with `AGENT_CAPTURE_TURNS` (decision 2026-11-17); 30-day purge; verified live (cache read on turn 2)
   - [ ] Per-user daily token budget — deferred per ARCH §9 (no TestFlight); will sum `agent_turns` via `tokens_used_since`
