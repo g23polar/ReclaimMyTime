@@ -481,7 +481,10 @@ TOOL_INPUTS: dict[str, tuple[type[_Draft], str]] = {
     ),
     "stage_exception_add": (
         StageExceptionAdd,
-        "Stage a one-off unavailable span (trip, appointment, day off).",
+        "Stage a span when the user, or something they need, is unavailable: a trip, "
+        'appointment, day off, or missing equipment ("no laptop today or tomorrow" → '
+        'blocks_tags ["laptop"]). Use this, not a pin, for any availability statement; '
+        "the solver then moves the affected blocks itself.",
     ),
     "stage_exception_remove": (
         StageExceptionRemove,
@@ -489,7 +492,9 @@ TOOL_INPUTS: dict[str, tuple[type[_Draft], str]] = {
     ),
     "stage_pin_add": (
         StagePinAdd,
-        "Stage pinning a project to an exact span, or keeping a span free.",
+        'Stage pinning a project to an exact span the user asked for ("put X on Thu '
+        '6-8 PM"), or keeping a span free of one project. Never use it to work around '
+        "unavailability; that is stage_exception_add.",
     ),
     "stage_pin_remove": (
         StagePinRemove,

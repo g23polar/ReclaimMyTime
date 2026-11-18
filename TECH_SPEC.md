@@ -180,6 +180,10 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 - [ ] T6.2 Journey walkthrough + guards
   - [x] Eval-capture plumbing — `agent_turns` (migration 0004): one row per agent turn (outcome, error code, calls, token sums, staged, changeset/plan); user message + snapshot only with `AGENT_CAPTURE_TURNS` (decision 2026-11-17); 30-day purge; verified live (cache read on turn 2)
   - [ ] Per-user daily token budget — deferred per ARCH §9 (no TestFlight); will sum `agent_turns` via `tokens_used_since`
-  - [ ] E2E of the three PRD journeys (needs Simulator sign-in)
+  - [ ] E2E of the three PRD journeys (prod, 2026-11-18)
+    - [x] J3 rescheduling: "no laptop" → clarifying question → exception (`blocks_tags: [laptop]`) + HomeBase tagged → diff → confirm → plan v8 synced. First run staged a pin instead; prompt/tool text fixed (`stage_exception_add` for availability statements), Fly v5
+    - [x] J2 pieces: drag → pin → confirm → Google write-back; skip; trade-off sheet → reject
+    - [ ] J1 conversational intake with follow-ups + summary card (new project); J2 Google-side edit flowing back
+    - [ ] Minor: agent staged two `project_updated` for one project (tag create + tag assign)
   - [ ] `architect-reviewer` final pass
   - [ ] Finding: question-only answers ignore today's already-completed blocks ("Reading 1h short" with the Tue block done)

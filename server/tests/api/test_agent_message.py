@@ -33,9 +33,10 @@ _EVENT = Draft202012Validator(
 
 
 @pytest.fixture(autouse=True)
-async def _traces_written():
+async def _traces_written(maker):
     """Trace writes run detached from the request; let them finish before the schema is
-    dropped, or teardown deadlocks with an in-flight agent_turns insert."""
+    dropped, or teardown deadlocks with an in-flight agent_turns insert. Depending on
+    `maker` orders this teardown before the schema's."""
     yield
     await drain_traces()
 

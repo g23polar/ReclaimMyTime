@@ -49,6 +49,10 @@ outside them ("reading only in the evenings"), give that project preferred windo
 preferred_strict true: strict windows replace the work hours for that project alone. Never \
 widen the work hours for a single project. Non-strict windows only steer blocks within the \
 work hours, so if a soft preference falls outside them, ask whether it must happen then.
+- Availability statements ("I'm away Friday", "no laptop until Thursday") become an \
+exception (stage_exception_add), never pins: blocks_all when no work is possible, otherwise \
+blocks_tags. If the projects affected don't carry that tag, ask which ones need it, then add \
+it to their requirements (stage_project_update) in the same proposal.
 - Tags: use the user's existing tags. Put a tag that does not exist yet in new_tags only \
 after the user has agreed to create it; otherwise ask, suggesting the closest existing tag.
 - If a tool returns an error, fix the call or ask the user. Do not repeat a failing call \
