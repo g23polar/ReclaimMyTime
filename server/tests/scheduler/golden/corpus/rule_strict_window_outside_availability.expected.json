@@ -1,0 +1,103 @@
+{
+  "fingerprint": {
+    "solver_version": "1.1.0",
+    "input_schema_version": 1
+  },
+  "output": {
+    "input_schema_version": 1,
+    "solver_version": "1.1.0",
+    "blocks": [
+      {
+        "lineage_id": "92398e4f-4ac6-52b8-b8dc-88bad0d95e19",
+        "project_id": "deck",
+        "span": {
+          "start": "2026-11-16T09:00:00Z",
+          "end": "2026-11-16T11:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "b5e71c8e-ae03-5a56-9945-f93da9119978",
+        "project_id": "sketch",
+        "span": {
+          "start": "2026-11-16T11:15:00Z",
+          "end": "2026-11-16T12:15:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "1183bf9a-2f67-5180-b4f2-7cc764e8e8d6",
+        "project_id": "read",
+        "span": {
+          "start": "2026-11-16T18:00:00Z",
+          "end": "2026-11-16T19:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "458cdb26-a11a-5c26-a46a-21e6c9de1f38",
+        "project_id": "deck",
+        "span": {
+          "start": "2026-11-18T09:00:00Z",
+          "end": "2026-11-18T11:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "496c26f4-0b63-586c-9771-bfd6b32acff0",
+        "project_id": "sketch",
+        "span": {
+          "start": "2026-11-18T11:15:00Z",
+          "end": "2026-11-18T12:15:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "959ff64b-967c-5043-bad4-4fff7ad58548",
+        "project_id": "read",
+        "span": {
+          "start": "2026-11-18T18:00:00Z",
+          "end": "2026-11-18T19:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "71d6bdc7-32dd-5fa4-91ae-1cd103e3ccef",
+        "project_id": "deck",
+        "span": {
+          "start": "2026-11-19T09:00:00Z",
+          "end": "2026-11-19T11:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "b66f4fb9-634e-5605-9400-24375ada6a78",
+        "project_id": "read",
+        "span": {
+          "start": "2026-11-19T18:00:00Z",
+          "end": "2026-11-19T19:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "18e0a3ac-0b71-56dd-886d-280fc7fbf871",
+        "project_id": "deck",
+        "span": {
+          "start": "2026-11-20T09:00:00Z",
+          "end": "2026-11-20T11:00:00Z"
+        },
+        "pinned": false
+      },
+      {
+        "lineage_id": "50b41d85-ebff-529f-8e0d-b6cf675bc75f",
+        "project_id": "read",
+        "span": {
+          "start": "2026-11-20T18:00:00Z",
+          "end": "2026-11-20T19:00:00Z"
+        },
+        "pinned": false
+      }
+    ],
+    "infeasibility": null
+  }
+}

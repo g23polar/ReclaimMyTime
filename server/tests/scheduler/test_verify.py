@@ -278,6 +278,82 @@ def test_preferred_window_violation_on_realized_pin_reports_pin_id() -> None:
     assert "pin-1" in violation.related_ids
 
 
+def _strict_evening_p2(inp: SolverInput) -> SolverInput:
+    """P2 strict to 22:30-23:30 on the 16th: entirely outside schedulable (08-22)."""
+    p2 = inp.projects[1].model_copy(
+        update={"preferred_windows_strict": True, "preferred_windows": (_span(22, 30, 23, 30),)}
+    )
+    return inp.model_copy(update={"projects": (inp.projects[0], p2)})
+
+
+def test_strict_block_outside_schedulable_but_inside_its_windows_is_valid() -> None:
+    inp, plan = _valid()
+    inp = _strict_evening_p2(inp)
+    plan = [b for b in plan if b.project_id != "P2"] + [
+        PlannedBlock(lineage_id="L-eve", project_id="P2", span=_span(22, 30, 23, 30))
+    ]
+    assert verify(plan, inp) == []
+
+
+def test_strict_block_outside_its_windows_is_flagged_but_not_as_window() -> None:
+    inp, plan = _valid()
+    inp = _strict_evening_p2(inp)
+    # L-b2 (10:30-11:30) is inside schedulable but outside P2's strict windows.
+    kinds = {(v.kind, v.block_lineage_ids) for v in verify(plan, inp)}
+    assert ("preferred_window", ("L-b2",)) in kinds
+    assert not any(k == "window" for k, _ in kinds)
+    # Outside both: only preferred_window, since strict windows replace schedulable.
+    plan = _replace(plan, "L-b2", span=_span(23, 0, 23, 45))
+    violations = [v for v in verify(plan, inp) if "L-b2" in v.block_lineage_ids]
+    assert [v.kind for v in violations] == ["preferred_window"]
+
+
+def test_non_strict_block_outside_schedulable_is_still_a_window_violation() -> None:
+    inp, plan = _valid()
+    p2 = inp.projects[1].model_copy(update={"preferred_windows": (_span(22, 30, 23, 30),)})
+    inp = inp.model_copy(update={"projects": (inp.projects[0], p2)})
+    plan = _replace(plan, "L-b3", span=_span(22, 30, 23, 30))
+    [violation] = verify(plan, inp)
+    assert violation.kind == "window"
+
+
+def test_strict_block_still_checked_for_busy_exception_forbid() -> None:
+    inp, plan = _valid()
+    inp = _strict_evening_p2(inp)
+    p2 = inp.projects[1].model_copy(
+        update={"requirement_tags": ("laptop",), "preferred_windows": (_span(18, 0, 23, 30),)}
+    )
+    inp = inp.model_copy(
+        update={"projects": (inp.projects[0], p2), "busy": (*inp.busy, _span(22, 30, 23, 0))}
+    )
+    plan = [
+        *(b for b in plan if b.project_id != "P2"),
+        PlannedBlock(lineage_id="L-exc", project_id="P2", span=_span(18, 0, 18, 45)),
+        PlannedBlock(lineage_id="L-fb", project_id="P2", span=_span(20, 30, 21, 0)),
+        PlannedBlock(lineage_id="L-busy", project_id="P2", span=_span(22, 30, 23, 15)),
+    ]
+    kinds = {(v.kind, v.block_lineage_ids) for v in verify(plan, inp)}
+    assert kinds == {
+        ("exception", ("L-exc",)),
+        ("forbid", ("L-fb",)),
+        ("busy", ("L-busy",)),
+    }
+
+
+def test_strict_pin_outside_schedulable_is_realizable_so_missing_is_reported() -> None:
+    inp, plan = _valid()
+    inp = _strict_evening_p2(inp)
+    pin = Pin(id="pin-eve", kind="pin", span=_span(22, 30, 23, 30), project_id="P2")
+    inp = inp.model_copy(update={"pins": (*inp.pins, pin)})
+    plan = [b for b in plan if b.project_id != "P2"]
+    [violation] = verify(plan, inp)
+    assert violation.kind == "pin_missing"
+    assert "pin-eve" in violation.related_ids
+    # A non-strict project's pin there stays unrealizable (outside schedulable): not missing.
+    p2 = inp.projects[1].model_copy(update={"preferred_windows_strict": False})
+    assert verify(plan, inp.model_copy(update={"projects": (inp.projects[0], p2)})) == []
+
+
 # --------------------------------------------------------- lineage identity
 
 

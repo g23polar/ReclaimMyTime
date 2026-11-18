@@ -12,7 +12,7 @@ from .strategies import solver_inputs
 def _check(inp: SolverInput) -> None:
     out = pack(inp)
     assert verify(out.blocks, inp) == []
-    assert out.solver_version == "1.0.0"
+    assert out.solver_version == "1.1.0"
     lineages = [b.lineage_id for b in out.blocks]
     assert len(lineages) == len(set(lineages))
     if out.infeasibility is not None:

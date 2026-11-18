@@ -265,6 +265,35 @@ def _rule_seeds() -> dict[str, Callable[[], Seed]]:
         )
         return "Strict preferred window: guitar only 18-21.", inp, []
 
+    def strict_window_outside_availability() -> Seed:
+        evenings = tuple(span(d, 18, 22) for d in range(7))
+        inp = solver_input(
+            schedulable=week(9, 18),
+            busy=[span(1, 18, 20)],
+            projects=[
+                perennial(
+                    "read",
+                    240,
+                    preferred_windows=evenings,
+                    preferred_windows_strict=True,
+                ),
+                perennial(
+                    "sketch",
+                    120,
+                    preferred_windows=evenings,
+                    preferred_windows_strict=False,
+                ),
+                deadline_project("deck", 480, sun),
+            ],
+        )
+        return (
+            "Strict windows replace availability (2026-11-17): work hours 09-18, 'read' "
+            "strict 18-22 is scheduled in the evenings; 'sketch' with the same windows "
+            "non-strict stays inside 09-18.",
+            inp,
+            [],
+        )
+
     def frozen_midweek() -> Seed:
         inp = solver_input(
             now=t(2, 13, 7),
@@ -312,6 +341,7 @@ def _rule_seeds() -> dict[str, Callable[[], Seed]]:
         "rule_perennial_rhythm": rhythm,
         "rule_buffer_min_block_wake": buffer_min_wake,
         "rule_strict_preferred_window": strict_window,
+        "rule_strict_window_outside_availability": strict_window_outside_availability,
         "rule_frozen_midweek": frozen_midweek,
         "rule_focused_perennial_deadline_mix": focused_mix,
     }

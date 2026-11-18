@@ -56,7 +56,7 @@ def _pack_verified(inp: SolverInput, previous: list[PlannedBlock] | None = None)
 @pytest.mark.parametrize("name", sorted(p.stem for p in PACK_FIXTURES_DIR.glob("*.json")))
 def test_every_pack_fixture_verifies_clean(name: str) -> None:
     out = _pack_verified(load_pack_input(name))
-    assert out.solver_version == SOLVER_VERSION == "1.0.0"
+    assert out.solver_version == SOLVER_VERSION == "1.1.0"
 
 
 # ------------------------------------------------------------ (a) max block
@@ -146,6 +146,165 @@ def test_strict_preferred_window_is_hard() -> None:
     inp = inp.model_copy(update={"projects": projects})
     out = _pack_verified(inp)
     assert all(b.span.end.hour <= 10 for b in _by_project(out, "workout"))
+
+
+# ------------------- strict preferred windows replace availability (2026-11-17)
+
+
+def _evening_input(strict: bool = True, **update: object) -> SolverInput:
+    """Work hours 09-18 every day; 'read' wants 4h/week, evenings 18-22 only."""
+    evenings = tuple(_span(d, 18, 22) for d in range(7))
+    read = ProjectInput(
+        id="read",
+        remaining_minutes=0,
+        weekly_target_minutes=240,
+        max_block_minutes=60,
+        min_block_minutes=30,
+        preferred_windows=evenings,
+        preferred_windows_strict=strict,
+    )
+    base = SolverInput(
+        solver_version="test",
+        now=_t(0, 0),
+        horizon=Interval(start=_t(0, 0), end=_t(7, 0)),
+        schedulable=tuple(_span(d, 9, 18) for d in range(7)),
+        projects=(read,),
+        day_diversity="mixed",
+        buffer_minutes=15,
+    )
+    return base.model_copy(update=update)
+
+
+def _in_evenings(b: PlannedBlock) -> bool:
+    return b.span.start.hour >= 18 and b.span.start.date() == b.span.end.date()
+
+
+def test_strict_windows_outside_availability_are_scheduled() -> None:
+    out = _pack_verified(_evening_input())
+    blocks = _by_project(out, "read")
+    assert sum(b.span.duration_minutes for b in blocks) == 240
+    assert all(_in_evenings(b) for b in blocks)
+    assert out.infeasibility is None
+
+
+def test_non_strict_windows_outside_availability_stay_unused() -> None:
+    out = _pack_verified(_evening_input(strict=False))
+    blocks = _by_project(out, "read")
+    # Availability is still the outer bound: the work lands in work hours, never evenings.
+    assert blocks and not any(_in_evenings(b) for b in blocks)
+    assert all(9 <= b.span.start.hour and b.span.end.hour <= 18 for b in blocks)
+
+
+def test_non_strict_windows_disjoint_from_availability_with_no_hours_get_nothing() -> None:
+    out = _pack_verified(_evening_input(strict=False, schedulable=()))
+    assert _by_project(out, "read") == []
+    assert _shortfalls(out)["read"].shortfall_minutes == 240
+
+
+def test_strict_windows_still_respect_busy_exception_forbid() -> None:
+    from app.scheduler import ExceptionInput
+
+    inp = _evening_input(
+        busy=(_span(0, 18, 22), _span(1, 18, 20)),
+        exceptions=(ExceptionInput(id="away", span=_span(2, 17, 23), blocks_all=True),),
+        pins=(Pin(id="no-read", kind="forbid", span=_span(3, 18, 22), project_id="read"),),
+    )
+    out = _pack_verified(inp)
+    blocks = _by_project(out, "read")
+    assert sum(b.span.duration_minutes for b in blocks) == 240
+    for b in blocks:
+        assert _in_evenings(b)
+        assert b.span.start.date() not in {_t(0, 0).date(), _t(2, 0).date(), _t(3, 0).date()}
+        if b.span.start.date() == _t(1, 0).date():
+            assert b.span.start >= _t(1, 20)
+
+
+def test_strict_windows_still_respect_deadline_and_now() -> None:
+    inp = _evening_input(now=_t(1, 19, 2))
+    read = inp.projects[0].model_copy(
+        update={
+            "weekly_target_minutes": None,
+            "remaining_minutes": 600,
+            "target_date": date(2026, 11, 19),
+            "deadline": _t(3, 21),
+        }
+    )
+    out = _pack_verified(inp.model_copy(update={"projects": (read,)}))
+    blocks = _by_project(out, "read")
+    assert blocks
+    assert all(b.span.start >= _t(1, 19, 5) and b.span.end <= _t(3, 21) for b in blocks)
+    assert all(_in_evenings(b) for b in blocks)
+    assert _shortfalls(out)["read"].shortfall_minutes > 0
+
+
+def test_strict_project_with_no_windows_gets_no_time() -> None:
+    inp = _evening_input()
+    read = inp.projects[0].model_copy(update={"preferred_windows": ()})
+    out = _pack_verified(inp.model_copy(update={"projects": (read,)}))
+    assert _by_project(out, "read") == []
+    assert _shortfalls(out)["read"].shortfall_minutes == 240
+
+
+def test_pin_inside_strict_window_outside_availability_is_placed() -> None:
+    pin = Pin(id="pin-eve", kind="pin", span=_span(4, 19, 20), project_id="read")
+    out = _pack_verified(_evening_input(pins=(pin,)))
+    [pinned] = [b for b in out.blocks if b.pinned]
+    assert pinned.span == pin.span
+    assert out.infeasibility is None
+
+
+def _slack_input(read_weekly: int, deck_block: int = 120) -> SolverInput:
+    """Mon+Tue work hours 09-18 (540 min/day: slack bound 459); focused days, so 'deck'
+    (480 min, `deck_block`-min sittings) piles onto Monday until the slack rule pushes it off.
+    'read' is strict to 18-20 both evenings: one 120-min sitting fills each, so both days
+    carry read alike and only the load accounting differs."""
+    inp = _evening_input(schedulable=(_span(0, 9, 18), _span(1, 9, 18)), day_diversity="focused")
+    read = inp.projects[0].model_copy(
+        update={
+            "weekly_target_minutes": read_weekly,
+            "max_block_minutes": 120,
+            "preferred_windows": (_span(0, 18, 20), _span(1, 18, 20)),
+        }
+    )
+    deck = ProjectInput(
+        id="deck",
+        remaining_minutes=480,
+        max_block_minutes=deck_block,
+        min_block_minutes=60,
+        target_date=date(2026, 11, 22),
+        deadline=_t(7, 0),
+    )
+    return inp.model_copy(update={"projects": (read, deck)})
+
+
+def _deck_minutes_on(out: SolverOutput, day: int) -> int:
+    return sum(
+        b.span.duration_minutes
+        for b in _by_project(out, "deck")
+        if b.span.start.date() == _t(day, 0).date()
+    )
+
+
+def test_strict_evening_window_does_not_loosen_the_slack_rule() -> None:
+    # read has no demand, but its strict evening still exists. Two 240-min deck sittings
+    # fit Monday exactly (09-13, 14-18), but 480 > 459 of work-hours capacity, so the 2nd
+    # goes to Tuesday. Counting the evening as capacity (660 -> 561) would keep both on Monday.
+    out = _pack_verified(_slack_input(read_weekly=0, deck_block=240))
+    assert _by_project(out, "read") == []
+    assert _deck_minutes_on(out, 0) == 240
+    assert _deck_minutes_on(out, 1) == 240
+
+
+def test_strict_evening_blocks_do_not_count_toward_daytime_load() -> None:
+    # read gets 120 min each evening. Those minutes lie outside work hours, so Monday's
+    # daytime load is deck's alone: still 3 sittings. Counting them would make the 3rd
+    # sitting 120 + 360 = 480 > 459 and push it to Tuesday.
+    out = _pack_verified(_slack_input(read_weekly=240))
+    read = _by_project(out, "read")
+    assert sum(b.span.duration_minutes for b in read) == 240
+    assert all(_in_evenings(b) for b in read)
+    assert any(b.span.start.date() == _t(0, 0).date() for b in read)
+    assert _deck_minutes_on(out, 0) == 360
 
 
 def test_days_keep_slack_unless_demand_requires() -> None:

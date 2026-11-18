@@ -24,8 +24,9 @@ from the per-block checks, but count for overlap, buffer, pin realization, and
 lineage uniqueness. `pin_missing` is raised only for a realizable pin: one whose
 exact block would pass every check against the inputs, the frozen blocks, and the
 other pins the plan realizes; a pin displaced by an ordinary block is still
-missing. Strict preferred windows are hard (`preferred_window`);
-non-strict windows produce nothing here.
+missing. Strict preferred windows are hard (`preferred_window`) and replace
+`schedulable` for their project, so a strict project's block is never checked
+against `schedulable` (`window`); non-strict windows produce nothing here.
 """
 
 from __future__ import annotations
@@ -100,7 +101,7 @@ def _pin_realizable(
         return False
     if span.start < input.now or not input.horizon.contains(span):
         return False
-    if not _inside(span, schedulable):
+    if not project.preferred_windows_strict and not _inside(span, schedulable):
         return False
     if any(iv.overlaps(span) for iv in input.busy):
         return False
@@ -218,7 +219,8 @@ def verify(plan: Sequence[PlannedBlock], input: SolverInput) -> list[Violation]:
                 pinned_blocks=[b],
             )
 
-        if not _inside(b.span, schedulable):
+        strict = project is not None and project.preferred_windows_strict
+        if not strict and not _inside(b.span, schedulable):
             add(
                 "window",
                 f"block {b.lineage_id} {_fmt(b.span)} is not inside a schedulable window",

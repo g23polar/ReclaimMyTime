@@ -1,0 +1,150 @@
+{
+  "description": "Strict windows replace availability (2026-11-17): work hours 09-18, 'read' strict 18-22 is scheduled in the evenings; 'sketch' with the same windows non-strict stays inside 09-18.",
+  "solver_input": {
+    "input_schema_version": 1,
+    "solver_version": "golden",
+    "now": "2026-11-16T00:00:00Z",
+    "horizon": {
+      "start": "2026-11-16T00:00:00Z",
+      "end": "2026-11-23T00:00:00Z"
+    },
+    "busy": [
+      {
+        "start": "2026-11-17T18:00:00Z",
+        "end": "2026-11-17T20:00:00Z"
+      }
+    ],
+    "schedulable": [
+      {
+        "start": "2026-11-16T09:00:00Z",
+        "end": "2026-11-16T18:00:00Z"
+      },
+      {
+        "start": "2026-11-17T09:00:00Z",
+        "end": "2026-11-17T18:00:00Z"
+      },
+      {
+        "start": "2026-11-18T09:00:00Z",
+        "end": "2026-11-18T18:00:00Z"
+      },
+      {
+        "start": "2026-11-19T09:00:00Z",
+        "end": "2026-11-19T18:00:00Z"
+      },
+      {
+        "start": "2026-11-20T09:00:00Z",
+        "end": "2026-11-20T18:00:00Z"
+      },
+      {
+        "start": "2026-11-21T09:00:00Z",
+        "end": "2026-11-21T18:00:00Z"
+      },
+      {
+        "start": "2026-11-22T09:00:00Z",
+        "end": "2026-11-22T18:00:00Z"
+      }
+    ],
+    "frozen": [],
+    "pins": [],
+    "projects": [
+      {
+        "id": "read",
+        "remaining_minutes": 0,
+        "weekly_target_minutes": 240,
+        "max_block_minutes": 60,
+        "min_block_minutes": 30,
+        "preferred_windows": [
+          {
+            "start": "2026-11-16T18:00:00Z",
+            "end": "2026-11-16T22:00:00Z"
+          },
+          {
+            "start": "2026-11-17T18:00:00Z",
+            "end": "2026-11-17T22:00:00Z"
+          },
+          {
+            "start": "2026-11-18T18:00:00Z",
+            "end": "2026-11-18T22:00:00Z"
+          },
+          {
+            "start": "2026-11-19T18:00:00Z",
+            "end": "2026-11-19T22:00:00Z"
+          },
+          {
+            "start": "2026-11-20T18:00:00Z",
+            "end": "2026-11-20T22:00:00Z"
+          },
+          {
+            "start": "2026-11-21T18:00:00Z",
+            "end": "2026-11-21T22:00:00Z"
+          },
+          {
+            "start": "2026-11-22T18:00:00Z",
+            "end": "2026-11-22T22:00:00Z"
+          }
+        ],
+        "preferred_windows_strict": true,
+        "requirement_tags": [],
+        "target_date": null,
+        "deadline": null
+      },
+      {
+        "id": "sketch",
+        "remaining_minutes": 0,
+        "weekly_target_minutes": 120,
+        "max_block_minutes": 60,
+        "min_block_minutes": 30,
+        "preferred_windows": [
+          {
+            "start": "2026-11-16T18:00:00Z",
+            "end": "2026-11-16T22:00:00Z"
+          },
+          {
+            "start": "2026-11-17T18:00:00Z",
+            "end": "2026-11-17T22:00:00Z"
+          },
+          {
+            "start": "2026-11-18T18:00:00Z",
+            "end": "2026-11-18T22:00:00Z"
+          },
+          {
+            "start": "2026-11-19T18:00:00Z",
+            "end": "2026-11-19T22:00:00Z"
+          },
+          {
+            "start": "2026-11-20T18:00:00Z",
+            "end": "2026-11-20T22:00:00Z"
+          },
+          {
+            "start": "2026-11-21T18:00:00Z",
+            "end": "2026-11-21T22:00:00Z"
+          },
+          {
+            "start": "2026-11-22T18:00:00Z",
+            "end": "2026-11-22T22:00:00Z"
+          }
+        ],
+        "preferred_windows_strict": false,
+        "requirement_tags": [],
+        "target_date": null,
+        "deadline": null
+      },
+      {
+        "id": "deck",
+        "remaining_minutes": 480,
+        "weekly_target_minutes": null,
+        "max_block_minutes": 120,
+        "min_block_minutes": 60,
+        "preferred_windows": [],
+        "preferred_windows_strict": false,
+        "requirement_tags": [],
+        "target_date": "2026-11-22",
+        "deadline": "2026-11-23T00:00:00Z"
+      }
+    ],
+    "exceptions": [],
+    "day_diversity": "mixed",
+    "buffer_minutes": 15
+  },
+  "previous": []
+}

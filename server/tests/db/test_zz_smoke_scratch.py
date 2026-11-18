@@ -44,7 +44,7 @@ async def test_onboarding_planless_changeset_then_first_plan(
         " FROM week_plans WHERE id = :p",
         p=live,
     )
-    assert got == [("live", 1, True, "1.0.0")]
+    assert got == [("live", 1, True, "1.1.0")]
     minutes = await rows(
         maker,
         "SELECT sum(extract(epoch FROM upper(span) - lower(span)) / 60)::int, "

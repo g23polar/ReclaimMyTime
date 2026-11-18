@@ -1,11 +1,11 @@
 {
   "fingerprint": {
-    "solver_version": "1.0.0",
+    "solver_version": "1.1.0",
     "input_schema_version": 1
   },
   "output": {
     "input_schema_version": 1,
-    "solver_version": "1.0.0",
+    "solver_version": "1.1.0",
     "blocks": [
       {
         "lineage_id": "c1a7d354-156a-5930-a3a6-88f3eb7d13ab",

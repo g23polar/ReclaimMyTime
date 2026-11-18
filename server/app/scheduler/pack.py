@@ -39,7 +39,7 @@ Pipeline:
 from __future__ import annotations
 
 import uuid
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -63,7 +63,7 @@ from .models import (
 )
 from .verify import verify
 
-SOLVER_VERSION = "1.0.0"
+SOLVER_VERSION = "1.1.0"
 
 # ------------------------------------------------------------------ scoring weights
 # Candidate score = sum of the terms below; the highest score wins, ties go to the earliest
@@ -173,6 +173,18 @@ def _total(spans: Iterable[Span]) -> int:
 
 def _inside(span: Span, spans: list[Span]) -> bool:
     return any(s <= span[0] and span[1] <= e for s, e in spans)
+
+
+def _clip(span: Span, spans: list[Span], ends: list[int]) -> list[Span]:
+    """Pieces of `span` inside `spans` (sorted, disjoint; `ends` = their ends, sorted)."""
+    out: list[Span] = []
+    i = bisect_right(ends, span[0])  # first segment ending after span start
+    while i < len(spans) and spans[i][0] < span[1]:
+        s, e = max(span[0], spans[i][0]), min(span[1], spans[i][1])
+        if s < e:
+            out.append((s, e))
+        i += 1
+    return out
 
 
 def _ceil_div(a: int, b: int) -> int:
@@ -454,18 +466,23 @@ def _place_pins(
 def _base_allowed(
     p: ProjectInput, inp: SolverInput, clk: _Clock, *, removable: bool = True
 ) -> list[Span]:
-    """Static allowed time; `removable=False` keeps exceptions and forbids out of the cut."""
-    allowed = _intersect(
-        _merge(clk.span(i) for i in inp.schedulable), [(clk.now, _placement_end(p, clk))]
-    )
+    """Static allowed time; `removable=False` keeps exceptions and forbids out of the cut.
+
+    The outer bound is the user's availability, except that a project's strict preferred
+    windows replace it (an empty strict list allows nothing)."""
+    allowed = _intersect(_merge(_outer_spans(p, inp, clk)), [(clk.now, _placement_end(p, clk))])
     blocked = [clk.span(i) for i in inp.busy]
     if removable:
         blocked += [clk.span(e.span) for e in inp.exceptions if _blocks_project(e, p)]
         blocked += [clk.span(x.span) for x in inp.pins if _forbids_project(x, p.id)]
-    allowed = _subtract(allowed, _merge(blocked))
-    if p.preferred_windows_strict:
-        allowed = _intersect(allowed, _merge(clk.span(w) for w in p.preferred_windows))
-    return allowed
+    return _subtract(allowed, _merge(blocked))
+
+
+def _outer_spans(p: ProjectInput, inp: SolverInput, clk: _Clock) -> list[Span]:
+    """Where a project may be placed before cuts: strict preferred windows replace
+    `schedulable`; otherwise `schedulable` (non-strict windows only bias scoring)."""
+    windows = p.preferred_windows if p.preferred_windows_strict else inp.schedulable
+    return [clk.span(i) for i in windows]
 
 
 def _lengths(p: ProjectInput) -> tuple[int, int] | None:
@@ -483,6 +500,49 @@ class _Context:
     day_capacity: dict[int, int]
     previous: dict[str, list[Span]]
     preferred: dict[str, list[Span]]
+    # Merged schedulable spans: the slack rule measures load inside work hours only, so a
+    # strict block outside them never counts toward a day's load.
+    schedulable: list[Span]
+    schedulable_ends: list[int]
+    # Occupied span -> ((day, work-hours minutes), ...): spans recur at every placement step.
+    day_load: dict[Span, tuple[tuple[int, int], ...]] = field(default_factory=dict)
+    load: dict[Span, int] = field(default_factory=dict)  # candidate span -> work-hours minutes
+
+    def in_schedulable(self, span: Span) -> list[Span]:
+        return _clip(span, self.schedulable, self.schedulable_ends)
+
+    def within_one_segment(self, span: Span) -> bool:
+        """Fast path: `span` lies inside a single schedulable segment (no allocation)."""
+        i = bisect_right(self.schedulable_ends, span[0])
+        return (
+            i < len(self.schedulable)
+            and self.schedulable[i][0] <= span[0]
+            and span[1] <= self.schedulable[i][1]
+        )
+
+    def load_in_schedulable(self, span: Span) -> int:
+        """Minutes of `span` inside schedulable, memoised."""
+        out = self.load.get(span)
+        if out is None:
+            if self.within_one_segment(span):
+                out = span[1] - span[0]
+            else:
+                out = _total(self.in_schedulable(span))
+            self.load[span] = out
+        return out
+
+    def day_load_of(self, span: Span) -> tuple[tuple[int, int], ...]:
+        """Work-hours minutes of `span` per day, memoised."""
+        out = self.day_load.get(span)
+        if out is None:
+            pieces = (span,) if self.within_one_segment(span) else self.in_schedulable(span)
+            out = tuple(
+                (d, min(ce, (d + 1) * DAY) - max(cs, d * DAY))
+                for cs, ce in pieces
+                for d in range(_day(cs), _day(ce - 1) + 1)
+            )
+            self.day_load[span] = out
+        return out
 
 
 def _day(m: int) -> int:
@@ -514,8 +574,8 @@ def _snapshot(ctx: _Context, project_id: str) -> _Snapshot:
             own.append(b.span)
         else:
             others.setdefault(day, set()).add(b.project_id)
-        for d in range(_day(s), _day(e - 1) + 1):
-            used[d] = used.get(d, 0) + min(e, (d + 1) * DAY) - max(s, d * DAY)
+        for d, minutes in ctx.day_load_of(b.span):
+            used[d] = used.get(d, 0) + minutes
     return _Snapshot(
         own_per_day=own_per_day,
         others_per_day={d: len(v) for d, v in others.items()},
@@ -572,7 +632,10 @@ def _score(ctx: _Context, snap: _Snapshot, d: _Demand, span: Span) -> int:
         tod = s % DAY
         drift = _drift(snap.tods, tod)
         score -= min(RHYTHM_CAP, W_RHYTHM_PER_30 * (drift // 30))
-    if (snap.used_per_day.get(day, 0) + e - s) * 100 > ctx.day_capacity.get(day, 0) * SLACK_PERCENT:
+    # Only work-hours minutes add to the day's load. A non-strict project's candidates come
+    # from allowed time inside schedulable (_outer_spans), so only strict ones need the lookup.
+    load = ctx.load_in_schedulable(span) if p.preferred_windows_strict else e - s
+    if (snap.used_per_day.get(day, 0) + load) * 100 > ctx.day_capacity.get(day, 0) * SLACK_PERCENT:
         score -= W_OVER_SLACK
     prev = ctx.previous.get(p.id, [])
     if span in prev:
@@ -623,8 +686,9 @@ def _solve(inp: SolverInput, previous: Sequence[PlannedBlock]) -> _Result:
 
     # Day capacity for the slack rule: schedulable, after now, minus busy.
     start = clk.now
+    schedulable = _merge(clk.span(i) for i in inp.schedulable)
     open_time = _subtract(
-        _intersect(_merge(clk.span(i) for i in inp.schedulable), [(start, clk.horizon[1])]),
+        _intersect(schedulable, [(start, clk.horizon[1])]),
         _merge(clk.span(i) for i in inp.busy),
     )
     capacity: dict[int, int] = {}
@@ -650,6 +714,8 @@ def _solve(inp: SolverInput, previous: Sequence[PlannedBlock]) -> _Result:
         day_capacity=capacity,
         previous=prev_by_project,
         preferred={p.id: _merge(clk.span(w) for w in p.preferred_windows) for p in inp.projects},
+        schedulable=schedulable,
+        schedulable_ends=[e for _, e in schedulable],
     )
 
     demands: dict[str, _Demand] = {}

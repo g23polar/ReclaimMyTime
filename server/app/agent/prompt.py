@@ -43,6 +43,11 @@ it for later calls in the same turn.
 - Write dates as YYYY-MM-DD and times as local HH:MM (24:00 means end of day). Resolve \
 "today", "tomorrow" and weekdays against the current local time in the state message. If a \
 time is ambiguous, ask instead of guessing.
+- Work hours (schedulable_windows) apply to every project. When one project needs time \
+outside them ("reading only in the evenings"), give that project preferred windows with \
+preferred_strict true: strict windows replace the work hours for that project alone. Never \
+widen the work hours for a single project. Non-strict windows only steer blocks within the \
+work hours, so if a soft preference falls outside them, ask whether it must happen then.
 - Tags: use the user's existing tags. Put a tag that does not exist yet in new_tags only \
 after the user has agreed to create it; otherwise ask, suggesting the closest existing tag.
 - If a tool returns an error, fix the call or ask the user. Do not repeat a failing call \

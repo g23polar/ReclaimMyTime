@@ -95,7 +95,8 @@ class StageProjectCreate(_Draft):
         description="When the user prefers to do this; null if no preference."
     )
     preferred_strict: bool = Field(
-        description="true only if the user said it must happen inside the preferred windows."
+        description="true only if the user said it must happen inside the preferred windows. "
+        "Strict windows replace the work hours for this project, so they may lie outside them."
     )
     requirements: list[str] = Field(
         description="Tags from the user's existing tag vocabulary (listed in the state)."
@@ -256,7 +257,8 @@ class WireProjectCreate(_Draft):
         description="true only if the user stated a time preference for this project."
     )
     preferred_strict: bool = Field(
-        description="true only if the user said it must happen inside the preferred windows."
+        description="true only if the user said it must happen inside the preferred windows. "
+        "Strict windows replace the work hours for this project, so they may lie outside them."
     )
     requirements: list[str] = Field(
         description="Tags from the user's existing tag vocabulary (listed in the state)."
@@ -290,7 +292,8 @@ class WireProjectUpdate(_Draft):
     )
     clear_preferred_windows: bool = Field(description="true removes the preferred windows.")
     preferred_strict: Literal["unchanged", "true", "false"] = Field(
-        description="unchanged, or the new value as a string."
+        description="unchanged, or the new value as a string. Strict windows replace the work "
+        "hours for this project, so they may lie outside them."
     )
     requirements: list[str] = Field(
         description="Replaces the tag list (existing vocabulary only). Used only when "
@@ -312,7 +315,9 @@ class WirePreferences(_Draft):
         description="Used only when schedulable_windows_set is true."
     )
     schedulable_windows_set: bool = Field(
-        description="true to set when any work may be scheduled. Required the first time."
+        description="true to set when any work may be scheduled (every project). Required the "
+        "first time. One project's time outside these hours belongs in its strict preferred "
+        "windows, not here."
     )
     day_diversity: Literal["unchanged", "focused", "mixed"] = Field(
         description="focused = few projects per day; mixed = variety. unchanged keeps it "
