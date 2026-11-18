@@ -46,7 +46,7 @@ def narrate(
     )
     if plan is None or diff is None:
         return f"{lead}. Your schedule appears once your preferences are set."
-    sentences = [f"{lead}: {_effect(diff, names, tz)}"]
+    sentences = [f"{lead}: {_effect(diff, names, tz, echo=_pin_echo(staged))}"]
     infeasibility = plan.get("infeasibility")
     if infeasibility:
         sentences.extend(_problems(infeasibility, names, tz))
@@ -134,10 +134,36 @@ def _describe(
 # ---------------------------------------------------------------- effect + problems
 
 
-def _effect(diff: Mapping[str, Any], names: Mapping[str, str], tz: ZoneInfo | None) -> str:
+def _pin_echo(staged: Sequence[StagedMutation]) -> tuple[str, datetime, datetime] | None:
+    """The block a triggering pin puts in place; the lead already states it."""
+    m = staged[-1] if staged else None
+    if not isinstance(m, PinAdded) or m.payload.kind != "pin" or m.payload.project_id is None:
+        return None
+    return str(m.payload.project_id), m.payload.span.start, m.payload.span.end
+
+
+def _echoes(e: Mapping[str, Any], echo: tuple[str, datetime, datetime] | None) -> bool:
+    if echo is None or e["change"] == "removed" or e["after"] is None:
+        return False
+    after = e["after"]
+    return (e["project_id"], datetime.fromisoformat(after["start"]),
+            datetime.fromisoformat(after["end"])) == echo  # fmt: skip
+
+
+def _effect(
+    diff: Mapping[str, Any],
+    names: Mapping[str, str],
+    tz: ZoneInfo | None,
+    *,
+    echo: tuple[str, datetime, datetime] | None = None,
+) -> str:
     changed = [e for e in diff["entries"] if e["change"] != "unchanged"]
     if not changed:
         return "the schedule doesn't change"
+    rest = [e for e in changed if not _echoes(e, echo)]
+    if not rest:
+        return "nothing else changes"
+    changed = rest
     if diff["against_plan_id"] is None:
         projects = list(dict.fromkeys(_name(names, e["project_id"]) for e in changed))
         n = len(changed)

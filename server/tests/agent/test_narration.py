@@ -61,7 +61,45 @@ def test_single_move_names_project_and_local_time():
         after=_span("2026-11-20T02:00:00Z", "2026-11-20T04:00:00Z"),
     )
     text = narrate(staged=PIN, plan=_plan(), diff=_diff(moved), names=NAMES, timezone=TZ)
-    assert text == "Portfolio site is pinned to Thu 6–8 PM: Portfolio site moves to Thu 6–8 PM."
+    assert text == "Portfolio site is pinned to Thu 6–8 PM: nothing else changes."
+
+
+def test_pin_lead_is_not_repeated_but_other_moves_are_listed():
+    moved = _entry(
+        PORT,
+        "moved",
+        before=_span("2026-11-19T03:00:00Z", "2026-11-19T05:00:00Z"),
+        after=_span("2026-11-20T02:00:00Z", "2026-11-20T04:00:00Z"),
+    )
+    bumped = _entry(
+        READ,
+        "moved",
+        before=_span("2026-11-20T02:00:00Z", "2026-11-20T03:00:00Z"),
+        after=_span("2026-11-20T04:15:00Z", "2026-11-20T05:15:00Z"),
+    )
+    text = narrate(staged=PIN, plan=_plan(), diff=_diff(moved, bumped), names=NAMES, timezone=TZ)
+    assert text == "Portfolio site is pinned to Thu 6–8 PM: Reading moves to Thu 8:15–9:15 PM."
+
+
+def test_forbid_lead_still_lists_the_moved_block():
+    forbid = _staged(
+        "pin_added",
+        {
+            "pin_id": str(uuid.uuid4()),
+            "project_id": PORT,
+            "span": _span("2026-11-19T03:00:00Z", "2026-11-19T05:00:00Z"),
+            "kind": "forbid",
+            "created_from_block_id": None,
+        },
+    )
+    moved = _entry(
+        PORT,
+        "moved",
+        before=_span("2026-11-19T03:00:00Z", "2026-11-19T05:00:00Z"),
+        after=_span("2026-11-20T02:00:00Z", "2026-11-20T04:00:00Z"),
+    )
+    text = narrate(staged=forbid, plan=_plan(), diff=_diff(moved), names=NAMES, timezone=TZ)
+    assert text.endswith(": Portfolio site moves to Thu 6–8 PM.")
 
 
 def test_no_change():
