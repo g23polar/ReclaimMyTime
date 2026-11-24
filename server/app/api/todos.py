@@ -200,7 +200,7 @@ async def reorder_todos(
         raise AppError(
             422,
             "invalid_order",
-            "ids must be exactly the full id set for this kind.",
+            "ids must be exactly the open todos of this kind.",
             {"kind": order.kind, "missing": missing, "extra": extra},
         )
     await repo.rewrite_positions(tx, user_id, order.ids, now=now)

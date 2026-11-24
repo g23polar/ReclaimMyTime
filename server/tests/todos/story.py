@@ -24,7 +24,7 @@ STORY_TZ = "America/Los_Angeles"
 STRETCH = uuid.UUID("7e1c0a52-1d3b-4c1e-9a10-000000000001")  # daily, ticked today
 REVIEW = uuid.UUID("7e1c0a52-1d3b-4c1e-9a10-000000000002")  # weekly
 PASSPORT = uuid.UUID("7e1c0a52-1d3b-4c1e-9a10-000000000003")  # one_off, linked to PORTFOLIO
-FORM = uuid.UUID("7e1c0a52-1d3b-4c1e-9a10-000000000004")  # one_off, second in order
+LIBRARY = uuid.UUID("7e1c0a52-1d3b-4c1e-9a10-000000000004")  # one_off, done 2026-11-22
 PORTFOLIO = uuid.UUID("5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01")  # active project
 STAGED = uuid.UUID("9d4e2b18-6c3a-4f70-8b21-0a7e5c1d3f09")  # staged: cannot be linked
 
@@ -80,8 +80,8 @@ async def tick(maker: Maker, todo_id: uuid.UUID, period: date) -> None:
 
 
 async def seed_story(maker: Maker, uid: uuid.UUID) -> None:
-    """The fixture story: one daily (ticked today), one weekly, two one-offs (the first linked to
-    an active project), and a staged project."""
+    """The get_todos / reorder fixture story: a daily (ticked today), a weekly, an open one-off
+    linked to an active project, a one-off done two days ago, and a staged project."""
     await add_project(maker, uid, project_id=PORTFOLIO)
     await add_project(maker, uid, status="staged", project_id=STAGED)
     await add_todo(maker, uid, id=STRETCH, kind="daily", title="Stretch", position=0)
@@ -103,7 +103,14 @@ async def seed_story(maker: Maker, uid: uuid.UUID) -> None:
         project_id=PORTFOLIO,
         position=0,
     )
-    await add_todo(maker, uid, id=FORM, title="Sign the form", position=1)
+    await add_todo(
+        maker,
+        uid,
+        id=LIBRARY,
+        title="Return library books",
+        position=1,
+        completed_at=datetime(2026, 11, 22, 18, 30, tzinfo=UTC),
+    )
     await tick(maker, STRETCH, date(2026, 11, 24))
 
 

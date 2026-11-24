@@ -18,7 +18,6 @@ from tests.api.conftest import SettableClock
 from tests.api.contract import assert_conforms
 from tests.db.conftest import requires_db
 from tests.todos.story import (
-    FORM,
     PASSPORT,
     REVIEW,
     STORY_NOW,
@@ -209,7 +208,8 @@ async def test_completion_route_on_one_off_is_409(
     client: httpx.AsyncClient, at_story: SettableClock, maker: Maker, user_id: uuid.UUID
 ) -> None:
     await seed_story(maker, user_id)
-    resp = await client.put(f"/todos/{FORM}/completions/{TODAY.isoformat()}")
+    form = await add_todo(maker, user_id, title="Sign the form", position=1)
+    resp = await client.put(f"/todos/{form}/completions/{TODAY.isoformat()}")
     await _error(resp, 409, "todo_not_recurring")
 
 
@@ -217,11 +217,12 @@ async def test_null_title_and_done_are_422(
     client: httpx.AsyncClient, at_story: SettableClock, maker: Maker, user_id: uuid.UUID
 ) -> None:
     await seed_story(maker, user_id)
+    form = await add_todo(maker, user_id, title="Sign the form", position=1)
     await _error(
-        await client.patch(f"/todos/{FORM}", json={"title": None}), 422, "validation_failed"
+        await client.patch(f"/todos/{form}", json={"title": None}), 422, "validation_failed"
     )
     await _error(
-        await client.patch(f"/todos/{FORM}", json={"done": None}), 422, "validation_failed"
+        await client.patch(f"/todos/{form}", json={"done": None}), 422, "validation_failed"
     )
 
 
@@ -229,7 +230,8 @@ async def test_empty_patch_is_422(
     client: httpx.AsyncClient, at_story: SettableClock, maker: Maker, user_id: uuid.UUID
 ) -> None:
     await seed_story(maker, user_id)
-    await _error(await client.patch(f"/todos/{FORM}", json={}), 422, "validation_failed")
+    form = await add_todo(maker, user_id, title="Sign the form", position=1)
+    await _error(await client.patch(f"/todos/{form}", json={}), 422, "validation_failed")
 
 
 # ---------------------------------------------------------------- period completions
@@ -369,33 +371,36 @@ async def test_reorder_success_and_rejections(
 ) -> None:
     uid = user_id
     await seed_story(maker, uid)
+    form = await add_todo(maker, uid, title="Sign the form", position=1)
     third = await add_todo(maker, uid, title="Third", position=2)
     url = "/todos/order"
 
     ok = await client.put(
-        url, json={"kind": "one_off", "ids": [str(third), str(FORM), str(PASSPORT)]}
+        url, json={"kind": "one_off", "ids": [str(third), str(form), str(PASSPORT)]}
     )
     assert ok.status_code == 200
-    one_offs = [t for t in ok.json()["todos"] if t["kind"] == "one_off"]
-    assert [t["id"] for t in one_offs] == [str(third), str(FORM), str(PASSPORT)]
+    one_offs = [
+        t for t in ok.json()["todos"] if t["kind"] == "one_off" and t["completed_at"] is None
+    ]
+    assert [t["id"] for t in one_offs] == [str(third), str(form), str(PASSPORT)]
     assert [t["position"] for t in one_offs] == [0, 1, 2]
 
-    missing = await client.put(url, json={"kind": "one_off", "ids": [str(FORM), str(PASSPORT)]})
+    missing = await client.put(url, json={"kind": "one_off", "ids": [str(form), str(PASSPORT)]})
     assert (await _error(missing, 422, "invalid_order"))["details"]["missing"] == [str(third)]
 
     extra = await client.put(
         url,
-        json={"kind": "one_off", "ids": [str(FORM), str(PASSPORT), str(third), str(uuid.uuid4())]},
+        json={"kind": "one_off", "ids": [str(form), str(PASSPORT), str(third), str(uuid.uuid4())]},
     )
     assert len((await _error(extra, 422, "invalid_order"))["details"]["extra"]) == 1
 
     wrong_kind = await client.put(
-        url, json={"kind": "one_off", "ids": [str(FORM), str(PASSPORT), str(third), str(STRETCH)]}
+        url, json={"kind": "one_off", "ids": [str(form), str(PASSPORT), str(third), str(STRETCH)]}
     )
     err = await _error(wrong_kind, 422, "invalid_order")
     assert err["details"]["extra"] == [str(STRETCH)]
 
-    duplicate = await client.put(url, json={"kind": "one_off", "ids": [str(FORM), str(FORM)]})
+    duplicate = await client.put(url, json={"kind": "one_off", "ids": [str(form), str(form)]})
     await _error(duplicate, 422, "validation_failed")
 
 
@@ -558,12 +563,13 @@ async def test_no_todo_route_writes_a_mutations_row(
 ) -> None:
     uid = user_id
     await seed_story(maker, uid)
+    form = await add_todo(maker, uid, title="Sign the form", position=1)
     before = await count(maker, Mutation, Mutation.user_id == uid)
     created = await _create(client, {"kind": "weekly", "title": "Log"})
     await client.patch(f"/todos/{created['id']}", json={"title": "Log 2"})
     await client.put(f"/todos/{created['id']}/completions/2026-11-23")
     await client.delete(f"/todos/{created['id']}/completions/2026-11-23")
-    await client.put("/todos/order", json={"kind": "one_off", "ids": [str(FORM), str(PASSPORT)]})
+    await client.put("/todos/order", json={"kind": "one_off", "ids": [str(form), str(PASSPORT)]})
     await client.patch(f"/todos/{PASSPORT}", json={"done": True})
     await client.delete(f"/todos/{created['id']}")
     assert await count(maker, Mutation, Mutation.user_id == uid) == before
@@ -583,15 +589,16 @@ async def test_reorder_covers_only_open_items(
 ) -> None:
     """A done one-off is outside the manual order: not in the id set, position kept."""
     await seed_story(maker, user_id)
+    form = await add_todo(maker, user_id, title="Sign the form", position=1)
     done = await add_todo(
         maker, user_id, title="Done", position=2, completed_at=STORY_NOW - timedelta(days=1)
     )
     resp = await client.put(
-        "/todos/order", json={"kind": "one_off", "ids": [str(FORM), str(PASSPORT)]}
+        "/todos/order", json={"kind": "one_off", "ids": [str(form), str(PASSPORT)]}
     )
     assert resp.status_code == 200, resp.text
     by_id = {t["id"]: t for t in resp.json()["todos"]}
-    assert (by_id[str(FORM)]["position"], by_id[str(PASSPORT)]["position"]) == (0, 1)
+    assert (by_id[str(form)]["position"], by_id[str(PASSPORT)]["position"]) == (0, 1)
     assert by_id[str(done)]["position"] == 2
 
 
@@ -599,17 +606,18 @@ async def test_reorder_including_a_done_one_off_is_422(
     client: httpx.AsyncClient, at_story: SettableClock, maker: Maker, user_id: uuid.UUID
 ) -> None:
     await seed_story(maker, user_id)
+    form = await add_todo(maker, user_id, title="Sign the form", position=1)
     done = await add_todo(
         maker, user_id, title="Done", position=2, completed_at=STORY_NOW - timedelta(days=1)
     )
     with_done = await client.put(
         "/todos/order",
-        json={"kind": "one_off", "ids": [str(FORM), str(PASSPORT), str(done)]},
+        json={"kind": "one_off", "ids": [str(form), str(PASSPORT), str(done)]},
     )
     err = await _error(with_done, 422, "invalid_order")
     assert err["details"] == {"kind": "one_off", "missing": [], "extra": [str(done)]}
 
-    without_open = await client.put("/todos/order", json={"kind": "one_off", "ids": [str(FORM)]})
+    without_open = await client.put("/todos/order", json={"kind": "one_off", "ids": [str(form)]})
     err = await _error(without_open, 422, "invalid_order")
     assert err["details"]["missing"] == [str(PASSPORT)]
 
@@ -619,14 +627,15 @@ async def test_undoing_a_one_off_appends_to_the_open_order(
 ) -> None:
     """Marking done keeps the position; undoing moves the one-off to max(open position)+1.
     With nothing open, the undone one-off goes to 0."""
-    await seed_story(maker, user_id)  # PASSPORT open at 0, FORM open at 1
+    await seed_story(maker, user_id)  # PASSPORT open at 0, form open at 1
+    form = await add_todo(maker, user_id, title="Sign the form", position=1)
     done = await client.patch(f"/todos/{PASSPORT}", json={"done": True})
     assert done.json()["position"] == 0  # done keeps its position
 
     undone = await client.patch(f"/todos/{PASSPORT}", json={"done": False})
-    assert undone.json()["position"] == 2  # open max is FORM at 1
+    assert undone.json()["position"] == 2  # open max is form at 1
 
-    await client.patch(f"/todos/{FORM}", json={"done": True})
+    await client.patch(f"/todos/{form}", json={"done": True})
     await client.patch(f"/todos/{PASSPORT}", json={"done": True})
-    alone = await client.patch(f"/todos/{FORM}", json={"done": False})
+    alone = await client.patch(f"/todos/{form}", json={"done": False})
     assert alone.json()["position"] == 0  # nothing else is open

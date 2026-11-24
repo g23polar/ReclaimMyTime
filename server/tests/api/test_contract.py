@@ -33,7 +33,7 @@ from tests.db.conftest import (
 from tests.gcal.calendar_fakes import FakeCalendar, install, new_cipher, seed_connection
 from tests.gcal.fakes import FakeGoogle, Reply
 from tests.todos.story import (
-    FORM,
+    LIBRARY,
     PASSPORT,
     REVIEW,
     STAGED,
@@ -607,18 +607,21 @@ async def _(ctx: Ctx) -> None:
 
 @case("put_todos_order__ok.json")
 async def _(ctx: Ctx) -> None:
+    """ids are the open one-offs only; the done one-off keeps its position (1)."""
     await todo_story(ctx)
-    order = {"kind": "one_off", "ids": [str(FORM), str(PASSPORT)]}
-    body = await ctx.call("PUT", "/todos/order", order)
-    one_offs = [t["id"] for t in body["todos"] if t["kind"] == "one_off"]
-    assert one_offs == [str(FORM), str(PASSPORT)]
+    body = await ctx.call("PUT", "/todos/order", {"kind": "one_off", "ids": [str(PASSPORT)]})
+    by_id = {t["id"]: t for t in body["todos"]}
+    assert by_id[str(PASSPORT)]["position"] == 0
+    assert by_id[str(LIBRARY)]["position"] == 1 and by_id[str(LIBRARY)]["completed_at"]
 
 
 @case("put_todos_order__invalid_order.json")
 async def _(ctx: Ctx) -> None:
     await todo_story(ctx)
-    body = await ctx.call("PUT", "/todos/order", {"kind": "one_off", "ids": [str(PASSPORT)]})
-    assert body["error"]["details"]["missing"] == [str(FORM)]
+    body = await ctx.call(
+        "PUT", "/todos/order", {"kind": "one_off", "ids": [str(PASSPORT), str(LIBRARY)]}
+    )
+    assert body["error"]["details"]["extra"] == [str(LIBRARY)]
 
 
 # ---------------------------------------------------------------- driver
