@@ -26,27 +26,29 @@ Dynamic Type behaviour:
 
 ## Color: semantic tokens
 
-Contrast ratios are against the background each token sits on. Text tokens meet WCAG AA (4.5:1 body, 3:1 large); non-text UI meets 3:1.
+Contrast ratios (WCAG 2.x, light / dark) are against `bg`, except `onAccent`, which is against `accent`. Text tokens meet WCAG AA (4.5:1 body, 3:1 large); non-text UI meets 3:1.
 
 | Token | Light | Dark | Contrast | Role |
 |---|---|---|---|---|
-| `bg` | `#FBFAF7` | `#121212` | — | App background (warm off-white; true-ish black) |
-| `surface` | `#FFFFFF` | `#1E1E1E` | — | Cards, sheets, chat bubbles (agent) |
-| `surfaceRaised` | `#F2F0EB` | `#2A2A2A` | — | Banners, grouped rows |
-| `textPrimary` | `#1C1B19` | `#F2F1EE` | 16.4 / 15.9 | Body |
-| `textSecondary` | `#5F5C55` | `#A9A6A0` | 6.3 / 7.4 | Meta, helper copy |
-| `gridLine` | `#E4E1DA` | `#2E2E2E` | (decorative) | Hour lines |
-| `gridLineHalf` | `#EFECE6` | `#252525` | (decorative) | Half-hour lines |
-| `nowLine` | `#D9480F` | `#FF7A45` | 3.9 / 6.0 | Now marker (line + dot + time label) |
-| `busy` | `#D8D5CE` | `#3A3A3A` | 3.1 on bg | Calendar busy intervals (with diagonal hatch) |
-| `accent` | `#2F5DDB` | `#7EA2FF` | 5.6 / 7.1 | Primary buttons, links, user chat bubble |
-| `onAccent` | `#FFFFFF` | `#0D1530` | 5.6 / 7.1 | Text on accent |
-| `proposal` | `#7A4FD6` | `#B79CFF` | 5.2 / 7.6 | Pending-changeset banner, proposal outlines, "new" badges |
-| `warning` | `#B4560A` | `#FFB066` | 4.7 / 9.0 | Infeasibility (calm amber, never red) |
-| `positive` | `#2E7D4F` | `#6FD39A` | 5.1 / 9.4 | Completed state, confirm success |
-| `destructive` | `#C0352B` | `#FF6B5E` | 5.0 / 6.1 | Delete actions only |
+| `bg` | `#F0EAD6` | `#121212` | — | App background (eggshell; true-ish black) |
+| `surface` | `#FAF7EE` | `#1E1E1E` | — | Cards, sheets, chat bubbles (agent) |
+| `surfaceRaised` | `#E8E1CB` | `#2A2A2A` | — | Banners, grouped rows |
+| `textPrimary` | `#1C1B19` | `#F2F1EE` | 14.3 / 16.6 | Body |
+| `textSecondary` | `#5F5C55` | `#A9A6A0` | 5.5 / 7.7 (5.1 / 5.9 on `surfaceRaised`) | Meta, helper copy |
+| `gridLine` | `#DDD5BE` | `#2E2E2E` | (decorative) | Hour lines |
+| `gridLineHalf` | `#E6DFC9` | `#252525` | (decorative) | Half-hour lines |
+| `nowLine` | `#D9480F` | `#FF7A45` | 3.6 / 7.2 | Now marker (line + dot + time label) |
+| `busy` | `#CFC6AD` | `#3A3A3A` | 1.4 / 1.6 on bg (decorative, hatch-patterned) | Calendar busy intervals (with diagonal hatch) |
+| `accent` | `#2C5F2E` | `#8BC98F` | 6.3 / 9.7 | Primary buttons, links, user chat bubble (forest green) |
+| `onAccent` | `#FFFFFF` | `#0F2412` | 7.5 / 8.5 | Text on accent |
+| `proposal` | `#744BD0` | `#B79CFF` | 4.8 / 8.2 | Pending-changeset banner, proposal outlines, "new" badges |
+| `warning` | `#A85008` | `#FFB066` | 4.6 / 10.4 | Infeasibility (calm amber, never red) |
+| `positive` | `#2B7649` | `#6FD39A` | 4.6 / 10.2 | Completed state, confirm success |
+| `destructive` | `#C0352B` | `#FF6B5E` | 4.6 / 6.7 | Delete actions only |
 
 Decision: infeasibility uses amber `warning`, not red. Rationale: PRD Principle 2 frames it as a choice, not an error (principle 3, "honest about limits").
+
+Decision: `positive` was shifted away from the forest green `accent` (at least 20° of hue apart) so completed states don't read as primary actions.
 
 ## Project palette
 

@@ -58,12 +58,15 @@ final class DesignTokenTests: XCTestCase {
                 XCTAssertNotNil(UIColor(named: name, in: bundle, compatibleWith: UITraitCollection(userInterfaceStyle: style)), "\(name) \(style.rawValue)")
             }
         }
-        // Spot-check a light/dark pair against tokens.md.
+        // Spot-check light/dark pairs against tokens.md.
         let traitsLight = UITraitCollection(userInterfaceStyle: .light)
         let traitsDark = UITraitCollection(userInterfaceStyle: .dark)
         let accent = UIColor(named: "accent", in: bundle, compatibleWith: nil)
-        XCTAssertEqual(accent.map { hex($0.resolvedColor(with: traitsLight)) }, "2F5DDB")
-        XCTAssertEqual(accent.map { hex($0.resolvedColor(with: traitsDark)) }, "7EA2FF")
+        XCTAssertEqual(accent.map { hex($0.resolvedColor(with: traitsLight)) }, "2C5F2E")
+        XCTAssertEqual(accent.map { hex($0.resolvedColor(with: traitsDark)) }, "8BC98F")
+        let bg = UIColor(named: "bg", in: bundle, compatibleWith: nil)
+        XCTAssertEqual(bg.map { hex($0.resolvedColor(with: traitsLight)) }, "F0EAD6")
+        XCTAssertEqual(bg.map { hex($0.resolvedColor(with: traitsDark)) }, "121212")
     }
 
     private func hex(_ color: UIColor) -> String {
