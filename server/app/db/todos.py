@@ -115,11 +115,31 @@ async def project_status(tx: AsyncSession, user_id: uuid.UUID, project_id: uuid.
     ).scalar_one_or_none()
 
 
-async def ids_of_kind(tx: AsyncSession, user_id: uuid.UUID, kind: str) -> list[uuid.UUID]:
+def _open() -> Any:
+    """Open = recurring (always) or a one-off not yet done. Done one-offs leave the manual order."""
+    return (Todo.kind != "one_off") | Todo.completed_at.is_(None)
+
+
+async def open_ids_of_kind(tx: AsyncSession, user_id: uuid.UUID, kind: str) -> list[uuid.UUID]:
+    """The ids reorder must cover: every todo of `kind` that is open, in position order."""
     rows = await tx.execute(
-        select(Todo.id).where(Todo.user_id == user_id, Todo.kind == kind).order_by(Todo.position)
+        select(Todo.id)
+        .where(Todo.user_id == user_id, Todo.kind == kind, _open())
+        .order_by(Todo.position, Todo.created_at, Todo.id)
     )
     return list(rows.scalars())
+
+
+async def next_open_one_off_position(tx: AsyncSession, user_id: uuid.UUID) -> int:
+    """max(position of open one-offs) + 1, or 0 when none are open."""
+    last = (
+        await tx.execute(
+            select(func.max(Todo.position)).where(
+                Todo.user_id == user_id, Todo.kind == "one_off", _open()
+            )
+        )
+    ).scalar_one()
+    return 0 if last is None else last + 1
 
 
 async def create(

@@ -573,3 +573,60 @@ async def test_missing_timezone_is_400(client: httpx.AsyncClient, at_story: Sett
     resp = await client.get("/todos", headers={"X-Timezone": ""})
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "timezone_invalid"
+
+
+# ------------------------------------------------- open-set reorder (owner decision, 2026-11-24)
+
+
+async def test_reorder_covers_only_open_items(
+    client: httpx.AsyncClient, at_story: SettableClock, maker: Maker, user_id: uuid.UUID
+) -> None:
+    """A done one-off is outside the manual order: not in the id set, position kept."""
+    await seed_story(maker, user_id)
+    done = await add_todo(
+        maker, user_id, title="Done", position=2, completed_at=STORY_NOW - timedelta(days=1)
+    )
+    resp = await client.put(
+        "/todos/order", json={"kind": "one_off", "ids": [str(FORM), str(PASSPORT)]}
+    )
+    assert resp.status_code == 200, resp.text
+    by_id = {t["id"]: t for t in resp.json()["todos"]}
+    assert (by_id[str(FORM)]["position"], by_id[str(PASSPORT)]["position"]) == (0, 1)
+    assert by_id[str(done)]["position"] == 2
+
+
+async def test_reorder_including_a_done_one_off_is_422(
+    client: httpx.AsyncClient, at_story: SettableClock, maker: Maker, user_id: uuid.UUID
+) -> None:
+    await seed_story(maker, user_id)
+    done = await add_todo(
+        maker, user_id, title="Done", position=2, completed_at=STORY_NOW - timedelta(days=1)
+    )
+    with_done = await client.put(
+        "/todos/order",
+        json={"kind": "one_off", "ids": [str(FORM), str(PASSPORT), str(done)]},
+    )
+    err = await _error(with_done, 422, "invalid_order")
+    assert err["details"] == {"kind": "one_off", "missing": [], "extra": [str(done)]}
+
+    without_open = await client.put("/todos/order", json={"kind": "one_off", "ids": [str(FORM)]})
+    err = await _error(without_open, 422, "invalid_order")
+    assert err["details"]["missing"] == [str(PASSPORT)]
+
+
+async def test_undoing_a_one_off_appends_to_the_open_order(
+    client: httpx.AsyncClient, at_story: SettableClock, maker: Maker, user_id: uuid.UUID
+) -> None:
+    """Marking done keeps the position; undoing moves the one-off to max(open position)+1.
+    With nothing open, the undone one-off goes to 0."""
+    await seed_story(maker, user_id)  # PASSPORT open at 0, FORM open at 1
+    done = await client.patch(f"/todos/{PASSPORT}", json={"done": True})
+    assert done.json()["position"] == 0  # done keeps its position
+
+    undone = await client.patch(f"/todos/{PASSPORT}", json={"done": False})
+    assert undone.json()["position"] == 2  # open max is FORM at 1
+
+    await client.patch(f"/todos/{FORM}", json={"done": True})
+    await client.patch(f"/todos/{PASSPORT}", json={"done": True})
+    alone = await client.patch(f"/todos/{FORM}", json={"done": False})
+    assert alone.json()["position"] == 0  # nothing else is open

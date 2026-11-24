@@ -193,7 +193,7 @@ async def reorder_todos(
 ) -> dict[str, Any]:
     order = parse_body(_ORDER, body)
     cal = await _calendar(tx, user_id, now, tz)
-    current = await repo.ids_of_kind(tx, user_id, order.kind)
+    current = await repo.open_ids_of_kind(tx, user_id, order.kind)
     missing = [str(i) for i in current if i not in set(order.ids)]
     extra = [str(i) for i in order.ids if i not in set(current)]
     if missing or extra:
@@ -243,8 +243,11 @@ async def update_todo(
     if "done" in fields and not recurring:
         if patch.done and row.completed_at is None:
             values["completed_at"] = now
-        elif not patch.done:
+        elif not patch.done and row.completed_at is not None:
+            # Undoing a one-off moves it to the end of the open order (the done one-off kept its
+            # position while done).
             values["completed_at"] = None
+            values["position"] = await repo.next_open_one_off_position(tx, user_id)
 
     if values:
         await repo.update_todo(tx, user_id, todo_id, values, now=now)
