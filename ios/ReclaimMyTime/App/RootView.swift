@@ -64,7 +64,7 @@ struct SessionUnavailableView: View {
     }
 }
 
-/// The 4-tab shell (design/README.md "App shell"): Week · Chat · Projects · Settings.
+/// The 5-tab shell (design/README.md "App shell"): Week · Todos · Chat · Projects · Settings.
 /// The pending-changeset banner sits above the tab bar on every tab (timetable.md §6).
 struct MainTabView: View {
     @Environment(AppModel.self) private var model
@@ -88,6 +88,10 @@ struct MainTabView: View {
                 }
                 .tabItem { Label("Week", systemImage: "calendar") }
                 .tag(AppTab.week)
+            TodosView()
+                .pendingChangesetBanner()
+                .tabItem { Label("Todos", systemImage: "checklist") }
+                .tag(AppTab.todos)
             ChatView() // draws the banner itself, below its composer
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
                 .tag(AppTab.chat)

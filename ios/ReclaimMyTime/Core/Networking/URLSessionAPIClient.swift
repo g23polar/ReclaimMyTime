@@ -102,6 +102,36 @@ final class URLSessionAPIClient: APIClient {
         try await send(Endpoint(method: .delete, path: "/projects/\(id.pathComponent)"))
     }
 
+    // MARK: todos
+
+    func listTodos() async throws -> TodoList {
+        try await send(Endpoint(method: .get, path: "/todos"))
+    }
+
+    func createTodo(_ draft: TodoDraft) async throws -> Todo {
+        try await send(Endpoint(method: .post, path: "/todos", body: try encode(draft)))
+    }
+
+    func updateTodo(id: UUID, patch: TodoPatch) async throws -> Todo {
+        try await send(Endpoint(method: .patch, path: "/todos/\(id.pathComponent)", body: try encode(patch)))
+    }
+
+    func deleteTodo(id: UUID) async throws {
+        try await sendExpectingNoContent(Endpoint(method: .delete, path: "/todos/\(id.pathComponent)"))
+    }
+
+    func completeTodoPeriod(id: UUID, periodStart: LocalDate) async throws -> Todo {
+        try await send(Endpoint(method: .put, path: "/todos/\(id.pathComponent)/completions/\(periodStart.description)"))
+    }
+
+    func uncompleteTodoPeriod(id: UUID, periodStart: LocalDate) async throws -> Todo {
+        try await send(Endpoint(method: .delete, path: "/todos/\(id.pathComponent)/completions/\(periodStart.description)"))
+    }
+
+    func reorderTodos(_ order: TodoOrder) async throws -> TodoList {
+        try await send(Endpoint(method: .put, path: "/todos/order", body: try encode(order)))
+    }
+
     // MARK: preferences
 
     func getPreferences() async throws -> UserPreferences {

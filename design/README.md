@@ -25,7 +25,17 @@ This spec covers how things look and behave. Data comes only from the frozen con
 
 ## App shell (applies everywhere)
 
-Decision: **4-tab `TabView`: Week · Chat · Projects · Settings.** These are the PRD §8 core screens, one tab each, with no custom navigation pattern. Day view is pushed from Week (it isn't a tab), because it's the same data at a different zoom.
+Decision: **5-tab `TabView`: Week · Todos · Chat · Projects · Settings.** These are the PRD §8 core screens, one tab each, with no custom navigation pattern. Day view is pushed from Week (it isn't a tab), because it's the same data at a different zoom.
+
+### Todos screen
+
+Standalone tracking, not part of the timetable: nothing here touches the solver or the calendar. Sections top to bottom:
+
+- **Today** (daily) and **This week** (weekly): recurring checklists. The check ticks the current period. Each section has its own empty state.
+- **One-off**: open items. The due date shows on the row, tinted `warning` when overdue. A linked project shows its name, or an "Archived" chip when it has been archived.
+- **Done**: a collapsed disclosure with the count. Checking a row here undoes it.
+
+Reorder is through Edit (drag handles), within a section. Swipe to delete. Notes show as a one-line preview in secondary text. A failed tick rolls back, with a caption under that row in `warning`. The editor's kind is fixed after create. The due date is optional, and when left out on create the server uses today.
 
 ## Contract gaps raised by this spec (for the main session)
 
