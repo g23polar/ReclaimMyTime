@@ -4,7 +4,7 @@
 
 **Task protocol (applies to every task):**
 - The owner reads `PRD.md` + the cited `ARCHITECTURE.md` sections before writing code.
-- Done means: acceptance criteria met, tests green (`uv run pytest` / `xcodebuild test`), `tessl code review` clean on the task diff (fallback `/code-review`), `.claude/agent-usage.md` updated.
+- Done means: acceptance criteria met, tests green (`uv run pytest` / `xcodebuild test`), `/code-review` clean on the task diff (factory jobs: `factory/checks.sh` gate + routed reviewers + approver; Tessl removed 2026-11-24), `.claude/agent-usage.md` updated.
 - A task blocked by a spec conflict stops and reports; it does not improvise around the contract.
 - `architect-reviewer` runs at every milestone boundary before the next milestone starts.
 - `contracts/` is frozen after T0.1; changes need a main-session decision.
