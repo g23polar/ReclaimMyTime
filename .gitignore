@@ -1,7 +1,5 @@
 .claude
 CLAUDE.md
-ARCHITECTURE.md
-PRD.md
 reviews/
 .venv/
 __pycache__/

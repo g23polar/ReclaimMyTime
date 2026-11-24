@@ -1,0 +1,32 @@
+{
+  "operation": "createTodo",
+  "method": "POST",
+  "path": "/todos",
+  "case": "defaults",
+  "description": "Only title sent: kind defaults to one_off, notes to null, and due_date to today (X-Timezone America/Los_Angeles, 2026-11-24).",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "title": "Call dentist"
+    }
+  },
+  "response": {
+    "status": 201,
+    "body": {
+      "id": "7e1c0a52-1d3b-4c1e-9a10-000000000006",
+      "kind": "one_off",
+      "title": "Call dentist",
+      "notes": null,
+      "due_date": "2026-11-24",
+      "project_id": null,
+      "project_archived": false,
+      "position": 2,
+      "completed_at": null,
+      "completed_periods": [],
+      "created_at": "2026-11-24T18:00:00Z"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "operation": "updateTodo",
+  "method": "PATCH",
+  "path": "/todos/{todo_id}",
+  "case": "recurring",
+  "description": "Setting done on a daily todo is rejected; recurring todos use completions instead.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "path_params": {
+      "todo_id": "7e1c0a52-1d3b-4c1e-9a10-000000000001"
+    },
+    "body": {
+      "done": true
+    }
+  },
+  "response": {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "todo_recurring",
+        "message": "Recurring todos are ticked per period, not marked done.",
+        "details": {
+          "resource": "todo",
+          "id": "7e1c0a52-1d3b-4c1e-9a10-000000000001",
+          "kind": "daily"
+        }
+      }
+    }
+  }
+}

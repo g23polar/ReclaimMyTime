@@ -1,0 +1,34 @@
+{
+  "operation": "completeTodoPeriod",
+  "method": "PUT",
+  "path": "/todos/{todo_id}/completions/{period_start}",
+  "case": "invalid_period",
+  "description": "2026-10-01 is neither the current nor the previous weekly period start.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "path_params": {
+      "todo_id": "7e1c0a52-1d3b-4c1e-9a10-000000000002",
+      "period_start": "2026-10-01"
+    }
+  },
+  "response": {
+    "status": 422,
+    "body": {
+      "error": {
+        "code": "invalid_period",
+        "message": "period_start must be the current or previous period start for this kind.",
+        "details": {
+          "kind": "weekly",
+          "period_start": "2026-10-01",
+          "allowed": [
+            "2026-11-23",
+            "2026-11-16"
+          ]
+        }
+      }
+    }
+  }
+}

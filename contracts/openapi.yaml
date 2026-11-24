@@ -28,6 +28,7 @@ tags:
   - name: plans
   - name: blocks
   - name: pins
+  - name: todos
   - name: agent
   - name: changesets
   - name: gcal
@@ -506,6 +507,157 @@ paths:
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
         default: {$ref: '#/components/responses/InternalError'}
 
+  # ------------------------------------------------------------------ todos
+  # Standalone tracking (Todos v1). Direct CRUD: no changeset, no solve, no mutations row.
+  /todos:
+    get:
+      operationId: listTodos
+      tags: [todos]
+      summary: The user's todos plus the current period starts.
+      parameters:
+        - {$ref: '#/components/parameters/XTimezone'}
+        - name: include_done
+          in: query
+          required: false
+          description: Return every done one-off. Default returns only one-offs completed in the last 7 days.
+          schema: {type: boolean, default: false}
+      responses:
+        '200':
+          description: Todos (no pagination in v1). `periods` holds the current daily and weekly period starts.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TodoList'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        default: {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: createTodo
+      tags: [todos]
+      summary: Create a todo, placed last in its kind.
+      parameters: [{$ref: '#/components/parameters/XTimezone'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TodoDraft'}
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Todo'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /todos/order:
+    put:
+      operationId: reorderTodos
+      tags: [todos]
+      summary: Set the manual order within one kind.
+      description: |
+        `ids` must be exactly the open todos of that kind, in the new order (422 `invalid_order` otherwise).
+        Daily and weekly: every todo of the kind. One-off: only those with `completed_at` null. Done
+        one-offs are not listed; they keep their position.
+      parameters: [{$ref: '#/components/parameters/XTimezone'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TodoOrder'}
+      responses:
+        '200':
+          description: All todos, as in listTodos.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TodoList'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /todos/{todo_id}:
+    parameters:
+      - {$ref: '#/components/parameters/TodoId'}
+      - {$ref: '#/components/parameters/XTimezone'}
+    patch:
+      operationId: updateTodo
+      tags: [todos]
+      summary: Partial update. `kind` is immutable.
+      description: |
+        `done` applies to one-offs only (sets or clears `completed_at`). Setting `done`, or a
+        non-null `due_date`, on a recurring todo is 409 `todo_recurring`. Setting `project_id`
+        follows the same project rules as createTodo.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TodoPatch'}
+      responses:
+        '200':
+          description: The updated todo.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Todo'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        default: {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: deleteTodo
+      tags: [todos]
+      summary: Hard delete. Completions cascade.
+      responses:
+        '204': {description: Deleted.}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        default: {$ref: '#/components/responses/InternalError'}
+
+  /todos/{todo_id}/completions/{period_start}:
+    parameters:
+      - {$ref: '#/components/parameters/TodoId'}
+      - {$ref: '#/components/parameters/PeriodStart'}
+      - {$ref: '#/components/parameters/XTimezone'}
+    put:
+      operationId: completeTodoPeriod
+      tags: [todos]
+      summary: Tick a recurring todo for one period. Idempotent.
+      description: '`period_start` must be the current or previous period start for the todo''s kind (422 `invalid_period` otherwise).'
+      responses:
+        '200':
+          description: The todo, with `completed_periods` updated.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Todo'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        default: {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: uncompleteTodoPeriod
+      tags: [todos]
+      summary: Untick a recurring todo for one period. Idempotent.
+      responses:
+        '200':
+          description: The todo, with `completed_periods` updated.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Todo'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        default: {$ref: '#/components/responses/InternalError'}
+
   # ------------------------------------------------------------------ agent
   /agent/message:
     post:
@@ -768,6 +920,14 @@ components:
       {name: block_id, in: path, required: true, schema: {type: string, format: uuid}}
     PinId:
       {name: pin_id, in: path, required: true, schema: {type: string, format: uuid}}
+    TodoId:
+      {name: todo_id, in: path, required: true, schema: {type: string, format: uuid}}
+    PeriodStart:
+      name: period_start
+      in: path
+      required: true
+      description: Local period start. Daily is the local date; weekly is the start of the week per preferences.week_start.
+      schema: {type: string, format: date}
     ChangesetId:
       {name: changeset_id, in: path, required: true, schema: {type: string, format: uuid}}
 
@@ -1467,6 +1627,96 @@ components:
         pins:
           type: array
           items: {$ref: '#/components/schemas/BlockPin'}
+
+    # ---------------------------------------------------------------- todos
+    TodoKind: {type: string, enum: [daily, weekly, one_off]}
+    Todo:
+      type: object
+      description: |
+        todos row + completion state. Daily and weekly todos are recurring checklists:
+        `completed_periods` lists which of the current and previous period starts are ticked
+        (always `[]` for one_off, and `completed_at` is null for recurring kinds). One-off
+        `completed_at` is set while done. Tracking only in v1; calendar integration is later.
+      required: [id, kind, title, notes, due_date, project_id, project_archived, position,
+                 completed_at, completed_periods, created_at]
+      additionalProperties: false
+      if: {properties: {kind: {const: one_off}}}
+      then: {properties: {completed_periods: {maxItems: 0}}}
+      else: {properties: {completed_at: {type: 'null'}}}
+      properties:
+        id: {$ref: '#/components/schemas/Uuid'}
+        kind: {$ref: '#/components/schemas/TodoKind'}
+        title: {type: string, minLength: 1, maxLength: 200}
+        notes: {type: [string, 'null'], maxLength: 2000}
+        due_date: {type: [string, 'null'], format: date, description: One-off only; local date.}
+        project_id: {type: [string, 'null'], format: uuid}
+        project_archived: {type: boolean, description: True when the linked project is archived. The link is kept.}
+        position: {type: integer, minimum: 0}
+        completed_at: {type: [string, 'null'], format: date-time}
+        completed_periods:
+          type: array
+          uniqueItems: true
+          items: {type: string, format: date}
+        created_at: {type: string, format: date-time}
+    TodoDraft:
+      type: object
+      description: |
+        Defaults (applied by the server): `kind` is `one_off`; `notes` is null; for a one_off with
+        `due_date` omitted, `due_date` is today's local date (from X-Timezone). Recurring kinds
+        never get a due date.
+      required: [title]
+      additionalProperties: false
+      if: {required: [kind], properties: {kind: {enum: [daily, weekly]}}}
+      then: {properties: {due_date: {type: 'null'}}}
+      properties:
+        kind: {$ref: '#/components/schemas/TodoKind', default: one_off}
+        title: {type: string, minLength: 1, maxLength: 200}
+        notes: {type: [string, 'null'], maxLength: 2000}
+        due_date: {type: [string, 'null'], format: date, description: One_off only. Omitted on a one_off means today (server default); null means no due date.}
+        project_id:
+          type: [string, 'null']
+          format: uuid
+          description: The caller's own project in status active, paused or done. Staged or archived returns 409 project_unavailable.
+    TodoPatch:
+      type: object
+      description: Partial update. `kind` is not patchable (additionalProperties is false).
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200}
+        notes: {type: [string, 'null'], maxLength: 2000}
+        due_date: {type: [string, 'null'], format: date}
+        project_id: {type: [string, 'null'], format: uuid}
+        done: {type: boolean, description: One-off only. true sets completed_at. false clears it and moves the todo to the end of the open one-offs.}
+    TodoOrder:
+      type: object
+      description: |
+        `ids` is the new manual order of the open todos of `kind`: every daily or weekly todo, or the
+        one-offs with `completed_at` null. Done one-offs are excluded and keep their position.
+      required: [kind, ids]
+      additionalProperties: false
+      properties:
+        kind: {$ref: '#/components/schemas/TodoKind'}
+        ids:
+          type: array
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/Uuid'}
+    TodoList:
+      type: object
+      required: [todos, periods]
+      additionalProperties: false
+      properties:
+        todos:
+          type: array
+          items: {$ref: '#/components/schemas/Todo'}
+        periods:
+          type: object
+          description: Current period starts, from X-Timezone and preferences.week_start.
+          required: [daily, weekly]
+          additionalProperties: false
+          properties:
+            daily: {type: string, format: date}
+            weekly: {type: string, format: date}
 
     # ---------------------------------------------------------------- changesets
     Changeset:

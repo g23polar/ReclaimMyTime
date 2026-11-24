@@ -13,6 +13,7 @@ final class FixtureContractTests: XCTestCase {
         "listExceptions", "createException", "getException", "deleteException",
         "getCurrentPlan", "getPlanDiff", "patchBlock",
         "listPins", "deletePin",
+        "listTodos", "createTodo", "updateTodo", "deleteTodo", "completeTodoPeriod", "uncompleteTodoPeriod", "reorderTodos",
         "postAgentMessage",
         "confirmChangeset", "rejectChangeset",
         "getGcalConnectUrl", "gcalCallback", "completeGcalConnect", "getGcalStatus", "disconnectGcal",
@@ -148,6 +149,9 @@ final class FixtureContractTests: XCTestCase {
         case "getCurrentPlan": _ = try decoder.decode(WeekPlan.self, from: body)
         case "getPlanDiff": _ = try decoder.decode(PlanDiff.self, from: body)
         case "listPins": _ = try decoder.decode(PinList.self, from: body)
+        case "listTodos": _ = try decoder.decode(TodoList.self, from: body)
+        case "createTodo", "updateTodo", "completeTodoPeriod", "uncompleteTodoPeriod": _ = try decoder.decode(Todo.self, from: body)
+        case "reorderTodos": _ = try decoder.decode(TodoList.self, from: body)
         case "getGcalConnectUrl": _ = try decoder.decode(GcalConnectUrl.self, from: body)
         case "getGcalStatus": _ = try decoder.decode(GcalStatus.self, from: body)
         case "syncGcal":
@@ -181,6 +185,9 @@ final class FixtureContractTests: XCTestCase {
         case "createException": try roundTrip(ExceptionDraft.self, body, name)
         case "patchBlock": try roundTrip(BlockAction.self, body, name)
         case "postAgentMessage": try roundTrip(AgentMessageRequest.self, body, name)
+        case "createTodo": try roundTrip(TodoDraft.self, body, name)
+        case "updateTodo": try roundTrip(TodoPatch.self, body, name)
+        case "reorderTodos": try roundTrip(TodoOrder.self, body, name)
         case "completeGcalConnect": try roundTrip(GcalCompleteRequest.self, body, name)
         default: XCTFail("\(name): no request type registered for \(operation)")
         }

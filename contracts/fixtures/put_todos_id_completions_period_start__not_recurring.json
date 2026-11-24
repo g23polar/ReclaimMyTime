@@ -1,0 +1,31 @@
+{
+  "operation": "completeTodoPeriod",
+  "method": "PUT",
+  "path": "/todos/{todo_id}/completions/{period_start}",
+  "case": "not_recurring",
+  "description": "Period ticks are only for daily and weekly todos.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "path_params": {
+      "todo_id": "7e1c0a52-1d3b-4c1e-9a10-000000000003",
+      "period_start": "2026-11-24"
+    }
+  },
+  "response": {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "todo_not_recurring",
+        "message": "Only recurring todos have period completions.",
+        "details": {
+          "resource": "todo",
+          "id": "7e1c0a52-1d3b-4c1e-9a10-000000000003",
+          "kind": "one_off"
+        }
+      }
+    }
+  }
+}

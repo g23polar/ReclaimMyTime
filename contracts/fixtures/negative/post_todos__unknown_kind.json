@@ -1,0 +1,36 @@
+{
+  "operation": "createTodo",
+  "method": "POST",
+  "path": "/todos",
+  "case": "unknown_kind",
+  "description": "NEGATIVE: kind is not one of daily, weekly, one_off. A server that echoed it back must fail the contract.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "kind": "monthly",
+      "title": "Water plants"
+    }
+  },
+  "response": {
+    "status": 201,
+    "body": {
+      "id": "7e1c0a52-1d3b-4c1e-9a10-000000000009",
+      "kind": "monthly",
+      "title": "Water plants",
+      "notes": null,
+      "due_date": null,
+      "project_id": null,
+      "project_archived": false,
+      "position": 2,
+      "completed_at": null,
+      "completed_periods": [],
+      "created_at": "2026-11-24T18:00:00Z"
+    }
+  },
+  "request_valid": false,
+  "response_valid": false,
+  "expected_error": "kind"
+}
