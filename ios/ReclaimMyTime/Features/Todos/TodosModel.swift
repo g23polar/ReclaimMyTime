@@ -118,7 +118,7 @@ final class TodosModel {
         let current = ticket
         if phase != .loaded { phase = .loading }
         do {
-            async let listed = api.listTodos(includeDone: true)
+            async let listed = api.listTodos()
             async let named = try? api.listProjects(includeArchived: true)
             let list = try await listed
             let names = await named
@@ -216,16 +216,14 @@ final class TodosModel {
         }
     }
 
-    /// Applies a `List.onMove` inside one section. The request carries the kind's whole id set:
-    /// the open one-offs are reordered among their own slots, and completed one-offs keep theirs.
+    /// Applies a `List.onMove` inside one section. The request carries the kind's open ids only
+    /// (one-offs with no `completed_at`, and every daily and weekly todo). Completed one-offs are
+    /// not sent and keep their positions.
     func move(kind: TodoKind, fromOffsets source: IndexSet, toOffset destination: Int) async {
         guard !reorderInFlight.contains(kind) else { return }
-        let all = ofKind(kind)
-        let visible = kind == .oneOff ? openOneOffs : all
-        let visibleIds = Set(visible.map(\.id))
-        var reordered = Self.moved(visible, fromOffsets: source, toOffset: destination).makeIterator()
-        let ids = all.map { todo in visibleIds.contains(todo.id) ? reordered.next()!.id : todo.id }
-        guard ids != all.map(\.id) else { return }
+        let visible = kind == .oneOff ? openOneOffs : ofKind(kind)
+        let ids = Self.moved(visible, fromOffsets: source, toOffset: destination).map(\.id)
+        guard ids != visible.map(\.id) else { return }
 
         reorderInFlight.insert(kind)
         defer { reorderInFlight.remove(kind) }

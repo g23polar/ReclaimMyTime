@@ -104,11 +104,8 @@ final class URLSessionAPIClient: APIClient {
 
     // MARK: todos
 
-    func listTodos(includeDone: Bool) async throws -> TodoList {
-        try await send(Endpoint(
-            method: .get, path: "/todos",
-            query: [URLQueryItem(name: "include_done", value: includeDone ? "true" : "false")]
-        ))
+    func listTodos() async throws -> TodoList {
+        try await send(Endpoint(method: .get, path: "/todos"))
     }
 
     func createTodo(_ draft: TodoDraft) async throws -> Todo {

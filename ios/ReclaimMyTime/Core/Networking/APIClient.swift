@@ -30,9 +30,8 @@ protocol APIClient: Sendable {
     func archiveProject(id: UUID) async throws -> Changeset
 
     // todos
-    /// `GET /todos`. The app always sends `includeDone: true`: `reorderTodos` needs the kind's whole
-    /// id set, and the default listing hides one-offs completed more than 7 days ago.
-    func listTodos(includeDone: Bool) async throws -> TodoList
+    /// `GET /todos`, the default listing: done one-offs completed in the last 7 days only.
+    func listTodos() async throws -> TodoList
     func createTodo(_ draft: TodoDraft) async throws -> Todo
     func updateTodo(id: UUID, patch: TodoPatch) async throws -> Todo
     func deleteTodo(id: UUID) async throws

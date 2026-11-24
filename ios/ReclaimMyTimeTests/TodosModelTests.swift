@@ -167,8 +167,8 @@ final class TodosModelTests: XCTestCase {
         XCTAssertEqual(Set(paths), ["GET /todos", "GET /projects"])
         let requests = await transport.requests
         let todoRequest = try XCTUnwrap(requests.first { $0.url?.path() == "/todos" })
-        XCTAssertEqual(URLComponents(url: todoRequest.url!, resolvingAgainstBaseURL: false)?.queryItems?.first?.value, "true",
-                       "always asks for done items so the reorder id set is complete")
+        XCTAssertNil(URLComponents(url: todoRequest.url!, resolvingAgainstBaseURL: false)?.queryItems,
+                     "the default listing: no include_done query")
     }
 
     func testLoadFailureShowsFailedPhase() async throws {
@@ -310,13 +310,13 @@ final class TodosModelTests: XCTestCase {
         await model.load()
     }
 
-    func testMoveSendsWholeKindIdSetKeepingDoneSlots() async throws {
+    func testMoveSendsOpenOneOffIdsOnly() async throws {
         let (model, transport) = makeModel()
         let initial: [(id: String, title: String, done: Bool)] = [(a, "A", false), (d, "D", true), (b, "B", false), (c, "C", false)]
         try await loadOneOffs(model, transport, order: initial)
         XCTAssertEqual(model.openOneOffs.map(\.title), ["A", "B", "C"])
 
-        // Move C to the top of the open items. The done item keeps its slot.
+        // Move C to the top of the open items. The done item is not part of the request.
         let after = TodoJSON.list([
             TodoJSON.todo(id: c, title: "C", position: 0),
             TodoJSON.todo(id: d, title: "D", position: 1, completedAt: "2026-11-22T10:00:00Z"),
@@ -330,8 +330,35 @@ final class TodosModelTests: XCTestCase {
         let bodies = await transport.sentBodies.map(TodosModelTests.object)
         let sent = bodies.last
         XCTAssertEqual(sent?["kind"] as? String, "one_off")
-        XCTAssertEqual(sent?["ids"] as? [String], [c, d, a, b], "the kind's whole id set, done item in its slot")
+        XCTAssertEqual(sent?["ids"] as? [String], [c, a, b], "open one-offs only, in the new order")
+        XCTAssertEqual(model.doneOneOffs.map(\.title), ["D"], "the done item is untouched")
         XCTAssertNil(model.actionError)
+    }
+
+    func testMoveOfDailyTodosSendsWholeKind() async throws {
+        let (model, transport) = makeModel()
+        let daily1 = "00000000-0000-4000-8000-0000000000d1"
+        let daily2 = "00000000-0000-4000-8000-0000000000d2"
+        let daily3 = "00000000-0000-4000-8000-0000000000d3"
+        await transport.expect("GET", "/todos", body: TodoJSON.list([
+            TodoJSON.todo(id: daily1, kind: "daily", title: "X", position: 0),
+            TodoJSON.todo(id: daily2, kind: "daily", title: "Y", position: 1),
+            TodoJSON.todo(id: daily3, kind: "daily", title: "Z", position: 2),
+        ]))
+        await transport.expect("GET", "/projects", body: try fixtureBody("get_projects__ok.json"))
+        await model.load()
+
+        await transport.expect("PUT", "/todos/order", body: TodoJSON.list([
+            TodoJSON.todo(id: daily3, kind: "daily", title: "Z", position: 0),
+            TodoJSON.todo(id: daily1, kind: "daily", title: "X", position: 1),
+            TodoJSON.todo(id: daily2, kind: "daily", title: "Y", position: 2),
+        ]))
+        await model.move(kind: .daily, fromOffsets: IndexSet(integer: 2), toOffset: 0)
+
+        XCTAssertEqual(model.today.map(\.title), ["Z", "X", "Y"])
+        let sent = await transport.sentBodies.map(TodosModelTests.object).last
+        XCTAssertEqual(sent?["kind"] as? String, "daily")
+        XCTAssertEqual(sent?["ids"] as? [String], [daily3, daily1, daily2], "every daily todo is open")
     }
 
     func testFailedReorderRestoresOrderAndShowsMessage() async throws {
