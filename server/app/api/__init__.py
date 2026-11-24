@@ -20,6 +20,7 @@ def install(app: FastAPI) -> None:
         plans,
         preferences,
         projects,
+        todos,
     )
     from app.api.errors import register_write_path_handlers
 
@@ -34,5 +35,6 @@ def install(app: FastAPI) -> None:
         changesets,
         gcal,
         google_login,
+        todos,
     ):
         app.include_router(module.router)

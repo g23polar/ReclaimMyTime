@@ -11,6 +11,7 @@ from app.db.models.intent import (
     UserTag,
 )
 from app.db.models.plans import Block, Changeset, Mutation, WeekPlan
+from app.db.models.todos import Todo, TodoCompletion
 
 __all__ = [
     "AgentTurnRow",
@@ -23,6 +24,8 @@ __all__ = [
     "Identity",
     "Mutation",
     "Project",
+    "Todo",
+    "TodoCompletion",
     "User",
     "UserPreferences",
     "UserSession",

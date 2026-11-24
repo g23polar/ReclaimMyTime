@@ -17,6 +17,7 @@ from sqlalchemy.dialects.postgresql import Range
 
 from app.db.models import AvailabilityException, Block, BlockPin, Changeset, Project, WeekPlan
 from app.db.models import UserPreferences as PreferencesRow
+from app.db.todos import TodoState
 
 # ---------------------------------------------------------------- primitives
 
@@ -96,6 +97,25 @@ def pin_out(p: BlockPin) -> dict[str, Any]:
             None if p.created_from_block_id is None else str(p.created_from_block_id)
         ),
         "created_at": ts(p.created_at),
+    }
+
+
+def todo_out(state: TodoState) -> dict[str, Any]:
+    """Todos v1 `Todo`. `completed_periods` is always [] for a one_off (contract)."""
+    row = state.row
+    one_off = row.kind == "one_off"
+    return {
+        "id": str(row.id),
+        "kind": row.kind,
+        "title": row.title,
+        "notes": row.notes,
+        "due_date": _iso(row.due_date),
+        "project_id": None if row.project_id is None else str(row.project_id),
+        "project_archived": state.project_archived,
+        "position": row.position,
+        "completed_at": opt_ts(row.completed_at),
+        "completed_periods": [] if one_off else [p.isoformat() for p in state.completed_periods],
+        "created_at": ts(row.created_at),
     }
 
 
