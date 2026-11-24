@@ -1,8 +1,8 @@
 import Observation
 
-/// The four tabs (design/README.md "App shell").
+/// The five tabs (design/README.md "App shell").
 enum AppTab: Hashable, Sendable {
-    case week, chat, projects, settings
+    case week, todos, chat, projects, settings
 }
 
 /// Tab selection and the app-wide proposal review sheet, so flows (onboarding → Chat,

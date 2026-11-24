@@ -29,6 +29,20 @@ protocol APIClient: Sendable {
     func updateProject(id: UUID, patch: ProjectPatch) async throws -> UpdateProjectResult
     func archiveProject(id: UUID) async throws -> Changeset
 
+    // todos
+    /// `GET /todos`. The app always sends `includeDone: true`: `reorderTodos` needs the kind's whole
+    /// id set, and the default listing hides one-offs completed more than 7 days ago.
+    func listTodos(includeDone: Bool) async throws -> TodoList
+    func createTodo(_ draft: TodoDraft) async throws -> Todo
+    func updateTodo(id: UUID, patch: TodoPatch) async throws -> Todo
+    func deleteTodo(id: UUID) async throws
+    /// `PUT /todos/{id}/completions/{period_start}`: ticks a recurring todo for one period. Idempotent.
+    func completeTodoPeriod(id: UUID, periodStart: LocalDate) async throws -> Todo
+    /// `DELETE /todos/{id}/completions/{period_start}`: unticks it. Idempotent.
+    func uncompleteTodoPeriod(id: UUID, periodStart: LocalDate) async throws -> Todo
+    /// `PUT /todos/order`: `order.ids` must be exactly that kind's full id set (422 `invalid_order` otherwise).
+    func reorderTodos(_ order: TodoOrder) async throws -> TodoList
+
     // preferences
     func getPreferences() async throws -> UserPreferences
     func putPreferences(_ preferences: UserPreferences) async throws -> Changeset

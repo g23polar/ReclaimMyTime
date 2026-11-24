@@ -22,6 +22,8 @@ final class AppModel {
     let timetable: TimetableModel
     /// The Projects tab's list (`GET /projects`). Separate from `projects`, which caches cards.
     let projectList: ProjectsModel
+    /// The Todos tab (`/todos`): standalone tracking, not part of the solver.
+    let todos: TodosModel
     /// Local notifications: the 48-hour window, warnings setting, permission pre-prompt (T5.4).
     let notifications: NotificationScheduler
     /// The time-zone change prompt (T5.4).
@@ -94,6 +96,7 @@ final class AppModel {
         let timetable = TimetableModel(api: api, pending: pending, navigation: navigation, directory: projects)
         self.timetable = timetable
         self.projectList = ProjectsModel(api: api)
+        self.todos = TodosModel(api: api)
         let notifications = NotificationScheduler(center: notificationCenter ?? SystemNotificationCenter(), defaults: defaults)
         self.notifications = notifications
         let timezone = TimezoneMonitor(api: api, pending: pending, defaults: defaults)
@@ -359,6 +362,7 @@ final class AppModel {
         calendar.activate(userId: nil)
         timetable.reset()
         projectList.reset()
+        todos.reset()
         timezone.reset()
         notifications.signOut()
         navigation.isReviewingProposal = false
@@ -413,6 +417,9 @@ final class AppModel {
         switch scenario {
         case "week", "day", "review", "tradeoff":
             await runTimetableDemo(scenario)
+        case "todos":
+            navigation.selectedTab = .todos
+            await todos.load()
         default:
             navigation.selectedTab = .chat
             guard let changeset = try? await api.createProject(ProjectDraft(name: "Reading", goal: .perennial(weeklyTargetHours: 2), maxBlockMinutes: 60, minBlockMinutes: 25, requirements: [])) else { return }
