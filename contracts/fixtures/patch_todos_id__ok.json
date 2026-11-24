@@ -1,0 +1,35 @@
+{
+  "operation": "updateTodo",
+  "method": "PATCH",
+  "path": "/todos/{todo_id}",
+  "case": "ok",
+  "description": "Mark a one-off done. completed_at is set.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "path_params": {
+      "todo_id": "7e1c0a52-1d3b-4c1e-9a10-000000000003"
+    },
+    "body": {
+      "done": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "7e1c0a52-1d3b-4c1e-9a10-000000000003",
+      "kind": "one_off",
+      "title": "Renew passport",
+      "notes": null,
+      "due_date": "2026-12-10",
+      "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01",
+      "project_archived": false,
+      "position": 0,
+      "completed_at": "2026-11-24T18:00:00Z",
+      "completed_periods": [],
+      "created_at": "2026-11-15T03:12:00Z"
+    }
+  }
+}

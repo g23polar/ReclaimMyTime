@@ -72,7 +72,12 @@ Every non-2xx/3xx JSON response uses this shape:
 | 409 | `block_superseded` | PATCH on a block that isn't in the current live plan |
 | 409 | `project_archived` | PATCH/DELETE on an archived project |
 | 404 | `gcal_not_connected` | `DELETE /gcal` with no connection |
+| 409 | `project_unavailable` | Todos (2026-11-24, Todos v1): a todo's `project_id` names a project in status `staged` (or `archived`, on a new link). Only the user's own `active`, `paused` or `done` projects can be linked; an unknown or foreign project is 404 `not_found` (2026-11-24, Todos v1) |
+| 409 | `todo_recurring` | Todos v1: `done` or a non-null `due_date` sent on a daily or weekly todo (2026-11-24, Todos v1) |
+| 409 | `todo_not_recurring` | Todos v1: a `completions/{period_start}` route called on a one-off todo (2026-11-24, Todos v1) |
 | 422 | `validation_failed` | schema or semantic failure; `details.fields: [{path, message}]` |
+| 422 | `invalid_period` | Todos v1: `period_start` is not the current or previous period start for the todo's kind (2026-11-24, Todos v1). `details` names the allowed starts |
+| 422 | `invalid_order` | Todos v1: `PUT /todos/order` `ids` is not exactly the full id set of that kind (2026-11-24, Todos v1) |
 | 422 | `gcal_scope_insufficient` | `POST /gcal/complete`: the user did not grant both calendar scopes; the partial grant was discarded (D24; 2026-11-15, T4.1 review) |
 | 500 | `internal_error` | unexpected |
 | 502 | `gcal_exchange_failed` | `POST /gcal/complete`: Google rejected or did not answer the code exchange, or returned no refresh token or an unusable id_token (D24; 2026-11-15, T4.1 review). **`POST /auth/google/complete`** (T6.0, D26): Google rejected or did not answer the code exchange, or returned an unusable id_token; nothing was created (a missing refresh token or calendar scope is not an error there) |
