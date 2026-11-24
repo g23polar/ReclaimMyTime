@@ -32,6 +32,15 @@ from tests.db.conftest import (
 )
 from tests.gcal.calendar_fakes import FakeCalendar, install, new_cipher, seed_connection
 from tests.gcal.fakes import FakeGoogle, Reply
+from tests.todos.story import (
+    LIBRARY,
+    PASSPORT,
+    REVIEW,
+    STAGED,
+    STORY_NOW,
+    STRETCH,
+    seed_story,
+)
 
 DEAD = "00000000-0000-4000-8000-00000000dead"
 LAPTOP_EXC = uuid.UUID("e7c2a9d4-3f1b-4e6a-8d20-5b9c1a7e3f01")
@@ -480,6 +489,139 @@ async def _(ctx: Ctx) -> None:
     body = await ctx.call("POST", f"/changesets/{cs}/reject")
     assert body["status"] == "rejected" and body["plan"]["status"] == "rejected"
     assert await ctx.call("POST", f"/changesets/{cs}/reject") == body
+
+
+# ---------------------------------------------------------------- todos (Todos v1, #10)
+
+
+async def todo_story(ctx: Ctx) -> None:
+    """The fixture story, at its clock (Tue 2026-11-24, LA). No preferences row: the week
+    starts Monday by default, which is what the fixtures assume."""
+    await seed_story(ctx.maker, ctx.uid)
+    ctx.clock.current = STORY_NOW
+
+
+@case("get_todos__ok.json")
+async def _(ctx: Ctx) -> None:
+    await todo_story(ctx)
+    body = await ctx.call("GET", "/todos")
+    assert body["periods"] == {"daily": "2026-11-24", "weekly": "2026-11-23"}
+    stretch = next(t for t in body["todos"] if t["id"] == str(STRETCH))
+    assert stretch["completed_periods"] == ["2026-11-24"]
+
+
+@case("post_todos__ok.json")
+async def _(ctx: Ctx) -> None:
+    await todo_story(ctx)
+    body = await ctx.call(
+        "POST",
+        "/todos",
+        {"title": "Renew passport", "due_date": "2026-12-10", "project_id": str(PORTFOLIO)},
+    )
+    assert (body["kind"], body["due_date"], body["position"]) == ("one_off", "2026-12-10", 2)
+
+
+@case("post_todos__defaults.json")
+async def _(ctx: Ctx) -> None:
+    await todo_story(ctx)
+    body = await ctx.call("POST", "/todos", {"title": "Call dentist"})
+    assert (body["kind"], body["due_date"], body["notes"]) == ("one_off", "2026-11-24", None)
+
+
+@case("post_todos__daily_no_due_date.json")
+async def _(ctx: Ctx) -> None:
+    await todo_story(ctx)
+    body = await ctx.call("POST", "/todos", {"kind": "daily", "title": "Stretch before bed"})
+    assert (body["due_date"], body["position"]) == (None, 1)
+
+
+@case("post_todos__project_unavailable.json")
+async def _(ctx: Ctx) -> None:
+    await todo_story(ctx)
+    body = await ctx.call(
+        "POST",
+        "/todos",
+        {"kind": "daily", "title": "Draft grant intro", "project_id": str(STAGED)},
+    )
+    assert body["error"]["details"]["status"] == "staged"
+
+
+@case("patch_todos_id__ok.json")
+async def _(ctx: Ctx) -> None:
+    await todo_story(ctx)
+    body = await ctx.call("PATCH", f"/todos/{PASSPORT}", {"done": True})
+    assert body["completed_at"] is not None
+
+
+@case("patch_todos_id__recurring.json")
+async def _(ctx: Ctx) -> None:
+    await todo_story(ctx)
+    body = await ctx.call("PATCH", f"/todos/{STRETCH}", {"done": True})
+    assert body["error"]["details"]["kind"] == "daily"
+
+
+@case("patch_todos_id__not_found.json")
+async def _(ctx: Ctx) -> None:
+    await todo_story(ctx)
+    body = await ctx.call("PATCH", f"/todos/{DEAD}", {"title": "Nope"})
+    assert body["error"]["details"] == {"resource": "todo", "id": DEAD}
+
+
+@case("delete_todos_id__ok.json")
+async def _(ctx: Ctx) -> None:
+    await todo_story(ctx)
+    resp = await ctx.client.delete(f"/todos/{REVIEW}")  # 204: no body, so not ctx.call
+    assert resp.status_code == 204 and resp.content == b""
+    ctx.checked.append(204)
+    listed = await ctx.client.get("/todos")  # ctx.call would compare against the 204 status
+    assert len(listed.json()["todos"]) == 3
+
+
+@case("delete_todos_id_completions_period_start__ok.json")
+async def _(ctx: Ctx) -> None:
+    await todo_story(ctx)
+    body = await ctx.call("DELETE", f"/todos/{STRETCH}/completions/2026-11-24")
+    assert body["completed_periods"] == []
+
+
+@case("put_todos_id_completions_period_start__ok.json")
+async def _(ctx: Ctx) -> None:
+    await todo_story(ctx)
+    body = await ctx.call("PUT", f"/todos/{REVIEW}/completions/2026-11-23")
+    assert body["completed_periods"] == ["2026-11-23"]
+
+
+@case("put_todos_id_completions_period_start__invalid_period.json")
+async def _(ctx: Ctx) -> None:
+    await todo_story(ctx)
+    body = await ctx.call("PUT", f"/todos/{REVIEW}/completions/2026-10-01")
+    assert body["error"]["details"]["allowed"] == ["2026-11-23", "2026-11-16"]
+
+
+@case("put_todos_id_completions_period_start__not_recurring.json")
+async def _(ctx: Ctx) -> None:
+    await todo_story(ctx)
+    body = await ctx.call("PUT", f"/todos/{PASSPORT}/completions/2026-11-24")
+    assert body["error"]["details"]["kind"] == "one_off"
+
+
+@case("put_todos_order__ok.json")
+async def _(ctx: Ctx) -> None:
+    """ids are the open one-offs only; the done one-off keeps its position (1)."""
+    await todo_story(ctx)
+    body = await ctx.call("PUT", "/todos/order", {"kind": "one_off", "ids": [str(PASSPORT)]})
+    by_id = {t["id"]: t for t in body["todos"]}
+    assert by_id[str(PASSPORT)]["position"] == 0
+    assert by_id[str(LIBRARY)]["position"] == 1 and by_id[str(LIBRARY)]["completed_at"]
+
+
+@case("put_todos_order__invalid_order.json")
+async def _(ctx: Ctx) -> None:
+    await todo_story(ctx)
+    body = await ctx.call(
+        "PUT", "/todos/order", {"kind": "one_off", "ids": [str(PASSPORT), str(LIBRARY)]}
+    )
+    assert body["error"]["details"]["extra"] == [str(LIBRARY)]
 
 
 # ---------------------------------------------------------------- driver

@@ -22,13 +22,15 @@ _REGISTRY = Registry().with_resource(BASE, Resource(contents=SPEC, specification
 _FORMATS = Draft202012Validator.FORMAT_CHECKER
 assert "date-time" in _FORMATS.checkers, "rfc3339-validator is required for date-time checks"
 
-# Operations T2.3 owns (auth, agent and gcal are elsewhere).
+# Operations T2.3 owns, plus Todos v1 (issue #10); auth, agent and gcal are elsewhere.
 IN_SCOPE = {
     "listProjects", "createProject", "getProject", "updateProject", "archiveProject",
     "getPreferences", "putPreferences",
     "listExceptions", "createException", "getException", "deleteException",
     "listPins", "deletePin", "patchBlock", "getCurrentPlan", "getPlanDiff",
     "confirmChangeset", "rejectChangeset",
+    "listTodos", "createTodo", "updateTodo", "deleteTodo", "reorderTodos",
+    "completeTodoPeriod", "uncompleteTodoPeriod",
 }  # fmt: skip
 
 

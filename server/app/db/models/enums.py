@@ -16,6 +16,8 @@ CHANGESET_REASON = ("user_edit", "agent", "drift", "google_edit")
 BLOCK_STATE = ("planned", "completed", "skipped")
 GCAL_SYNC = ("pending", "synced", "failed")
 MUTATION_SOURCE = ("agent", "manual", "system")
+# Todos v1 (migration 0005). Direct-write table, so no `mutations` kind exists for it.
+TODO_KIND = ("daily", "weekly", "one_off")
 MUTATION_KIND = (
     "project_created",
     "project_updated",
@@ -44,6 +46,7 @@ ENUMS: dict[str, tuple[str, ...]] = {
     "gcal_sync": GCAL_SYNC,
     "mutation_source": MUTATION_SOURCE,
     "mutation_kind": MUTATION_KIND,
+    "todo_kind": TODO_KIND,
 }
 
 

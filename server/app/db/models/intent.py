@@ -1,7 +1,9 @@
 """Intent tables: projects, user_tags, user_preferences, availability_exceptions, block_pins.
 
 ARCHITECTURE.md §3 DDL, column-for-column. No relationships: deletes rely on the DDL's
-ON DELETE CASCADE only. Writes go through `app.db.write_paths` exclusively.
+ON DELETE CASCADE only. Writes go through `app.db.write_paths` exclusively, with one deliberate
+exception: todos (app.db.models.todos) are direct CRUD with no changeset, solve or `mutations`
+row, so they are not part of the write-path contract.
 """
 
 from __future__ import annotations

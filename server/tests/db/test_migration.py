@@ -16,6 +16,8 @@ from tests.db.conftest import make_engine, requires_db, run_alembic
 
 pytestmark = requires_db
 
+TODO_TABLES = ("todos", "todo_completions")  # migration 0005 (Todos v1, issue #10)
+
 TABLES = {
     "users",
     "identities",
@@ -31,6 +33,7 @@ TABLES = {
     "blocks",
     "mutations",
     "agent_turns",
+    *TODO_TABLES,
 }
 
 
@@ -296,11 +299,65 @@ async def test_0004_agent_turns_round_trips(schema: str) -> None:
             assert got == [(0, 0, 0, 0, "[]", None, None)]
 
             await conn.run_sync(run_alembic, "downgrade", "0003_google_identity")
-            assert await conn.run_sync(_tables) == TABLES - {"agent_turns"}
+            # Head includes 0005, so downgrading past 0004 drops the todos tables too.
+            assert await conn.run_sync(_tables) == TABLES - {"agent_turns", *TODO_TABLES}
             assert (await conn.execute(text("SELECT count(*) FROM users"))).scalar_one() == 1
             await conn.run_sync(run_alembic, "upgrade", "head")
             assert await conn.run_sync(_tables) == TABLES
             n = (await conn.execute(text("SELECT count(*) FROM agent_turns"))).scalar_one()
             assert n == 0
+    finally:
+        await engine.dispose()
+
+
+async def test_0005_todos_round_trips(schema: str) -> None:
+    """Migration 0005 (Todos v1): creates todo_kind and both tables; the recurring-field CHECK
+    holds; a completion cascades with its todo; downgrade removes everything it created."""
+    uid = "00000000-0000-4000-8000-000000000005"
+    todo = "00000000-0000-4000-8000-0000000000a1"
+    engine = await make_engine(schema)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(run_alembic, "upgrade", "0004_agent_turns")
+            assert not (set(TODO_TABLES) & await conn.run_sync(_tables))
+            await conn.execute(text(f"INSERT INTO users (id) VALUES ('{uid}')"))
+
+            await conn.run_sync(run_alembic, "upgrade", "head")
+            assert set(TODO_TABLES) <= await conn.run_sync(_tables)
+            assert (await conn.run_sync(_enums, schema))["todo_kind"] == [
+                "daily",
+                "weekly",
+                "one_off",
+            ]
+            await conn.execute(
+                text(
+                    "INSERT INTO todos (id, user_id, kind, title, position, due_date)"
+                    f" VALUES ('{todo}', '{uid}', 'one_off', 'Renew', 0, '2026-12-10')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO todo_completions (todo_id, period_start)"
+                    f" VALUES ('{todo}', '2026-11-23')"
+                )
+            )
+            # A recurring todo may not carry a due date (ck_todos_recurring_fields).
+            with pytest.raises(IntegrityError):
+                async with conn.begin_nested():
+                    await conn.execute(
+                        text(
+                            "INSERT INTO todos (user_id, kind, title, position, due_date)"
+                            f" VALUES ('{uid}', 'daily', 'Bad', 0, '2026-12-10')"
+                        )
+                    )
+
+            await conn.execute(text(f"DELETE FROM todos WHERE id = '{todo}'"))
+            left = (await conn.execute(text("SELECT count(*) FROM todo_completions"))).scalar_one()
+            assert left == 0  # cascade
+
+            await conn.run_sync(run_alembic, "downgrade", "0004_agent_turns")
+            assert not (set(TODO_TABLES) & await conn.run_sync(_tables))
+            assert (await conn.run_sync(_enums, schema)).get("todo_kind") is None
+            assert (await conn.execute(text("SELECT count(*) FROM users"))).scalar_one() == 1
     finally:
         await engine.dispose()
