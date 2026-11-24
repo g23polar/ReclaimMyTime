@@ -10,7 +10,6 @@
       "X-Timezone": "America/Los_Angeles"
     },
     "body": {
-      "kind": "one_off",
       "title": "Renew passport",
       "due_date": "2026-12-10",
       "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01"

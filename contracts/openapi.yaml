@@ -1657,15 +1657,19 @@ components:
         created_at: {type: string, format: date-time}
     TodoDraft:
       type: object
-      required: [kind, title]
+      description: |
+        Defaults (applied by the server): `kind` is `one_off`; `notes` is null; for a one_off with
+        `due_date` omitted, `due_date` is today's local date (from X-Timezone). Recurring kinds
+        never get a due date.
+      required: [title]
       additionalProperties: false
-      if: {properties: {kind: {enum: [daily, weekly]}}}
+      if: {required: [kind], properties: {kind: {enum: [daily, weekly]}}}
       then: {properties: {due_date: {type: 'null'}}}
       properties:
-        kind: {$ref: '#/components/schemas/TodoKind'}
+        kind: {$ref: '#/components/schemas/TodoKind', default: one_off}
         title: {type: string, minLength: 1, maxLength: 200}
         notes: {type: [string, 'null'], maxLength: 2000}
-        due_date: {type: [string, 'null'], format: date, description: Allowed on one_off only.}
+        due_date: {type: [string, 'null'], format: date, description: One_off only. Omitted on a one_off means today (server default); null means no due date.}
         project_id:
           type: [string, 'null']
           format: uuid

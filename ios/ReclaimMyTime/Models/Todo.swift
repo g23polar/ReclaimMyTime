@@ -75,7 +75,7 @@ struct TodoDraft: Codable, Hashable, Sendable {
     var dueDate: LocalDate?
     var projectId: UUID?
 
-    init(kind: TodoKind, title: String, notes: String? = nil, dueDate: LocalDate? = nil, projectId: UUID? = nil) {
+    init(kind: TodoKind = .oneOff, title: String, notes: String? = nil, dueDate: LocalDate? = nil, projectId: UUID? = nil) {
         self.kind = kind
         self.title = title
         self.notes = notes
@@ -91,7 +91,7 @@ struct TodoDraft: Codable, Hashable, Sendable {
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        kind = try container.decode(TodoKind.self, forKey: .kind)
+        kind = try container.decodeIfPresent(TodoKind.self, forKey: .kind) ?? .oneOff
         title = try container.decode(String.self, forKey: .title)
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
         dueDate = try container.decodeIfPresent(LocalDate.self, forKey: .dueDate)
@@ -105,7 +105,8 @@ struct TodoDraft: Codable, Hashable, Sendable {
 
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(kind, forKey: .kind)
+        // The server defaults kind to one_off, so a one-off is sent without it.
+        if kind != .oneOff { try container.encode(kind, forKey: .kind) }
         try container.encode(title, forKey: .title)
         try container.encodeIfPresent(notes, forKey: .notes)
         try container.encodeIfPresent(dueDate, forKey: .dueDate)
