@@ -558,7 +558,10 @@ paths:
       operationId: reorderTodos
       tags: [todos]
       summary: Set the manual order within one kind.
-      description: '`ids` must be exactly the full id set of that kind (422 `invalid_order` otherwise).'
+      description: |
+        `ids` must be exactly the open todos of that kind, in the new order (422 `invalid_order` otherwise).
+        Daily and weekly: every todo of the kind. One-off: only those with `completed_at` null. Done
+        one-offs are not listed; they keep their position.
       parameters: [{$ref: '#/components/parameters/XTimezone'}]
       requestBody:
         required: true
@@ -1684,9 +1687,12 @@ components:
         notes: {type: [string, 'null'], maxLength: 2000}
         due_date: {type: [string, 'null'], format: date}
         project_id: {type: [string, 'null'], format: uuid}
-        done: {type: boolean, description: One-off only.}
+        done: {type: boolean, description: One-off only. true sets completed_at. false clears it and moves the todo to the end of the open one-offs.}
     TodoOrder:
       type: object
+      description: |
+        `ids` is the new manual order of the open todos of `kind`: every daily or weekly todo, or the
+        one-offs with `completed_at` null. Done one-offs are excluded and keep their position.
       required: [kind, ids]
       additionalProperties: false
       properties:

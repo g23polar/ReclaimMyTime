@@ -3,7 +3,7 @@
   "method": "PUT",
   "path": "/todos/order",
   "case": "ok",
-  "description": "Reverse the one-off order (ids are the full one-off set).",
+  "description": "ids are the open one-offs only. The done one-off is not listed and keeps its position (1).",
   "request": {
     "headers": {
       "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
@@ -12,7 +12,6 @@
     "body": {
       "kind": "one_off",
       "ids": [
-        "7e1c0a52-1d3b-4c1e-9a10-000000000004",
         "7e1c0a52-1d3b-4c1e-9a10-000000000003"
       ]
     }
@@ -50,19 +49,6 @@
           "created_at": "2026-11-15T03:11:00Z"
         },
         {
-          "id": "7e1c0a52-1d3b-4c1e-9a10-000000000004",
-          "kind": "one_off",
-          "title": "Return library books",
-          "notes": null,
-          "due_date": null,
-          "project_id": null,
-          "project_archived": false,
-          "position": 0,
-          "completed_at": "2026-11-22T18:30:00Z",
-          "completed_periods": [],
-          "created_at": "2026-11-15T03:13:00Z"
-        },
-        {
           "id": "7e1c0a52-1d3b-4c1e-9a10-000000000003",
           "kind": "one_off",
           "title": "Renew passport",
@@ -70,10 +56,23 @@
           "due_date": "2026-12-10",
           "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01",
           "project_archived": false,
-          "position": 1,
+          "position": 0,
           "completed_at": null,
           "completed_periods": [],
           "created_at": "2026-11-15T03:12:00Z"
+        },
+        {
+          "id": "7e1c0a52-1d3b-4c1e-9a10-000000000004",
+          "kind": "one_off",
+          "title": "Return library books",
+          "notes": null,
+          "due_date": null,
+          "project_id": null,
+          "project_archived": false,
+          "position": 1,
+          "completed_at": "2026-11-22T18:30:00Z",
+          "completed_periods": [],
+          "created_at": "2026-11-15T03:13:00Z"
         }
       ],
       "periods": {
