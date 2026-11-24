@@ -24,7 +24,7 @@ struct Todo: Codable, Hashable, Sendable, Identifiable {
     let completedPeriods: [LocalDate]
     let createdAt: Date
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, kind, title, notes, position
         case dueDate = "due_date"
         case projectId = "project_id"
@@ -36,6 +36,7 @@ struct Todo: Codable, Hashable, Sendable, Identifiable {
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        try rejectUnknownKeys(CodingKeys.self, from: decoder)
         id = try container.decode(UUID.self, forKey: .id)
         kind = try container.decode(TodoKind.self, forKey: .kind)
         title = try container.decode(String.self, forKey: .title)
@@ -47,6 +48,8 @@ struct Todo: Codable, Hashable, Sendable, Identifiable {
         completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
         completedPeriods = try container.decode([LocalDate].self, forKey: .completedPeriods)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
+        try validateTitle(title, in: container, key: CodingKeys.title)
+        try validateNotes(notes, in: container, key: CodingKeys.notes)
         if !kind.isRecurring, !completedPeriods.isEmpty {
             throw DecodingError.dataCorruptedError(forKey: .completedPeriods, in: container, debugDescription: "a one-off todo has no period completions")
         }
@@ -83,7 +86,7 @@ struct TodoDraft: Codable, Hashable, Sendable {
         self.projectId = projectId
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case kind, title, notes
         case dueDate = "due_date"
         case projectId = "project_id"
@@ -91,6 +94,7 @@ struct TodoDraft: Codable, Hashable, Sendable {
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        try rejectUnknownKeys(CodingKeys.self, from: decoder)
         kind = try container.decodeIfPresent(TodoKind.self, forKey: .kind) ?? .oneOff
         title = try container.decode(String.self, forKey: .title)
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
@@ -137,7 +141,7 @@ struct TodoPatch: Codable, Hashable, Sendable {
         self.done = done
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case title, notes, done
         case dueDate = "due_date"
         case projectId = "project_id"
@@ -145,6 +149,7 @@ struct TodoPatch: Codable, Hashable, Sendable {
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        try rejectUnknownKeys(CodingKeys.self, from: decoder)
         title = try container.decodeIfPresent(String.self, forKey: .title)
         notes = try Self.nullable(String.self, in: container, key: .notes)
         dueDate = try Self.nullable(LocalDate.self, in: container, key: .dueDate)
@@ -196,7 +201,7 @@ struct TodoOrder: Codable, Hashable, Sendable {
     var kind: TodoKind
     var ids: [UUID]
 
-    private enum CodingKeys: String, CodingKey { case kind, ids }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case kind, ids }
 
     init(kind: TodoKind, ids: [UUID]) {
         self.kind = kind
@@ -205,6 +210,7 @@ struct TodoOrder: Codable, Hashable, Sendable {
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        try rejectUnknownKeys(CodingKeys.self, from: decoder)
         kind = try container.decode(TodoKind.self, forKey: .kind)
         ids = try container.decode([UUID].self, forKey: .ids)
         if Set(ids).count != ids.count {
@@ -223,6 +229,17 @@ struct TodoOrder: Codable, Hashable, Sendable {
 /// `UUID.uuidString` is uppercase.
 private extension UUID {
     var wireString: String { uuidString.lowercased() }
+}
+
+/// The contract sets `additionalProperties: false` on these objects, so an unknown key is an error.
+/// Codable ignores unknown keys, and a keyed container's `allKeys` lists only the known ones, so the
+/// object is decoded as a dictionary to see every key.
+private func rejectUnknownKeys<Key: CodingKey & CaseIterable>(_ keys: Key.Type, from decoder: any Decoder) throws {
+    let known = Set(keys.allCases.map(\.stringValue))
+    let object = try [String: JSONValue](from: decoder)
+    if let unknown = object.keys.sorted().first(where: { !known.contains($0) }) {
+        throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "unknown field \(unknown)"))
+    }
 }
 
 /// JSON Schema `maxLength` counts code points, so count unicode scalars, not grapheme clusters.
