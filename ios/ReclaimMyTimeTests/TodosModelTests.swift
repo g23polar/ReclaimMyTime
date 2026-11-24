@@ -379,6 +379,14 @@ final class TodosModelTests: XCTestCase {
         XCTAssertNil(model.actionError)
     }
 
+    /// The contract's `put_todos_order__ok` request is the open one-off set: the encoded body must match it.
+    func testReorderBodyMatchesContractFixture() throws {
+        let fixture = try TestFixtures.named("put_todos_order__ok.json")
+        let expected = try XCTUnwrap(fixture.requestBody)
+        let sent = try JSONCoding.makeEncoder().encode(TodoOrder(kind: .oneOff, ids: [UUID(uuidString: renewPassport)!]))
+        assertJSONEqual(sent, expected, "reorder body")
+    }
+
     func testMovedHelperMatchesListOnMove() {
         XCTAssertEqual(TodosModel.moved(["A", "B", "C"], fromOffsets: IndexSet(integer: 0), toOffset: 3), ["B", "C", "A"])
         XCTAssertEqual(TodosModel.moved(["A", "B", "C"], fromOffsets: IndexSet(integer: 2), toOffset: 0), ["C", "A", "B"])
