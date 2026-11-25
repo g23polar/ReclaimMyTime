@@ -20,6 +20,13 @@ final class FixtureContractTests: XCTestCase {
         "syncGcal",
     ]
 
+    /// Invalid only by a server-side write cap (issue #4: tags per list, windows per day). The
+    /// client does not enforce these caps, so these bodies stay representable and must round-trip.
+    static let serverCapFixtures: Set<String> = [
+        "post_projects__too_many_tags.json",
+        "put_preferences__too_many_windows.json",
+    ]
+
     private let decoder = JSONCoding.makeDecoder()
     private let encoder = JSONCoding.makeEncoder()
 
@@ -45,7 +52,7 @@ final class FixtureContractTests: XCTestCase {
         var roundTripped = 0
         for fixture in fixtures {
             guard let body = fixture.requestBody else { continue }
-            if fixture.requestValid {
+            if fixture.requestValid || Self.serverCapFixtures.contains(fixture.fileName) {
                 do {
                     try roundTripRequest(fixture.operation, body: body, name: fixture.fileName)
                     roundTripped += 1
