@@ -8,7 +8,9 @@ orchestrator never improvises them.
 
 Usage:
   job queue                      what /factory run should do with each labeled issue
-  job create <issue>             new job for an open `factory` issue; prints the job id
+  job create <issue>             new job for an open `factory` issue, with its worktree; prints the job id
+  job spawn <job> <agent> [--model M]   start a factory agent in its own Orca tab (task on stdin)
+  job send <job> <agent>         give a running agent its next task, e.g. the builder's next round (stdin)
   job advance <job> <stage>      move a job to <stage>, or refuse
   job merge <job>                APPROVE → sync with the base branch, gate, merge the PR
   job feedback <job>             needs-human → build, with your feedback (stdin) as feedback-<k>.md
@@ -141,9 +143,10 @@ def save(job):
 # `factory` pane running bin/job-watch. Display only, and best-effort: when
 # Orca isn't installed or running, nothing happens and the job carries on.
 
-# Only stages that have a worktree get a tab. Intake and needs-info come before
-# it exists; merged and rejected remove it, and the tab disappears with it.
+# The worktree exists from `job create` until the job ends; merged and rejected
+# remove it, and the tab (with its agent tabs) disappears with it.
 ORCA_STATUS = {
+    "intake": "in-progress", "needs-info": "in-review",
     "spec": "in-progress", "build": "in-progress", "gate": "in-progress",
     "review": "in-review", "approve": "in-review", "merging": "in-review",
     "needs-human": "in-review",
@@ -176,12 +179,13 @@ def orca_sync(job):
         return  # no tab before the worktree exists (intake) or after it's removed
     args = ["worktree", "set", "--worktree", f"path:{job['worktree']}",
             "--display-name", f"#{job['issue']} {job['title']} ({job['id']})",
-            "--issue", str(job["issue"]), "--comment", orca_comment(job)]
+            "--issue", str(job["issue"]), "--comment", orca_comment(job),
+            "--parent-worktree", f"path:{REPO}"]  # nests under the orchestrator's checkout
     if job.get("pr"):
         args += ["--pr", str(job["pr"])]
     if job["stage"] in ORCA_STATUS:
         args += ["--workspace-status", ORCA_STATUS[job["stage"]]]
-    if job["stage"] == "needs-human":
+    if job["stage"] in WAITING:
         args.append("--unread")
     orca(*args)
 
@@ -322,9 +326,9 @@ def label(kind, number, add=None, remove=None):
 # ---- Cost from Claude Code transcripts -------------------------------------
 
 
-def transcripts_dir():
+def transcripts_dir(checkout=REPO):
     config = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
-    return config / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(REPO))
+    return config / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(checkout))
 
 
 def prompt_text(line):
@@ -334,44 +338,59 @@ def prompt_text(line):
     return " ".join(b.get("text", "") for b in content if isinstance(b, dict))
 
 
-def cost_usd(job):
-    """API-equivalent cost of every subagent whose prompt names this job's folder.
+def transcript_cost(lines, prices):
+    """API-equivalent cost of one transcript's assistant messages (deduped by id)."""
+    usage_by_message = {}
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        msg = entry.get("message")
+        if entry.get("type") == "assistant" and isinstance(msg, dict) and msg.get("usage"):
+            usage_by_message[msg["id"]] = (msg["model"], msg["usage"])
+    total = 0.0
+    for model, u in usage_by_message.values():
+        tokens = (u.get("input_tokens", 0) + u.get("output_tokens", 0)
+                  + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0))
+        if tokens == 0:
+            continue
+        if model not in prices:
+            die(f"no price for model {model} in factory/config.json prices_usd_per_mtok")
+        p = prices[model]
+        split = u.get("cache_creation") or {}
+        write_1h = split.get("ephemeral_1h_input_tokens", 0)
+        write_5m = u.get("cache_creation_input_tokens", 0) - write_1h
+        total += (u.get("input_tokens", 0) * p["input"]
+                  + u.get("output_tokens", 0) * p["output"]
+                  + write_5m * p["cache_write_5m"]
+                  + write_1h * p["cache_write_1h"]
+                  + u.get("cache_read_input_tokens", 0) * p["cache_read"]) / 1e6
+    return total
 
-    Claude Code writes each subagent's messages, with model and token usage, to
-    <config>/projects/<project>/<session>/subagents/agent-<id>.jsonl. Every
-    factory prompt starts with `Job folder: <path>`, which ties a transcript to
-    its job across sessions.
+
+def cost_usd(job):
+    """API-equivalent cost of every factory agent that worked on this job.
+
+    Agents run as their own Claude Code sessions in the job's worktree (`job
+    spawn`), so every session transcript under that worktree's project folder
+    belongs to the job, with its sessions' own subagents. (A chat the user opens
+    in that tab counts too.) Jobs from before that ran as subagents of the
+    orchestrator: those transcripts are found by their first prompt's
+    `Job folder: <path>`.
     """
     needle = f"Job folder: {job_dir(job['id'])}/"
     prices = CONFIG["prices_usd_per_mtok"]
     total = 0.0
+    worktree_sessions = transcripts_dir(job["worktree"])
+    for path in [*worktree_sessions.glob("*.jsonl"), *worktree_sessions.glob("*/subagents/agent-*.jsonl")]:
+        with path.open() as f:
+            total += transcript_cost(f, prices)
     for path in transcripts_dir().glob("*/subagents/agent-*.jsonl"):
         with path.open() as f:
             first = f.readline()
-            if not first or needle not in prompt_text(first):
-                continue
-            usage_by_message = {}
-            for line in f:
-                entry = json.loads(line)
-                msg = entry.get("message")
-                if entry.get("type") == "assistant" and isinstance(msg, dict) and msg.get("usage"):
-                    usage_by_message[msg["id"]] = (msg["model"], msg["usage"])
-        for model, u in usage_by_message.values():
-            tokens = (u.get("input_tokens", 0) + u.get("output_tokens", 0)
-                      + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0))
-            if tokens == 0:
-                continue
-            if model not in prices:
-                die(f"no price for model {model} in factory/config.json prices_usd_per_mtok")
-            p = prices[model]
-            split = u.get("cache_creation") or {}
-            write_1h = split.get("ephemeral_1h_input_tokens", 0)
-            write_5m = u.get("cache_creation_input_tokens", 0) - write_1h
-            total += (u.get("input_tokens", 0) * p["input"]
-                      + u.get("output_tokens", 0) * p["output"]
-                      + write_5m * p["cache_write_5m"]
-                      + write_1h * p["cache_write_1h"]
-                      + u.get("cache_read_input_tokens", 0) * p["cache_read"]) / 1e6
+            if first and needle in prompt_text(first):
+                total += transcript_cost(f, prices)
     return round(total, 2)
 
 
@@ -477,9 +496,7 @@ def advance(job, stage):
         elif stage == "rejected":
             label("issue", job["issue"], remove=LABELS["queue"])
         else:
-            run(["git", "fetch", "origin", BASE])
-            Path(job["worktree"]).parent.mkdir(parents=True, exist_ok=True)
-            run(["git", "worktree", "add", "-b", job["branch"], job["worktree"], f"origin/{BASE}"])
+            refresh_base(job)
 
     elif old == "needs-info":
         require_slot(job["id"])
@@ -574,6 +591,8 @@ def advance(job, stage):
         label("issue", job["issue"], add=LABELS["needs_human"])
 
     if stage in TERMINAL and Path(job["worktree"]).exists():
+        if not orca("terminal", "close", "--worktree", f"path:{job['worktree']}", "--all"):
+            print(f"job: couldn't close {job['id']}'s Orca tabs; close them by hand", file=sys.stderr)
         run(["git", "worktree", "remove", "--force", job["worktree"]])
         run(["git", "branch", "-D", job["branch"]], check=False)
 
@@ -617,8 +636,130 @@ def cmd_create(number):
         "cost_usd": 0.0, "started": now(), "ended": None,
     }
     write_issue_md(job)
+    save(job)  # recorded first: if the worktree fails, `job spawn` makes it later
+    make_worktree(job)
     save(job)
     print(job_id)
+
+
+def refresh_base(job):
+    """Before spec, move a branch with no commits yet onto the latest base: a job
+    can sit in needs-info for days after its worktree was made."""
+    if not Path(job["worktree"]).exists():
+        make_worktree(job)
+        return
+    run(["git", "fetch", "origin", BASE])
+    if int(git(job, "rev-list", "--count", f"origin/{BASE}..HEAD").stdout or 0) == 0:
+        git(job, "reset", "--hard", f"origin/{BASE}")
+
+
+def make_worktree(job):
+    """The job's checkout, made at create so every agent (intake included) runs in it.
+    `.claude` links to the main checkout's (gitignored, so git never sees it): the
+    agents' sessions need its agent files and deny rules."""
+    run(["git", "fetch", "origin", BASE])
+    Path(job["worktree"]).parent.mkdir(parents=True, exist_ok=True)
+    run(["git", "worktree", "add", "-b", job["branch"], job["worktree"], f"origin/{BASE}"])
+    link = Path(job["worktree"]) / ".claude"
+    if not link.exists():
+        link.symlink_to(REPO / ".claude")
+
+
+# ---- Agents as Orca workers ------------------------------------------------
+# Every factory agent runs as its own Claude Code session (`claude --agent
+# <name>`) in a tab in the job's worktree, dispatched as an Orca orchestration
+# worker. The user can open any tab and talk to it; the orchestrator only
+# hears `worker_done` (or an escalation) from Orca's mailbox.
+
+WORKER_FOOTER = (
+    "You run in your own Orca tab, and the user can read and answer you there. "
+    "If you need the user, ask in this chat and wait for their reply; never use "
+    "`orca orchestration ask`. Do your job exactly as your agent instructions say. "
+    "When your file is written, report worker_done with that file's first line as the summary."
+)
+
+
+def job_header(job):
+    return (f"Job: {job['id']}. Job folder: {job_dir(job['id'])}/. Main checkout: {REPO}. "
+            f"Worktree: {job['worktree']}. Branch: {job['branch']}. Base: origin/{BASE}. Issue: #{job['issue']}.")
+
+
+def orca_strict(*args):
+    """Run an orca command whose failure must stop the caller (unlike the view)."""
+    try:
+        res = subprocess.run(["orca", *args, "--json"], capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise Refused(f"`orca {' '.join(args[:2])}` failed: {e}")
+    text = res.stdout.decode("utf-8", "replace").strip()
+    out = {}
+    # orca pretty-prints its JSON over many lines; some errors add a plain-text line after it.
+    for candidate in (text, text[:text.rfind("}") + 1]):
+        try:
+            out = json.loads(candidate)
+            break
+        except json.JSONDecodeError:
+            continue
+    if not (isinstance(out, dict) and out.get("ok") is True):
+        err = out.get("error") if isinstance(out, dict) else None
+        raise Refused(f"`orca {' '.join(args[:2])}` failed: "
+                      f"{(err or {}).get('message') if isinstance(err, dict) else text[:300]}")
+    return out.get("result") or {}
+
+
+def agent_permissions(job, agent):
+    """Permission flags for an agent's session. Intake reads the issue, which is
+    untrusted text, so it may only read, write intake.md and report worker_done;
+    `dontAsk` denies everything else without asking. The rest run like the
+    subagents they replace: bypass, with the deny rules from .claude still binding."""
+    if agent == "intake":
+        return ["--permission-mode", "dontAsk", "--allowedTools", "Read", "Grep", "Glob",
+                f"Edit(/{job_dir(job['id'])}/intake.md)",
+                "Bash(orca orchestration send --from * --type worker_done *)"]
+    return ["--permission-mode", "bypassPermissions"]
+
+
+def tab_title(job, agent):
+    return f"{agent} r{job['round']}" if job["round"] and agent.startswith(("builder", "reviewer")) else agent
+
+
+def cmd_spawn(job, agent, model, task):
+    require((REPO / ".claude" / "agents" / f"{agent}.md").exists(), f"no agent .claude/agents/{agent}.md")
+    if not Path(job["worktree"]).exists():  # a job created before worktrees were made at create
+        make_worktree(job)
+    command = ["claude", "--agent", agent, *agent_permissions(job, agent)]
+    if model:
+        command += ["--model", model]
+    title = tab_title(job, agent)
+    term = orca_strict("terminal", "create", "--worktree", f"path:{job['worktree']}",
+                       "--title", title, "--command", shlex.join(command))
+    handle = (term.get("terminal") or {}).get("handle")
+    require(handle, "orca terminal create returned no handle")
+    spec = job_dir(job["id"]) / f"task-{title.replace(' ', '-')}.md"
+    spec.write_text(f"{job_header(job)} {task.strip()}\n\n{WORKER_FOOTER}\n")
+    try:
+        started = orca_strict("orchestration", "worker-start", "--worktree", f"path:{job['worktree']}",
+                              "--terminal", handle, "--spec-file", str(spec), "--keep-open",
+                              "--task-title", f"{job['id']} {title}")
+        dispatch = started.get("dispatchId")
+        require(dispatch, "orca worker-start returned no dispatch id")
+    except Refused:
+        orca("terminal", "close", "--terminal", handle)  # don't leave an idle agent with no task
+        raise
+    job.setdefault("dispatches", {})[agent] = {"dispatch": dispatch, "terminal": handle, "title": title}
+    save(job)
+    print(f"{job['id']}: {title} → dispatch:{dispatch}")
+
+
+def cmd_send(job, agent, task):
+    d = (job.get("dispatches") or {}).get(agent)
+    require(d, f"{job['id']} has no {agent} worker; use `job spawn`")
+    body = f"{job_header(job)} {task.strip()}\n\n{WORKER_FOOTER}"
+    sent = orca_strict("orchestration", "send", "--to", f"dispatch:{d['dispatch']}",
+                       "--subject", f"{job['id']} round {job['round']}", "--body", body)
+    # A finished worker takes it as a follow-up task with a new dispatch id; later sends go there.
+    d["dispatch"] = sent.get("dispatchId") or d["dispatch"]
+    save(job)
+    print(f"{job['id']}: sent round {job['round']} to {d['title']} (dispatch:{d['dispatch']})")
 
 
 def cmd_queue():
@@ -674,7 +815,7 @@ RISK_ORDER = ["low", "medium", "high"]
 def auto_merge_blockers(job):
     """Reasons config.json `auto_merge` forbids merging without a human. Empty = may merge.
 
-    Local addition (ReclaimMyTime): the factory auto-merges only low-risk jobs with no
+    Local addition: the factory auto-merges only low-risk jobs with no
     security surface that leave the LLM agent layer alone. Unknown risk never merges.
     """
     policy = CONFIG.get("auto_merge")
@@ -809,6 +950,10 @@ def main(argv):
             cmd_queue()
         elif cmd == "create" and len(args) == 1 and args[0].isdigit():
             cmd_create(args[0])
+        elif cmd == "spawn" and len(args) in (2, 4) and (len(args) == 2 or args[2] == "--model"):
+            cmd_spawn(resolve(args[0]), args[1], args[3] if len(args) == 4 else None, sys.stdin.read())
+        elif cmd == "send" and len(args) == 2:
+            cmd_send(resolve(args[0]), args[1], sys.stdin.read())
         elif cmd == "advance" and len(args) == 2:
             job = advance(sync(resolve(args[0])), args[1])
             save(sync(job))
