@@ -687,6 +687,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
         default: {$ref: '#/components/responses/InternalError'}
 
@@ -959,6 +960,11 @@ components:
           schema: {$ref: '#/components/schemas/Error'}
     ValidationFailed:
       description: Body failed schema or semantic validation.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    TooManyRequests:
+      description: A per-user agent limit refused the request before the stream started (`agent_budget_exceeded`, `agent_turn_in_progress`; see NOTES.md).
       content:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
@@ -1913,7 +1919,7 @@ components:
     # ---------------------------------------------------------------- agent
     AgentMessageRequest:
       type: object
-      description: Full client-held transcript; the last message must have role `user` (else 422).
+      description: Full client-held transcript; the last message must have role `user` (else 422). The `content` lengths of all messages total at most 32,000 characters, counted in Unicode code points (else 422); the client drops the oldest messages to fit.
       required: [messages]
       additionalProperties: false
       properties:

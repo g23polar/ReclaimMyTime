@@ -1,0 +1,30 @@
+{
+  "operation": "postAgentMessage",
+  "method": "POST",
+  "path": "/agent/message",
+  "case": "budget_exceeded",
+  "description": "The user's tokens in the last 24 hours already reached the daily budget: pre-stream 429, the model is not called.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "I don't have my laptop today or tomorrow."
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 429,
+    "body": {
+      "error": {
+        "code": "agent_budget_exceeded",
+        "message": "You've reached today's assistant limit. Try again later."
+      }
+    }
+  }
+}

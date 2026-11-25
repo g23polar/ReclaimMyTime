@@ -79,6 +79,8 @@ Every non-2xx/3xx JSON response uses this shape:
 | 422 | `invalid_period` | Todos v1: `period_start` is not the current or previous period start for the todo's kind (2026-11-24, Todos v1). `details` names the allowed starts |
 | 422 | `invalid_order` | Todos v1: `PUT /todos/order` `ids` is not exactly the open todos of that kind: all daily or weekly todos, or one-offs with `completed_at` null (2026-11-24, Todos v1; owner decision, same day). Done one-offs are excluded |
 | 422 | `gcal_scope_insufficient` | `POST /gcal/complete`: the user did not grant both calendar scopes; the partial grant was discarded (D24; 2026-11-15, T4.1 review) |
+| 429 | `agent_budget_exceeded` | `POST /agent/message`: the user's agent tokens in the last 24 hours (rolling; input + output + cache-write) reached the per-user daily budget. Pre-stream when the budget is already used up; mid-turn it arrives as an SSE `error` event instead, and nothing from the turn is staged. Try again later (issue #3, 2026-11-24) |
+| 429 | `agent_turn_in_progress` | `POST /agent/message`: another turn for this user is still running, on any server. Not queued; retry after it ends. A turn lost with its server frees within 3 minutes (issue #3, 2026-11-24) |
 | 500 | `internal_error` | unexpected |
 | 502 | `gcal_exchange_failed` | `POST /gcal/complete`: Google rejected or did not answer the code exchange, or returned no refresh token or an unusable id_token (D24; 2026-11-15, T4.1 review). **`POST /auth/google/complete`** (T6.0, D26): Google rejected or did not answer the code exchange, or returned an unusable id_token; nothing was created (a missing refresh token or calendar scope is not an error there) |
 | 503 | `agent_unavailable` | LLM upstream down, before the stream starts (otherwise sent as an SSE `error` event) |
@@ -103,9 +105,9 @@ On success the redirect is `reclaimmytime://gcal/callback?result=authorized&auth
 - **Request:** `{"messages": [{role, content, changeset_id?}, …]}`, holding the full transcript the client keeps (the server is stateless).
   - `role` is `user` or `assistant`. `content` is plain text; for assistant turns, use the previous `done.reply` verbatim.
   - The last message must be `user`; otherwise the server returns 422 before the stream starts.
-  - Limits: 200 messages, 8000 characters each. The client trims the oldest messages first.
+  - Limits: 200 messages, 8000 characters each, and 32,000 characters in total (added 2026-11-24, issue #3; over it is 422 `validation_failed` with `path: "messages"`). Characters are Unicode scalars (code points). The client trims the oldest messages first.
   - Optional `changeset_id` on an assistant turn names the changeset that turn produced.
-- **Pre-stream failures** (401/400/422/503) are plain JSON error responses. Once the server sends `200 text/event-stream`, every outcome arrives in the stream.
+- **Pre-stream failures** (401/400/422/429/503) are plain JSON error responses. Once the server sends `200 text/event-stream`, every outcome arrives in the stream.
 - **Framing:** `event: <name>\ndata: <single-line JSON>\n\n`.
   - Comment lines (`: ping`) are heartbeats, sent at least every 15 s; ignore them.
   - There are no `id:` lines and no resume. A dropped connection means the turn is lost: retry the turn.
@@ -121,7 +123,7 @@ On success the redirect is `reclaimmytime://gcal/callback?result=authorized&auth
 - **Exactly one terminal event** (`done` or `error`) ends every stream, and the server then closes it.
 - `done.reply` is authoritative: replace the streamed delta text with it. This also covers a refusal that arrives after some text was already streamed.
 - On `error`, nothing from the turn was staged. Discard the streamed text.
-  - In-stream `error.code` values (additive, M3 2026-11-15): `agent_unavailable` (LLM upstream failed mid-turn, or the turn hit its model-call cap with nothing staged), `changeset_stale` (the pending changeset this turn built on was confirmed, rejected or replaced elsewhere during the turn — or, since T4.2 (2026-11-16), the preferences week changed after the turn read busy time; refetch and retry the turn), `internal_error`. Added 2026-11-15 (T4.2): `gcal_unavailable` and `gcal_reconnect_required`, same meaning as the HTTP codes; a turn reads busy time when it first solves, so these arrive in-stream (before the stream starts they would be the plain 503/409).
+  - In-stream `error.code` values (additive, M3 2026-11-15): `agent_unavailable` (LLM upstream failed mid-turn, or the turn hit its model-call cap with nothing staged), `changeset_stale` (the pending changeset this turn built on was confirmed, rejected or replaced elsewhere during the turn — or, since T4.2 (2026-11-16), the preferences week changed after the turn read busy time; refetch and retry the turn), `internal_error`. Added 2026-11-15 (T4.2): `gcal_unavailable` and `gcal_reconnect_required`, same meaning as the HTTP codes; a turn reads busy time when it first solves, so these arrive in-stream (before the stream starts they would be the plain 503/409). Added 2026-11-24 (issue #3): `agent_budget_exceeded`, the daily token budget ran out between two model calls of the turn (before the stream starts it is the plain 429).
 - The `changeset` in `done` is the only one the user can confirm right now. It may have `plan: null` during onboarding (e.g. a project summary card before preferences exist).
 
 ## Pagination
