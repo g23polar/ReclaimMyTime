@@ -197,7 +197,7 @@ class JobWatchTest(unittest.TestCase):
 class LockedTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
-        self.env = {**os.environ, "RMT_LOCK_DIR": self.dir, "RMT_LOCK_WAIT": "1"}
+        self.env = {**os.environ, "FACTORY_LOCK_DIR": self.dir, "FACTORY_LOCK_WAIT": "1"}
 
     def locked(self, *args):
         return subprocess.run([str(BIN / "locked"), *args], env=self.env, capture_output=True, text=True)
@@ -252,8 +252,32 @@ class LockedTest(unittest.TestCase):
         self.assertEqual(res.returncode, 0)
         self.assertEqual(self.locked("pg", "true").returncode, 0)
 
-    def test_unknown_resource_is_usage_error(self):
-        self.assertEqual(self.locked("db", "true").returncode, 2)
+    def test_default_lock_dir_is_the_same_from_a_worktree(self):
+        mod = load("locked")
+        main = mod.default_lock_dir()
+        self.assertEqual(main.parent, Path.home() / ".local/share/factory-locks")
+        repo = BIN.parents[1]
+        if subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD"], cwd=repo,
+                          capture_output=True).returncode != 0:
+            self.skipTest("no commits yet: can't make a worktree")
+        wt = Path(tempfile.mkdtemp()) / "wt"
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(wt)], cwd=repo, check=True)
+        try:
+            (wt / "factory/bin").mkdir(parents=True, exist_ok=True)  # uncommitted in a fresh install
+            (wt / "factory/bin/locked").write_text((BIN / "locked").read_text())  # this version
+            code = ("import importlib.machinery as m, importlib.util as u;"
+                    f"l=m.SourceFileLoader('l','{wt}/factory/bin/locked');"
+                    "s=u.spec_from_loader('l',l); mod=u.module_from_spec(s); l.exec_module(mod);"
+                    "print(mod.default_lock_dir())")
+            copy = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+            self.assertEqual(copy.stdout.strip(), str(main))
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(wt)], cwd=repo)
+
+    def test_any_resource_name_works_and_bad_names_are_usage_errors(self):
+        self.assertEqual(self.locked("db-main", "true").returncode, 0)
+        for bad in ["DB", "../x", "a b", "-x"]:
+            self.assertEqual(self.locked(bad, "true").returncode, 2, bad)
 
 
 if __name__ == "__main__":

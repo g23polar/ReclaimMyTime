@@ -119,9 +119,12 @@ Each job works in its own git worktree, a full checkout of the repo at
 `.worktrees/<job-id>` (gitignored). A tool run from the repo root that doesn't
 read `.gitignore` sees those copies too; exclude `.worktrees/` in its config.
 
-Orca is a viewing surface only: it shows each job's worktree as a tab (stage and verdicts in the
-tab's status and comment, a `factory` pane running `factory/bin/job-watch`). Orca agents don't
-write code or PRs here; all building goes through the factory.
+Each job's worktree is an Orca tab nested under the main checkout (stage and verdicts in its status
+and comment, a `factory` pane running `factory/bin/job-watch`). Every factory agent runs there as
+its own Claude Code session (`claude --agent <name>`), dispatched by `factory/bin/job spawn` as an
+Orca orchestration worker: the user may open any agent's tab and talk to it. An agent that needs
+the user asks in its own tab and waits; it reports to the orchestrator only with `worker_done`.
+Nothing outside the factory builds code or PRs here.
 
 Local policy (`factory/config.json` `auto_merge`, enforced by `factory/bin/job merge`): the
 factory merges a PR by itself only when intake rated it `low` risk, it has no `security` surface,
