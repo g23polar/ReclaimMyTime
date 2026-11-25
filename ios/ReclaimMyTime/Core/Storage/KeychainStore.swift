@@ -14,7 +14,8 @@ protocol KeychainStoring: Sendable {
 }
 
 /// Generic-password Keychain access for one service. Items are
-/// `kSecAttrAccessibleAfterFirstUnlock` so background refresh (T5.4) can read the session.
+/// `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` so background refresh (T5.4) can read the
+/// session, and a backup never restores them to another device.
 struct KeychainStore: KeychainStoring {
     let service: String
 
@@ -38,7 +39,7 @@ struct KeychainStore: KeychainStoring {
     func write(_ data: Data, account: String) throws {
         let attributes: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
         let updateStatus = SecItemUpdate(baseQuery(account: account) as CFDictionary, attributes as CFDictionary)
         switch updateStatus {

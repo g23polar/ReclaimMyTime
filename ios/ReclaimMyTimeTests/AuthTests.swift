@@ -46,9 +46,25 @@ final class KeychainStoreTests: XCTestCase {
         XCTAssertNoThrow(try store.delete(account: "a"), "deleting a missing item is not an error")
     }
 
-    func testItemsAreAccessibleAfterFirstUnlock() throws {
+    func testItemsAreAccessibleAfterFirstUnlockThisDeviceOnly() throws {
         try store.write(Data("x".utf8), account: "a")
+        XCTAssertEqual(try store.accessibility(account: "a"), kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
+    }
+
+    func testWriteMovesAnOldClassItemToThisDeviceOnly() throws {
+        let seed: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: store.service,
+            kSecAttrAccount as String: "a",
+            kSecValueData as String: Data("old".utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+        ]
+        XCTAssertEqual(SecItemAdd(seed as CFDictionary, nil), errSecSuccess)
         XCTAssertEqual(try store.accessibility(account: "a"), kSecAttrAccessibleAfterFirstUnlock as String)
+
+        try store.write(Data("new".utf8), account: "a")
+        XCTAssertEqual(try store.accessibility(account: "a"), kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
+        XCTAssertEqual(try store.read(account: "a"), Data("new".utf8))
     }
 
     func testServicesAreIsolated() throws {
