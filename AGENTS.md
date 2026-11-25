@@ -74,7 +74,7 @@ factory/bin/locked --max 600 sim env DEVELOPER_DIR=/Applications/Xcode.app/Conte
   -destination 'platform=iOS Simulator,name=iPhone 17'        # ~3 min
 ```
 
-Every checkout on this machine (the main one, factory worktrees, Orca workspaces) shares one test
+Every checkout on this machine (the main one, factory worktrees, Orca terminals) shares one test
 database and one simulator. Run pytest only as `factory/bin/locked pg …`, and xcodebuild or any
 `simctl` sequence only as `factory/bin/locked sim …` (`checks.sh` already does). It waits up to
 10 min for the resource, then exits 75 ("busy", naming the holder): try again later, never bypass it.
@@ -105,26 +105,10 @@ sleep 4 && xcrun simctl io "iPhone 17" screenshot <path>.png
 opens a fixed state; `-MockGcalSync <case>` serves a sync variant. If a new state needs a new
 demo scenario, adding one under `#if DEBUG` is in scope. `ios/DerivedData/` is gitignored.
 
-## Working an issue outside the factory (Orca)
-
-An agent started on a GitHub issue outside `/factory run` (e.g. from Orca's GitHub integration):
-
-1. **Claim it first.** `gh issue view <n> --json labels`. If it's labeled `factory`, stop and say
-   so: the factory owns it. Otherwise `gh issue edit <n> --add-label orca`.
-2. Open a **draft** PR early whose body says `Closes #<n>` (exactly one issue).
-3. Run pytest, xcodebuild and the simulator only through `factory/bin/locked` (above).
-4. When done, `gh pr ready <pr>`. That hands it to the factory, which reviews it (intake, spec,
-   checks, routed reviewers, approver) and merges it under the same auto-merge policy. Never
-   merge it yourself.
-5. Review findings arrive as a prompt in your terminal. Fix them on the same branch, push, keep
-   the PR ready, and end your reply with a last line starting `READY` or `BLOCKED: <reason>`.
-
 ## Software factory
 
 `/factory run` builds every open GitHub issue labeled `factory` through
-intake → spec → build → gate → review → approve, one PR per issue. It also adopts
-the ready PR of every issue labeled `orca` and runs it through the same stages,
-with the Orca agent as the builder. State is in
+intake → spec → build → gate → review → approve, one PR per issue. State is in
 `factory/jobs/` (gitignored); `factory/bin/job` is its only writer. Checks:
 `factory/checks.sh`. Dashboard: `cd factory && python3 -m http.server`, then
 open http://localhost:8000/dashboard.html.
@@ -132,6 +116,10 @@ open http://localhost:8000/dashboard.html.
 Each job works in its own git worktree, a full checkout of the repo at
 `.worktrees/<job-id>` (gitignored). A tool run from the repo root that doesn't
 read `.gitignore` sees those copies too; exclude `.worktrees/` in its config.
+
+Orca is a viewing surface only: it shows each job's worktree as a tab (stage and verdicts in the
+tab's status and comment, a `factory` pane running `factory/bin/job-watch`). Orca agents don't
+write code or PRs here; all building goes through the factory.
 
 Local policy (`factory/config.json` `auto_merge`, enforced by `factory/bin/job merge`): the
 factory merges a PR by itself only when intake rated it `low` risk, it has no `security` surface,

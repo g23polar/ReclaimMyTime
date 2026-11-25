@@ -6,8 +6,7 @@
   "labels": {
     "queue": "factory",
     "needs_info": "factory:needs-info",
-    "needs_human": "factory:needs-human",
-    "orca": "orca"
+    "needs_human": "factory:needs-human"
   },
   "routing": {
     "low": {
