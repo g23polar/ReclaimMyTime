@@ -65,6 +65,7 @@ from app.api.views import changeset_view
 from app.db.agent_turns import AgentTurnRecord, record_agent_turn, tokens_used_since
 from app.db.models import Changeset
 from app.db.models.staged import InvalidMutation, StagedMutation, dump_staged
+from app.db.solve import SolverTimeoutError
 from app.db.turn_leases import acquire_turn_lease, release_turn_lease
 from app.db.write_paths import (
     WritePathError,
@@ -504,9 +505,12 @@ class DbProposer:
         await lock_user(tx, self._user_id)
         if not window.covers(await solve_horizon(tx, self._user_id, staged, self._now)):
             raise StaleBase()  # preferences changed elsewhere since the busy read
-        changeset_id = await propose_changeset(
-            tx, self._user_id, staged, now=self._now, busy=window.intervals
-        )
+        try:
+            changeset_id = await propose_changeset(
+                tx, self._user_id, staged, now=self._now, busy=window.intervals
+            )
+        except SolverTimeoutError as exc:
+            raise TurnAborted(exc.code, exc.message) from None
         view = await changeset_view(tx, self._user_id, changeset_id)
         return view, self._narrate(staged, view)
 
