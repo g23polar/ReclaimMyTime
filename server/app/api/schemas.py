@@ -1,5 +1,7 @@
 """Request bodies that have no counterpart in `app.db.models.staged` (ExceptionDraft,
-BlockAction). Project drafts/patches and preferences reuse the staged models directly."""
+BlockAction), and request-only subclasses of the staged project drafts/patch and preferences
+that add the write-side size caps (issue #4). The staged models stay uncapped so rows stored
+before the caps still parse."""
 
 from __future__ import annotations
 
@@ -8,7 +10,21 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.db.models.staged import Span, Tag, hhmm_to_minute
+from app.db.models.staged import (
+    MAX_TAGS,
+    MAX_WINDOWS_PER_DAY,
+    DeadlineProjectDraft,
+    PerennialProjectDraft,
+    Preferences,
+    ProjectPatch,
+    Span,
+    Tag,
+    hhmm_to_minute,
+)
+
+# The staged models' validators (unique tags, window shape and order) still run on these.
+CappedTags = Annotated[list[Tag], Field(max_length=MAX_TAGS)]
+CappedWeekWindows = dict[str, Annotated[list[list[str]], Field(max_length=MAX_WINDOWS_PER_DAY)]]
 
 
 class _Body(BaseModel):
@@ -25,7 +41,7 @@ class ExceptionDraft(_Body):
     end_date: date
     end_time: str | None = None
     blocks_all: bool = False
-    blocks_tags: list[Tag] = []
+    blocks_tags: CappedTags = []
     reason: Annotated[str, Field(max_length=500)] | None = None
 
     @field_validator("start_time", "end_time")
@@ -41,6 +57,30 @@ class ExceptionDraft(_Body):
         if len(set(v)) != len(v):
             raise ValueError("tags must be unique")
         return v
+
+
+class DeadlineProjectRequest(DeadlineProjectDraft):
+    preferred_windows: CappedWeekWindows | None = None
+    requirements: CappedTags = []
+
+
+class PerennialProjectRequest(PerennialProjectDraft):
+    preferred_windows: CappedWeekWindows | None = None
+    requirements: CappedTags = []
+
+
+ProjectDraftRequest = Annotated[
+    DeadlineProjectRequest | PerennialProjectRequest, Field(discriminator="kind")
+]
+
+
+class ProjectPatchRequest(ProjectPatch):
+    preferred_windows: CappedWeekWindows | None = None
+    requirements: CappedTags | None = None
+
+
+class PreferencesRequest(Preferences):
+    schedulable_windows: CappedWeekWindows
 
 
 class BlockComplete(_Body):

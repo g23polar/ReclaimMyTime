@@ -97,6 +97,11 @@ def validate_timezone(value: str) -> str:
 WeekWindows = Annotated[dict[str, list[list[str]]], Field()]
 Tag = Annotated[str, Field(min_length=1, max_length=40)]
 
+# Write-side caps (issue #4), enforced by the request models (`app.api.schemas`) and the agent
+# tool drafts, not here: stored rows over a cap must still parse.
+MAX_TAGS = 20
+MAX_WINDOWS_PER_DAY = 10
+
 
 def _unique_tags(v: list[str]) -> list[str]:
     if len(set(v)) != len(v):
