@@ -30,6 +30,7 @@ from app.db.write_paths import (
 )
 from app.scheduler import Interval
 from tests.db.conftest import (
+    EXC,
     GRANT,
     HORIZON,
     T0,
@@ -345,3 +346,118 @@ async def test_build_solver_input_dst_week_new_york(maker: Maker, user_id: uuid.
     assert project.deadline == datetime(2026, 11, 2, 5, tzinfo=UTC)  # end of Nov 1, EST
     assert project.remaining_minutes == 120
     assert HORIZON.duration_minutes == 168 * 60  # the LA test week has no transition
+
+
+# ---------------------------------------------------------------- issue #7: tag cap
+
+CAP_MESSAGE = "You can have at most 50 tags."
+
+
+async def _seed_tags(maker: Maker, user: uuid.UUID, total: int) -> None:
+    """Top `user_tags` up to `total` rows directly (staging would refuse first)."""
+    have = (await rows(maker, "SELECT count(*) FROM user_tags WHERE user_id = :u", u=user))[0][0]
+    async with maker() as s, s.begin():
+        for i in range(total - have):
+            await s.execute(
+                text("INSERT INTO user_tags (user_id, tag) VALUES (:u, :t)"),
+                {"u": user, "t": f"t{i:02}"},
+            )
+
+
+async def _tag_count(maker: Maker, user: uuid.UUID) -> int:
+    return (await rows(maker, "SELECT count(*) FROM user_tags WHERE user_id = :u", u=user))[0][0]
+
+
+def _tagged(tags: list[str], pid: uuid.UUID = GRANT) -> dict[str, Any]:
+    m = workout(pid)
+    m["payload"]["project"] |= {"name": "Tagged", "requirements": tags}
+    return m
+
+
+def _tag_exception(tags: list[str], eid: uuid.UUID = EXC) -> dict[str, Any]:
+    m = exception_added(at(2, "00:00"), at(3, "00:00"), eid)
+    m["payload"] |= {"blocks_all": False, "blocks_tags": tags}
+    return m
+
+
+async def test_tag_cap_allows_existing_tags_at_cap(maker: Maker, user_id: uuid.UUID) -> None:
+    await bootstrap(maker, user_id)
+    await _seed_tags(maker, user_id, 50)
+    cs = await propose(maker, user_id, [_tagged(["gym", "t00"]), _tag_exception(["t01"])])
+    await confirm(maker, user_id, cs)
+    assert await _tag_count(maker, user_id) == 50
+    status = "SELECT status::text FROM projects WHERE id = :p"
+    assert await rows(maker, status, p=GRANT) == [("active",)]
+
+
+async def test_tag_cap_allows_existing_tags_over_cap(maker: Maker, user_id: uuid.UUID) -> None:
+    await bootstrap(maker, user_id)
+    await _seed_tags(maker, user_id, 52)
+    cs = await propose(maker, user_id, [_tagged(["t50"]), _tag_exception(["gym"])])
+    await confirm(maker, user_id, cs)
+    assert await _tag_count(maker, user_id) == 52
+
+
+async def _refused_confirm(maker: Maker, user: uuid.UUID, cs: uuid.UUID, count: int) -> None:
+    """The confirm fails as a whole: no tag, project, exception, plan or trace row stored."""
+    with pytest.raises(InvalidMutation) as err:
+        await confirm(maker, user, cs)
+    assert err.value.code == "validation_failed"
+    assert CAP_MESSAGE in err.value.message
+    assert await _tag_count(maker, user) == count
+    assert await rows(maker, "SELECT status::text FROM projects WHERE id = :p", p=GRANT) == [
+        ("staged",)
+    ]
+    assert await rows(maker, "SELECT count(*) FROM availability_exceptions") == [(0,)]
+    assert await rows(maker, "SELECT status::text FROM changesets WHERE id = :c", c=cs) == [
+        ("pending",)
+    ]
+    assert await rows(maker, "SELECT count(*) FROM mutations WHERE changeset_id = :c", c=cs) == [
+        (1,)  # plan_proposed only
+    ]
+
+
+async def test_tag_cap_refuses_a_new_tag_at_confirm(maker: Maker, user_id: uuid.UUID) -> None:
+    await bootstrap(maker, user_id)
+    cs = await propose(maker, user_id, [_tagged(["gym", "new"])])
+    await _seed_tags(maker, user_id, 50)
+    await _refused_confirm(maker, user_id, cs, 50)
+
+
+async def test_tag_cap_refuses_a_changeset_crossing_it_part_way(
+    maker: Maker, user_id: uuid.UUID
+) -> None:
+    await bootstrap(maker, user_id)
+    cs = await propose(maker, user_id, [_tagged(["a", "b"]), _tag_exception(["c"])])
+    await _seed_tags(maker, user_id, 48)  # +2 fits, the exception's +1 does not
+    await _refused_confirm(maker, user_id, cs, 48)
+
+
+async def test_tag_cap_counts_a_repeated_new_tag_once(maker: Maker, user_id: uuid.UUID) -> None:
+    await bootstrap(maker, user_id)
+    await _seed_tags(maker, user_id, 49)
+    cs = await propose(maker, user_id, [_tagged(["new"]), _tag_exception(["new"])])
+    await confirm(maker, user_id, cs)
+    assert await _tag_count(maker, user_id) == 50
+
+
+async def test_tag_cap_refuses_an_over_cap_list_at_staging(
+    maker: Maker, user_id: uuid.UUID
+) -> None:
+    await bootstrap(maker, user_id)
+    await _seed_tags(maker, user_id, 49)
+    pending = "SELECT count(*) FROM changesets WHERE status = 'pending'"
+    for items in ([_tagged(["a", "b"])], [_tagged(["a"]), _tag_exception(["b"])]):
+        with pytest.raises(InvalidMutation) as err:
+            await propose(maker, user_id, items)
+        assert err.value.code == "validation_failed"
+        assert CAP_MESSAGE in err.value.message
+        assert await rows(maker, pending) == [(0,)]
+        assert await rows(maker, "SELECT count(*) FROM projects WHERE id = :p", p=GRANT) == [(0,)]
+    update = {"project_id": str(WORKOUT), "changes": {"requirements": ["gym", "a", "b"]}}
+    with pytest.raises(InvalidMutation):
+        async with maker() as s, s.begin():
+            await stage_changeset(
+                s, user_id, staged({"kind": "project_updated", "payload": update}), now=T0
+            )
+    assert await _tag_count(maker, user_id) == 49

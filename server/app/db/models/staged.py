@@ -96,6 +96,7 @@ def validate_timezone(value: str) -> str:
 
 WeekWindows = Annotated[dict[str, list[list[str]]], Field()]
 Tag = Annotated[str, Field(min_length=1, max_length=40)]
+MAX_USER_TAGS = 50  # issue #7: size of one user's `user_tags` vocabulary
 
 
 def _unique_tags(v: list[str]) -> list[str]:
@@ -403,3 +404,17 @@ def created_project_ids(staged: Sequence[StagedMutation]) -> list[uuid.UUID]:
         if isinstance(m, ProjectCreated) and m.payload.project_id not in ids:
             ids.append(m.payload.project_id)
     return ids
+
+
+def staged_tags(staged: Sequence[StagedMutation]) -> list[str]:
+    """Tags a list would add to the vocabulary once confirmed (project requirements and
+    exception `blocks_tags`), in first-seen order, without duplicates."""
+    tags: list[str] = []
+    for m in staged:
+        if isinstance(m, ProjectCreated):
+            tags.extend(m.payload.project.requirements)
+        elif isinstance(m, ProjectUpdated) and m.payload.changes.requirements is not None:
+            tags.extend(m.payload.changes.requirements)
+        elif isinstance(m, ExceptionAdded):
+            tags.extend(m.payload.blocks_tags)
+    return list(dict.fromkeys(tags))

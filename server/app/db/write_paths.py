@@ -45,6 +45,7 @@ from app.db.models import (
     WeekPlan,
 )
 from app.db.models.staged import (
+    MAX_USER_TAGS,
     ExceptionAdded,
     ExceptionRemoved,
     InvalidMutation,
@@ -58,6 +59,7 @@ from app.db.models.staged import (
     created_project_ids,
     dump_staged,
     parse_staged,
+    staged_tags,
 )
 from app.db.solver_io import (
     PreferencesNotSet,
@@ -429,9 +431,27 @@ async def _get_project(
     ).scalar_one_or_none()
 
 
+async def _vocabulary(tx: AsyncSession, user_id: uuid.UUID) -> set[str]:
+    return set((await tx.execute(select(UserTag.tag).where(UserTag.user_id == user_id))).scalars())
+
+
+def _check_tag_cap(vocabulary: set[str], tags: Sequence[str]) -> None:
+    """Issue #7: refuse a write that adds a tag past `MAX_USER_TAGS`. A write that adds no
+    new tag always passes, so a user already over the cap keeps using their tags."""
+    new = set(tags) - vocabulary
+    if new and len(vocabulary) + len(new) > MAX_USER_TAGS:
+        raise InvalidMutation(
+            "validation_failed",
+            f"new tags {sorted(new)} would exceed the tag limit. "
+            f"You can have at most {MAX_USER_TAGS} tags.",
+        )
+
+
 async def _add_tags(tx: AsyncSession, user_id: uuid.UUID, tags: Sequence[str]) -> None:
     # contracts O3 (assumed): a tag first used by a confirmed write joins the vocabulary.
+    # Counted in this transaction, so earlier mutations of the same confirm count too.
     if tags:
+        _check_tag_cap(await _vocabulary(tx, user_id), tags)
         await tx.execute(
             pg_insert(UserTag)
             .values([{"user_id": user_id, "tag": t} for t in sorted(set(tags))])
@@ -843,6 +863,7 @@ async def stage_changeset(
     new_created = created_project_ids(staged)
 
     # Fail at staging, not at confirm, if the list cannot apply to committed state.
+    _check_tag_cap(await _vocabulary(tx, user_id), staged_tags(staged))
     prefs = overlay(await load_constraint_state(tx, user_id), staged).preferences
     if solver_input is None and prefs is not None:
         # A planless changeset is only for onboarding, before any preferences exist: once a
