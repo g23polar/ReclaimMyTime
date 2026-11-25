@@ -30,6 +30,7 @@ from app.api.deps import (
     validation_failed,
 )
 from app.api.mappers import block_out, ts
+from app.api.rate_limit import LimitWrites
 from app.api.schemas import BLOCK_ACTION_TAGS, BlockAction, BlockComplete, BlockEdit, BlockSkip
 from app.api.staging import manual, stage_request
 from app.auth.dependencies import require_timezone
@@ -43,7 +44,7 @@ router = APIRouter(tags=["blocks"], dependencies=[Depends(require_timezone)])
 _ACTION: TypeAdapter[Any] = TypeAdapter(BlockAction)
 
 
-@router.patch("/blocks/{block_id}", operation_id="patchBlock")
+@router.patch("/blocks/{block_id}", operation_id="patchBlock", dependencies=[LimitWrites])
 async def patch_block(
     user_id: UserId, maker: Maker, now: Now, busy: Busy, block_id: uuid.UUID, body: RawBody
 ) -> JSONResponse:

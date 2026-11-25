@@ -28,6 +28,7 @@ from app.api.deps import (
 )
 from app.api.mappers import project_out
 from app.api.outbox import kick_outbox
+from app.api.rate_limit import LimitWrites
 from app.api.schemas import ProjectDraftRequest, ProjectPatchRequest
 from app.api.staging import manual, stage_request
 from app.auth.dependencies import require_timezone
@@ -80,7 +81,7 @@ async def list_projects(
     return {"projects": [project_out(p) for p in rows]}
 
 
-@router.post("/projects", operation_id="createProject", status_code=202)
+@router.post("/projects", operation_id="createProject", status_code=202, dependencies=[LimitWrites])
 async def create_project(
     user_id: UserId, maker: Maker, now: Now, busy: Busy, body: RawBody
 ) -> JSONResponse:
@@ -103,7 +104,12 @@ async def get_project(user_id: UserId, tx: Tx, now: Now, project_id: uuid.UUID) 
     return project_out(row)
 
 
-@router.patch("/projects/{project_id}", operation_id="updateProject", status_code=202)
+@router.patch(
+    "/projects/{project_id}",
+    operation_id="updateProject",
+    status_code=202,
+    dependencies=[LimitWrites],
+)
 async def update_project(
     request: Request,
     user_id: UserId,
@@ -146,7 +152,12 @@ async def update_project(
     return response
 
 
-@router.delete("/projects/{project_id}", operation_id="archiveProject", status_code=202)
+@router.delete(
+    "/projects/{project_id}",
+    operation_id="archiveProject",
+    status_code=202,
+    dependencies=[LimitWrites],
+)
 async def archive_project(
     user_id: UserId, maker: Maker, now: Now, busy: Busy, project_id: uuid.UUID
 ) -> JSONResponse:

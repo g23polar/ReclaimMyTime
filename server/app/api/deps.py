@@ -5,6 +5,8 @@ Transactions: one per request (`Tx`), committed before the response is sent and 
 on any exception. Authentication runs first in its own short transaction (auth's per-step
 mode), so a request never holds two connections. Routes that must roll back and then write
 again (confirm → `changeset_stale`) take `Maker` and open their own transactions.
+Scheduling write routes also take the per-user write rate limit (`app.api.rate_limit`,
+issue #23) in its own short transaction, committed before the handler's opens.
 
 Test seams on `app.state`: `sessionmaker` (else the process-wide one from app.db.session)
 and `clock` (else the system clock). Tests override `current_user_id` directly.

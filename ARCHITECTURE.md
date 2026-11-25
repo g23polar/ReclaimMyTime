@@ -294,6 +294,20 @@ CREATE TABLE agent_turn_leases (
   token      uuid NOT NULL,          -- identifies the holder; release matches on it
   expires_at timestamptz NOT NULL
 );
+
+-- Per-user write rate limit (migration 0007, issue #23): every scheduling write route
+-- (projects, preferences, exceptions, pins, blocks, changeset confirm/reject, todos) takes a
+-- slot before it does any work; 60 per user per 60 s by default (WRITE_RATE_LIMIT,
+-- WRITE_RATE_WINDOW_SECONDS), shared across the routes and every server process. Fixed windows
+-- aligned to the Unix epoch, one row per user: a single atomic upsert restarts `count` at 1
+-- when `window_start` is older than the current window, else increments it while it is below
+-- the limit. A refused write (429 `rate_limited`, `Retry-After` = seconds to the window end)
+-- writes nothing. Written only by app.db.write_rate.
+CREATE TABLE write_rate_counters (
+  user_id      uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  window_start timestamptz NOT NULL,  -- start of the user's current window
+  count        integer NOT NULL       -- writes accepted in it
+);
 ```
 
 ### Semantics
