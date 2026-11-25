@@ -194,6 +194,13 @@ async def _(ctx: Ctx) -> None:
     assert "target_date" in {f["path"] for f in body["error"]["details"]["fields"]}
 
 
+@case("post_projects__too_many_tags.json")
+async def _(ctx: Ctx) -> None:
+    await onboarded(ctx)
+    body = await ctx.call("POST", "/projects", ctx.body)
+    assert [f["path"] for f in body["error"]["details"]["fields"]] == ["requirements"]
+
+
 @case("patch_projects_id__weekly_target.json")
 async def _(ctx: Ctx) -> None:
     await onboarded(ctx)
@@ -280,6 +287,13 @@ async def _(ctx: Ctx) -> None:
     assert_staged(body, "preferences_updated")
     assert body["diff"]["against_plan_id"] is None
     assert body["diff"]["entries"] and {e["change"] for e in body["diff"]["entries"]} == {"added"}
+
+
+@case("put_preferences__too_many_windows.json")
+async def _(ctx: Ctx) -> None:
+    await onboarded(ctx)
+    body = await ctx.call("PUT", "/preferences", ctx.body)
+    assert [f["path"] for f in body["error"]["details"]["fields"]] == ["schedulable_windows.wed"]
 
 
 # ---------------------------------------------------------------- exceptions

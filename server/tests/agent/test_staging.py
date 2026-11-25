@@ -1,14 +1,18 @@
 """T3.1: per-turn label resolution, local→absolute conversion, tag vocabulary, discard."""
 
 import itertools
+import json
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
 
+from app.agent.schemas import TOOL_INPUTS, strict_schema, tool_definitions
 from app.agent.staging import ToolError, TurnInputs, TurnStaging, normalize_tag
 from app.db.models.staged import (
+    MAX_TAGS,
+    MAX_WINDOWS_PER_DAY,
     ExceptionAdded,
     PinAdded,
     PreferencesUpdated,
@@ -371,10 +375,6 @@ def test_near_duplicate_new_tag_rejected():
         _turn().call("stage_project_create", _create(new_tags=["Deep Work"]))
 
 
-def _tags(n):
-    return [f"tag{i:02}" for i in range(n)]
-
-
 def test_new_tag_past_the_tag_cap_rejected():
     t = _turn(vocabulary=_tags(50))
     with pytest.raises(ToolError, match="at most 50 tags") as err:
@@ -385,8 +385,8 @@ def test_new_tag_past_the_tag_cap_rejected():
 
 def test_existing_tags_at_the_tag_cap_accepted():
     t = _turn(vocabulary=_tags(50))
-    t.call("stage_project_create", _create(requirements=["tag00", "tag49"]))
-    assert t.mutations[0].payload.project.requirements == ["tag00", "tag49"]
+    t.call("stage_project_create", _create(requirements=["tag-00", "tag-49"]))
+    assert t.mutations[0].payload.project.requirements == ["tag-00", "tag-49"]
 
 
 def test_two_new_tags_past_the_tag_cap_rejected():
@@ -567,3 +567,139 @@ def test_near_duplicate_new_tags_in_one_call_rejected():
     with pytest.raises(ToolError, match="tag 'Deep Writing' duplicates tag 'deep-writing'"):
         t.call("stage_project_create", _create(new_tags=["deep-writing", "Deep Writing"]))
     assert t.staged == []
+
+
+# ---------------------------------------------------------------- size caps (issue #4)
+
+
+def _tags(n, prefix="tag"):
+    return [f"{prefix}-{i:02d}" for i in range(n)]
+
+
+def _windows(n):
+    return [{"start": f"{8 + i:02d}:00", "end": f"{8 + i:02d}:30"} for i in range(n)]
+
+
+def _exception(blocks_tags):
+    return {
+        "start": _at("2026-11-18", "09:00"),
+        "end": _at("2026-11-18", "10:00"),
+        "blocks_all": False,
+        "blocks_tags": blocks_tags,
+        "reason": None,
+        "interpretation": "x",
+    }
+
+
+def _preferences(windows):
+    return {
+        "schedulable_windows": windows,
+        "schedulable_windows_set": True,
+        "day_diversity": None,
+        "buffer_minutes": None,
+        "week_start": None,
+        "interpretation": "x",
+    }
+
+
+def _refused(t, name, raw, match):
+    with pytest.raises(ToolError, match=match):
+        t.call(name, raw)
+    assert t.staged == [] and not t.changed
+
+
+def test_create_tag_cap_applies_to_the_merged_list():
+    vocabulary = _tags(MAX_TAGS)
+    t = _turn(vocabulary=vocabulary)
+    # 15 + 6 is over the cap although each list is within it.
+    over = _create(requirements=vocabulary[:15], new_tags=_tags(6, "new"))
+    _refused(t, "stage_project_create", over, f"requirements: at most {MAX_TAGS} tags")
+    t.call("stage_project_create", _create(requirements=vocabulary[:15], new_tags=_tags(5, "new")))
+    assert len(t.mutations[0].payload.project.requirements) == MAX_TAGS
+
+
+def test_create_tag_cap_on_requirements_alone():
+    vocabulary = _tags(MAX_TAGS + 1)
+    t = _turn(vocabulary=vocabulary)
+    _refused(t, "stage_project_create", _create(requirements=vocabulary), "at most 20 tags")
+    t.call("stage_project_create", _create(requirements=vocabulary[:MAX_TAGS]))
+    assert len(t.mutations[0].payload.project.requirements) == MAX_TAGS
+
+
+def test_update_tag_cap_counts_the_projects_current_tags():
+    t = _turn()  # P1 (THESIS) already has deep-work
+    over = _update(new_tags=_tags(MAX_TAGS))
+    _refused(t, "stage_project_update", over, f"requirements: at most {MAX_TAGS} tags")
+    t.call("stage_project_update", _update(new_tags=_tags(MAX_TAGS - 1)))
+    assert t.mutations[0].payload.changes.requirements == ["deep-work", *_tags(MAX_TAGS - 1)]
+
+
+def test_update_tag_cap_on_replaced_list():
+    vocabulary = _tags(MAX_TAGS)
+    t = _turn(vocabulary=vocabulary)
+    over = _update(requirements=vocabulary, requirements_set=True, new_tags=["extra"])
+    _refused(t, "stage_project_update", over, "at most 20 tags")
+    t.call("stage_project_update", _update(requirements=vocabulary, requirements_set=True))
+    assert t.mutations[0].payload.changes.requirements == vocabulary
+
+
+def test_exception_blocks_tags_cap():
+    vocabulary = _tags(MAX_TAGS + 1)
+    t = _turn(vocabulary=vocabulary)
+    _refused(t, "stage_exception_add", _exception(vocabulary), "blocks_tags: List should have at")
+    t.call("stage_exception_add", _exception(vocabulary[:MAX_TAGS]))
+    assert len(t.mutations[0].payload.blocks_tags) == MAX_TAGS
+
+
+@pytest.mark.parametrize(
+    ("name", "build", "field"),
+    [
+        ("stage_project_create", lambda w: _create(preferred_windows=w), "preferred_windows"),
+        (
+            "stage_project_update",
+            lambda w: _update(preferred_windows=w, preferred_windows_set=True),
+            "preferred_windows",
+        ),
+        ("stage_preferences", _preferences, "schedulable_windows"),
+    ],
+)
+def test_window_cap_per_day(name, build, field):
+    t = _turn()
+    over = {**ALL_DAYS, "wed": _windows(MAX_WINDOWS_PER_DAY + 1)}
+    _refused(t, name, build(over), rf"{field}\.wed: List should have at most 10 items")
+    t.call(name, build({**ALL_DAYS, "wed": _windows(MAX_WINDOWS_PER_DAY)}))
+    assert len(t.staged) == 1
+
+
+def test_preference_windows_copied_from_state_are_not_checked():
+    prefs = _prefs()
+    over = {"wed": [[w["start"], w["end"]] for w in _windows(MAX_WINDOWS_PER_DAY + 1)]}
+    t = TurnStaging(
+        TurnInputs(
+            committed=_state(
+                PreferencesState(
+                    timezone=prefs.timezone,
+                    schedulable_windows=over,
+                    day_diversity=prefs.day_diversity,
+                    buffer_minutes=prefs.buffer_minutes,
+                    week_start=prefs.week_start,
+                )
+            ),
+            project_ids=[THESIS, GYM],
+            exception_ids=[EXC],
+            pin_ids=[PIN],
+            vocabulary=[],
+            pending=[],
+            timezone=TZ,
+        ),
+        new_id=_ids(),
+    )
+    t.call("stage_preferences", _preferences(None) | {"buffer_minutes": 5})
+    copied = t.mutations[0].payload.preferences.schedulable_windows["wed"]
+    assert len(copied) == MAX_WINDOWS_PER_DAY + 1
+
+
+def test_tool_definitions_have_no_max_items():
+    for draft, _ in TOOL_INPUTS.values():
+        assert "maxItems" not in json.dumps(strict_schema(draft)), draft.__name__
+    assert "maxItems" not in json.dumps(tool_definitions())

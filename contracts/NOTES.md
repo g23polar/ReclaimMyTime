@@ -28,6 +28,7 @@ Files: `openapi.yaml` (OpenAPI 3.1), `fixtures/*.json` (one or more per operatio
   - Keys are `mon`…`sun`. An absent key means `[]`.
   - Each window is `[start, end)` local `HH:MM`, and `"24:00"` is allowed only as an end.
   - Windows can't cross midnight (split them instead). Windows within a day are sorted and non-overlapping (checked by the server).
+- Size limits: at most 20 tags in `requirements`/`blocks_tags` (`TagList`) and at most 10 windows per weekday (`DayWindows`) (added 2026-11-25, issue #4). They are enforced on writes: REST bodies and agent tool calls. Over a cap is 422 `validation_failed` naming the field, e.g. `path: "requirements"`, `"blocks_tags"`, `"preferred_windows.mon"` or `"schedulable_windows.wed"`; an agent tool call over a cap gets a tool error and stages nothing. Rows stored before the caps are deliberately still served as they are, so a response may exceed them.
 - Clients send absolute times in exactly one place: `PATCH /blocks/{id}` with `action: edit`. Everywhere else, drafts carry local dates and times only (ARCH §5).
 
 ## Staging model (propose → confirm)

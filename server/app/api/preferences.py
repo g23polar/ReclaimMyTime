@@ -13,16 +13,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.busy import Busy
 from app.api.deps import Maker, Now, RawBody, Tx, UserId, parse_body
 from app.api.mappers import preferences_out
+from app.api.schemas import PreferencesRequest
 from app.api.staging import manual, stage_request
 from app.auth.dependencies import require_timezone
 from app.db.models import UserPreferences
-from app.db.models.staged import Preferences, StagedMutation
+from app.db.models.staged import StagedMutation
 from app.db.write_paths import sweep_past_blocks
 from app.errors import AppError
 
 router = APIRouter(tags=["preferences"], dependencies=[Depends(require_timezone)])
 
-_PREFS: TypeAdapter[Preferences] = TypeAdapter(Preferences)
+_PREFS: TypeAdapter[PreferencesRequest] = TypeAdapter(PreferencesRequest)
 
 
 @router.get("/preferences", operation_id="getPreferences")

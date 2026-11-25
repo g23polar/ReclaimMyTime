@@ -20,6 +20,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.db.models.staged import MAX_TAGS, MAX_WINDOWS_PER_DAY
+
 # Keywords strict tool use does not support. Pydantic still enforces them on validation.
 _UNSUPPORTED = frozenset(
     {
@@ -60,13 +62,13 @@ class Window(_Draft):
 class WeekWindows(_Draft):
     """Local wall-clock windows per weekday; an empty list means none that day."""
 
-    mon: list[Window]
-    tue: list[Window]
-    wed: list[Window]
-    thu: list[Window]
-    fri: list[Window]
-    sat: list[Window]
-    sun: list[Window]
+    mon: list[Window] = Field(max_length=MAX_WINDOWS_PER_DAY)
+    tue: list[Window] = Field(max_length=MAX_WINDOWS_PER_DAY)
+    wed: list[Window] = Field(max_length=MAX_WINDOWS_PER_DAY)
+    thu: list[Window] = Field(max_length=MAX_WINDOWS_PER_DAY)
+    fri: list[Window] = Field(max_length=MAX_WINDOWS_PER_DAY)
+    sat: list[Window] = Field(max_length=MAX_WINDOWS_PER_DAY)
+    sun: list[Window] = Field(max_length=MAX_WINDOWS_PER_DAY)
 
 
 class LocalTime(_Draft):
@@ -164,8 +166,9 @@ class StageExceptionAdd(_Draft):
     end: LocalTime = Field(description="Exclusive end.")
     blocks_all: bool = Field(description="true = no work at all in this span.")
     blocks_tags: list[str] = Field(
+        max_length=MAX_TAGS,
         description="If blocks_all is false: the tags (existing vocabulary) that cannot be "
-        "scheduled in this span."
+        "scheduled in this span.",
     )
     reason: str | None = Field(max_length=200, description="Short reason, if the user gave one.")
     interpretation: str = Field(min_length=1, description=INTERPRETATION)

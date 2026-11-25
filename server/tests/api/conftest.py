@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.loop import drain_traces
 from app.api import install
 from app.api.deps import current_user_id
 from app.auth.crypto import TokenCipher
@@ -84,6 +85,9 @@ async def app(
     registry = getattr(application.state, "gcal_outbox", None)
     if registry is not None:
         await registry.idle(30)
+    # Agent trace writes and turn-lease releases run detached from the request; an in-flight
+    # one deadlocks with the schema's DROP. Let them finish first.
+    await drain_traces()
 
 
 @pytest.fixture
