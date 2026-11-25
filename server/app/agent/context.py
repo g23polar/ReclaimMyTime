@@ -135,6 +135,7 @@ async def load_turn(
             vocabulary=vocabulary,
             pending=pending_staged,
             timezone=timezone,
+            now=now,
         )
 
     pending_id = None if pending is None else pending.id

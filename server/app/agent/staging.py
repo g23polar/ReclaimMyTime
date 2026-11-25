@@ -17,6 +17,7 @@ import re
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -48,6 +49,7 @@ from app.db.models.staged import (
     ProjectCreated,
     ProjectUpdated,
     StagedMutation,
+    check_row_caps,
     hhmm_to_minute,
     parse_staged,
 )
@@ -76,13 +78,19 @@ class TurnInputs:
     vocabulary: Sequence[str]
     pending: Sequence[StagedMutation]
     timezone: str  # committed preferences' timezone, else the request's X-Timezone
+    now: datetime
 
 
 class TurnStaging:
     def __init__(self, inputs: TurnInputs, *, new_id: Callable[[], uuid.UUID] = uuid.uuid4) -> None:
         self._committed = inputs.committed
         self._timezone = inputs.timezone
+        self._now = inputs.now
         self._new_id = new_id
+        # Issue #24: the committed rows in use, counted against the per-user caps.
+        self._in_use_projects = [uuid.UUID(i) for i in inputs.project_ids]
+        self._in_use_exceptions = [uuid.UUID(i) for i in inputs.exception_ids]
+        self._in_use_pins = [uuid.UUID(i) for i in inputs.pin_ids]
         self._vocabulary = list(inputs.vocabulary)
         self._next = {"P": 1, "E": 1, "N": 1, "S": 1}
         self.projects: dict[str, str] = {}
@@ -330,6 +338,13 @@ class TurnStaging:
         raw = {"kind": kind, "source": "agent", "interpretation": interpretation}
         m = parse_staged([{**raw, "payload": payload}])[0]
         overlay(self._committed, [*self.mutations, m])
+        check_row_caps(
+            projects=self._in_use_projects,
+            exceptions=self._in_use_exceptions,
+            pins=self._in_use_pins,
+            staged=[*self.mutations, m],
+            now=self._now,
+        )
         label = self._label("S")
         self.staged.append((label, m))
         self.changed = True

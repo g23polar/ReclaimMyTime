@@ -12,6 +12,9 @@ from app.agent.schemas import TOOL_INPUTS, strict_schema, tool_definitions
 from app.agent.staging import ToolError, TurnInputs, TurnStaging, normalize_tag
 from app.db.models.staged import (
     MAX_TAGS,
+    MAX_USER_EXCEPTIONS,
+    MAX_USER_PINS,
+    MAX_USER_PROJECTS,
     MAX_WINDOWS_PER_DAY,
     ExceptionAdded,
     PinAdded,
@@ -30,6 +33,7 @@ from app.db.solver_io import (
 from app.scheduler.models import Interval
 
 TZ = "America/Los_Angeles"
+NOW = datetime(2026, 11, 16, 14, tzinfo=UTC)  # Mon 06:00 local
 THESIS = "11111111-1111-1111-1111-111111111111"
 GYM = "22222222-2222-2222-2222-222222222222"
 EXC = "33333333-3333-3333-3333-333333333333"
@@ -90,16 +94,25 @@ def _state(prefs: PreferencesState | None = None) -> ConstraintState:
     )
 
 
-def _turn(*, prefs=True, pending=(), vocabulary=("deep-work", "outdoors")) -> TurnStaging:
+def _turn(
+    *,
+    prefs=True,
+    pending=(),
+    vocabulary=("deep-work", "outdoors"),
+    project_ids=(THESIS, GYM),
+    exception_ids=(EXC,),
+    pin_ids=(PIN,),
+) -> TurnStaging:
     return TurnStaging(
         TurnInputs(
             committed=_state(_prefs() if prefs else None),
-            project_ids=[THESIS, GYM],
-            exception_ids=[EXC],
-            pin_ids=[PIN],
+            project_ids=list(project_ids),
+            exception_ids=list(exception_ids),
+            pin_ids=list(pin_ids),
             vocabulary=list(vocabulary),
             pending=list(pending),
             timezone=TZ,
+            now=NOW,
         ),
         new_id=_ids(),
     )
@@ -406,6 +419,87 @@ def test_tag_cap_counts_tags_staged_earlier_in_the_turn():
     assert len(t.staged) == 2
 
 
+# ---------------------------------------------------------------- issue #24: row caps
+
+
+def _filled(first: tuple[str, ...], total: int) -> list[str]:
+    return [*first, *(str(uuid.uuid4()) for _ in range(total - len(first)))]
+
+
+def _exception_add(day="2026-11-18"):
+    return {
+        "start": _at(day, "09:00"),
+        "end": _at(day, "10:00"),
+        "blocks_all": True,
+        "blocks_tags": [],
+        "reason": None,
+        "interpretation": "x",
+    }
+
+
+def _pin_add(kind="forbid", day="2026-11-18"):
+    return {
+        "kind": kind,
+        "project": "P1" if kind == "pin" else None,
+        "start": _at(day, "12:00"),
+        "end": _at(day, "13:00"),
+        "interpretation": "x",
+    }
+
+
+ROW_CAPS = [
+    ("project_ids", "stage_project_create", _create, "at most 100 projects", MAX_USER_PROJECTS),
+    (
+        "exception_ids",
+        "stage_exception_add",
+        _exception_add,
+        "at most 200 upcoming exceptions",
+        MAX_USER_EXCEPTIONS,
+    ),
+    ("pin_ids", "stage_pin_add", _pin_add, "at most 200 upcoming pins", MAX_USER_PINS),
+    ("pin_ids", "stage_pin_add", lambda: _pin_add("pin"), "at most 200 upcoming", MAX_USER_PINS),
+]
+REMOVE = {
+    "project_ids": ("stage_project_archive", {"project": "P2", "interpretation": "x"}),
+    "exception_ids": ("stage_exception_remove", {"exception": "E1", "interpretation": "x"}),
+    "pin_ids": ("stage_pin_remove", {"pin": "N1", "interpretation": "x"}),
+}
+FIRST = {"project_ids": (THESIS, GYM), "exception_ids": (EXC,), "pin_ids": (PIN,)}
+
+
+@pytest.mark.parametrize(("ids", "tool", "build", "message", "cap"), ROW_CAPS)
+def test_add_at_a_row_cap_is_a_tool_error(ids, tool, build, message, cap):
+    t = _turn(**{ids: _filled(FIRST[ids], cap)})
+    t.call("stage_project_update", _update(max_block_minutes=30))  # already staged: kept
+    before = list(t.staged)
+    with pytest.raises(ToolError, match=message) as err:
+        t.call(tool, build())
+    assert "to add another" in str(err.value)
+    assert t.staged == before
+
+
+@pytest.mark.parametrize(("ids", "tool", "build", "message", "cap"), ROW_CAPS)
+def test_remove_then_add_at_a_row_cap_is_accepted(ids, tool, build, message, cap):
+    t = _turn(**{ids: _filled(FIRST[ids], cap)})
+    t.call(*REMOVE[ids])
+    t.call(tool, build())
+    assert len(t.staged) == 2
+
+
+@pytest.mark.parametrize(
+    ("ids", "tool", "build"),
+    [
+        ("exception_ids", "stage_exception_add", lambda: _exception_add("2026-11-02")),
+        ("pin_ids", "stage_pin_add", lambda: _pin_add(day="2026-11-02")),
+    ],
+)
+def test_add_that_already_ended_is_not_counted(ids, tool, build):
+    cap = MAX_USER_EXCEPTIONS if ids == "exception_ids" else MAX_USER_PINS
+    t = _turn(**{ids: _filled(FIRST[ids], cap)})
+    t.call(tool, build())
+    assert len(t.staged) == 1
+
+
 def test_update_new_tags_extend_current_requirements():
     t = _turn()
     t.call("stage_project_update", _update(new_tags=["writing"]))
@@ -691,6 +785,7 @@ def test_preference_windows_copied_from_state_are_not_checked():
             vocabulary=[],
             pending=[],
             timezone=TZ,
+            now=NOW,
         ),
         new_id=_ids(),
     )
