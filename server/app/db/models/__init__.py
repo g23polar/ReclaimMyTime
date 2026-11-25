@@ -12,6 +12,7 @@ from app.db.models.intent import (
 )
 from app.db.models.plans import Block, Changeset, Mutation, WeekPlan
 from app.db.models.todos import Todo, TodoCompletion
+from app.db.models.write_rate import WriteRateCounter
 
 __all__ = [
     "AgentTurnLease",
@@ -32,4 +33,5 @@ __all__ = [
     "UserSession",
     "UserTag",
     "WeekPlan",
+    "WriteRateCounter",
 ]

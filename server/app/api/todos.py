@@ -28,6 +28,7 @@ from app.api.deps import (
     validation_failed,
 )
 from app.api.mappers import todo_out
+from app.api.rate_limit import LimitWrites
 from app.auth.dependencies import require_timezone
 from app.db import todos as repo
 from app.db.models import UserPreferences
@@ -157,7 +158,7 @@ async def list_todos(
     return _list_payload(states, cal)
 
 
-@router.post("/todos", operation_id="createTodo", status_code=201)
+@router.post("/todos", operation_id="createTodo", status_code=201, dependencies=[LimitWrites])
 async def create_todo(
     user_id: UserId, tx: Tx, now: Now, tz: DeviceTz, body: RawBody
 ) -> dict[str, Any]:
@@ -187,7 +188,7 @@ async def create_todo(
     return todo_out(state)
 
 
-@router.put("/todos/order", operation_id="reorderTodos")
+@router.put("/todos/order", operation_id="reorderTodos", dependencies=[LimitWrites])
 async def reorder_todos(
     user_id: UserId, tx: Tx, now: Now, tz: DeviceTz, body: RawBody
 ) -> dict[str, Any]:
@@ -208,7 +209,7 @@ async def reorder_todos(
     return _list_payload(states, cal)
 
 
-@router.patch("/todos/{todo_id}", operation_id="updateTodo")
+@router.patch("/todos/{todo_id}", operation_id="updateTodo", dependencies=[LimitWrites])
 async def update_todo(
     user_id: UserId, tx: Tx, now: Now, tz: DeviceTz, todo_id: uuid.UUID, body: RawBody
 ) -> dict[str, Any]:
@@ -255,7 +256,9 @@ async def update_todo(
     return todo_out(updated)
 
 
-@router.delete("/todos/{todo_id}", operation_id="deleteTodo", status_code=204)
+@router.delete(
+    "/todos/{todo_id}", operation_id="deleteTodo", status_code=204, dependencies=[LimitWrites]
+)
 async def delete_todo(user_id: UserId, tx: Tx, todo_id: uuid.UUID) -> Response:
     if not await repo.delete_todo(tx, user_id, todo_id):
         raise not_found("todo", todo_id)
@@ -300,6 +303,7 @@ async def _period_target(
 @router.put(
     "/todos/{todo_id}/completions/{period_start}",
     operation_id="completeTodoPeriod",
+    dependencies=[LimitWrites],
 )
 async def complete_todo_period(
     user_id: UserId,
@@ -317,6 +321,7 @@ async def complete_todo_period(
 @router.delete(
     "/todos/{todo_id}/completions/{period_start}",
     operation_id="uncompleteTodoPeriod",
+    dependencies=[LimitWrites],
 )
 async def uncomplete_todo_period(
     user_id: UserId,

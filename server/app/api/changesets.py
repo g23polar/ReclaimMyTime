@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.api.busy import Busy, BusyWindow, fetch_window
 from app.api.deps import Maker, Now, UserId, transaction
 from app.api.outbox import kick_outbox
+from app.api.rate_limit import LimitWrites
 from app.api.views import changeset_view
 from app.auth.dependencies import require_timezone
 from app.db.models import Changeset, WeekPlan
@@ -46,7 +47,11 @@ from app.scheduler import Interval
 router = APIRouter(tags=["changesets"], dependencies=[Depends(require_timezone)])
 
 
-@router.post("/changesets/{changeset_id}/confirm", operation_id="confirmChangeset")
+@router.post(
+    "/changesets/{changeset_id}/confirm",
+    operation_id="confirmChangeset",
+    dependencies=[LimitWrites],
+)
 async def confirm(
     request: Request,
     user_id: UserId,
@@ -173,7 +178,9 @@ async def _restage(
         )
 
 
-@router.post("/changesets/{changeset_id}/reject", operation_id="rejectChangeset")
+@router.post(
+    "/changesets/{changeset_id}/reject", operation_id="rejectChangeset", dependencies=[LimitWrites]
+)
 async def reject(
     request: Request, user_id: UserId, maker: Maker, now: Now, changeset_id: uuid.UUID
 ) -> dict[str, Any]:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
 
 import httpx
@@ -16,6 +17,7 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.api.rate_limit import WriteRateSettings
 from app.db.models.staged import MAX_USER_PROJECTS
 from tests.api.conftest import NOW, SettableClock, future_block, started_block
 from tests.api.contract import assert_conforms, in_scope_fixtures, load_fixture
@@ -304,6 +306,19 @@ async def _(ctx: Ctx) -> None:
     await onboarded(ctx)
     body = await ctx.call("PUT", "/preferences", ctx.body)
     assert [f["path"] for f in body["error"]["details"]["fields"]] == ["schedulable_windows.wed"]
+
+
+@case("put_preferences__rate_limited.json")
+async def _(ctx: Ctx) -> None:
+    await onboarded(ctx)
+    assert ctx.app is not None
+    ctx.app.state.write_rate_settings = WriteRateSettings(limit=1)
+    ctx.clock.current = NOW + timedelta(seconds=15)  # 45 s before the window ends
+    assert (await ctx.client.put("/preferences", json=ctx.body)).status_code == 202
+    resp = await ctx.client.put("/preferences", json=ctx.body)
+    body = ctx.expect(resp)
+    assert body["error"]["message"] == "Too many changes at once. Try again in a moment."
+    assert resp.headers["Retry-After"] == ctx.fixture["response"]["headers"]["Retry-After"]
 
 
 # ---------------------------------------------------------------- exceptions

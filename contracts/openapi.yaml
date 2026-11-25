@@ -221,6 +221,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
         default: {$ref: '#/components/responses/InternalError'}
 
@@ -265,6 +266,7 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
         default: {$ref: '#/components/responses/InternalError'}
     delete:
@@ -277,6 +279,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
         default: {$ref: '#/components/responses/InternalError'}
 
@@ -314,6 +317,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
         default: {$ref: '#/components/responses/InternalError'}
 
@@ -354,6 +358,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
         default: {$ref: '#/components/responses/InternalError'}
 
@@ -384,6 +389,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
         default: {$ref: '#/components/responses/InternalError'}
 
@@ -463,6 +469,7 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
         default: {$ref: '#/components/responses/InternalError'}
 
@@ -504,6 +511,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
         default: {$ref: '#/components/responses/InternalError'}
 
@@ -551,6 +559,7 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/InternalError'}
 
   /todos/order:
@@ -577,6 +586,7 @@ paths:
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/InternalError'}
 
   /todos/{todo_id}:
@@ -607,6 +617,7 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/InternalError'}
     delete:
       operationId: deleteTodo
@@ -617,6 +628,7 @@ paths:
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/InternalError'}
 
   /todos/{todo_id}/completions/{period_start}:
@@ -640,6 +652,7 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/InternalError'}
     delete:
       operationId: uncompleteTodoPeriod
@@ -656,6 +669,7 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/InternalError'}
 
   # ------------------------------------------------------------------ agent
@@ -713,6 +727,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
         default: {$ref: '#/components/responses/InternalError'}
 
@@ -737,6 +752,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/InternalError'}
 
   # ------------------------------------------------------------------ gcal
@@ -864,6 +880,9 @@ paths:
         read; what was written stays written, the rest stays pending, and no Google edit is
         applied when the busy read fails; retry later). 2026-11-16 (T4.3b): the same two
         errors now also come from the ingest and drift steps.
+        2026-11-25 (issue #22): 503 `solver_timeout` when a solve in the ingest or drift step
+        runs out of time; nothing from those steps is applied or staged, what the drain wrote
+        stays written; retry.
       parameters: [{$ref: '#/components/parameters/XTimezone'}]
       responses:
         '200':
@@ -964,7 +983,16 @@ components:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
     TooManyRequests:
-      description: A per-user agent limit refused the request before the stream started (`agent_budget_exceeded`, `agent_turn_in_progress`; see NOTES.md).
+      description: |
+        A per-user limit refused the request. On `POST /agent/message`, an agent limit before the stream started (`agent_budget_exceeded`, `agent_turn_in_progress`). On the scheduling write endpoints, the per-user write rate limit (`rate_limited`), with `Retry-After`; nothing was staged or applied. See NOTES.md.
+      headers:
+        Retry-After:
+          description: Seconds until the write rate window ends and a retry can succeed. Sent with `rate_limited` only.
+          required: false
+          schema:
+            anyOf:
+              - {type: integer, minimum: 1}
+              - {type: string, pattern: '^[1-9][0-9]*$'}
       content:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}

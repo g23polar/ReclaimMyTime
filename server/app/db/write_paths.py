@@ -62,6 +62,7 @@ from app.db.models.staged import (
     parse_staged,
     staged_tags,
 )
+from app.db.solve import solve
 from app.db.solver_io import (
     PreferencesNotSet,
     SourceBlock,
@@ -83,7 +84,6 @@ from app.scheduler import (
     SolverInput,
     SolverOutput,
     Violation,
-    pack,
     verify,
 )
 
@@ -1067,7 +1067,7 @@ async def propose_changeset(
         horizon = expected_horizon(now, tz, state.preferences.week_start)
     solver_input = await build_solver_input(tx, user_id, horizon, now, tz, staged=staged, busy=busy)
     previous = await load_previous(tx, user_id, horizon, now)
-    solver_output = pack(solver_input, previous)
+    solver_output = await solve(solver_input, previous)
     return await stage_changeset(
         tx,
         user_id,
@@ -1148,19 +1148,19 @@ async def _stale_check(
         if str(b.lineage_id) not in frozen_lineages
     ]
 
-    async def solve(with_busy: Sequence[Interval]) -> tuple[SolverInput, SolverOutput]:
+    async def resolve(with_busy: Sequence[Interval]) -> tuple[SolverInput, SolverOutput]:
         inp = await build_solver_input(
             tx, user_id, horizon, now, plan.timezone, staged=staged, busy=with_busy
         )
-        return inp, pack(inp, stored_new)
+        return inp, await solve(inp, stored_new)
 
     fresh_busy = None if busy is None else clip_intervals(busy, horizon)
     if fresh_busy is not None and any(
         b.span.start >= now and any(iv.overlaps(b.span) for iv in fresh_busy) for b in stored_new
     ):
-        raise ChangesetStale(*await solve(fresh_busy), "calendar busy time overlaps the proposal")
+        raise ChangesetStale(*await resolve(fresh_busy), "calendar busy time overlaps the proposal")
 
-    fresh_input, fresh_output = await solve(stored_input.busy)
+    fresh_input, fresh_output = await resolve(stored_input.busy)
 
     def frozen_key(inp: SolverInput) -> list[tuple[str, str, Any, Any]]:
         return sorted((f.lineage_id, f.project_id, f.span.start, f.span.end) for f in inp.frozen)
@@ -1174,7 +1174,7 @@ async def _stale_check(
         reason = "re-solve differs from the proposal"
     if reason is not None:
         if fresh_busy is not None and fresh_busy != stored_input.busy:
-            fresh_input, fresh_output = await solve(fresh_busy)
+            fresh_input, fresh_output = await resolve(fresh_busy)
         raise ChangesetStale(fresh_input, fresh_output, reason)
     return stored_input
 
@@ -1203,7 +1203,8 @@ async def _check_current_week(
         tx, user_id, current, now, tz, staged=staged, busy=() if busy is None else busy
     )
     previous = await load_previous(tx, user_id, current, now)
-    raise ChangesetStale(fresh_input, pack(fresh_input, previous), "the proposal's week has ended")
+    fresh_output = await solve(fresh_input, previous)
+    raise ChangesetStale(fresh_input, fresh_output, "the proposal's week has ended")
 
 
 async def _inherit_from_live(
@@ -1771,7 +1772,7 @@ async def apply_google_edits(
             )
         else:
             assert e.new_span is not None
-            out = pack(inp, previous)
+            out = await solve(inp, previous)
             moved = PlannedBlock(
                 lineage_id=lineage, project_id=str(block.project_id), span=e.new_span, pinned=True
             )
@@ -1833,7 +1834,7 @@ async def apply_google_edits(
     elif need_proposal:
         inp = await build_solver_input(tx, user_id, horizon, now, tz, staged=staged_all, busy=busy)
         previous = await load_previous(tx, user_id, horizon, now)
-        out = pack(inp, previous)
+        out = await solve(inp, previous)
         if staged_all or _schedule_key([(b.project_id, b.span) for b in out.blocks]) != (
             _schedule_key([(b.project_id, b.span) for b in previous])
         ):

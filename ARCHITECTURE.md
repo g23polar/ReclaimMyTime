@@ -294,6 +294,20 @@ CREATE TABLE agent_turn_leases (
   token      uuid NOT NULL,          -- identifies the holder; release matches on it
   expires_at timestamptz NOT NULL
 );
+
+-- Per-user write rate limit (migration 0007, issue #23): every scheduling write route
+-- (projects, preferences, exceptions, pins, blocks, changeset confirm/reject, todos) takes a
+-- slot before it does any work; 60 per user per 60 s by default (WRITE_RATE_LIMIT,
+-- WRITE_RATE_WINDOW_SECONDS), shared across the routes and every server process. Fixed windows
+-- aligned to the Unix epoch, one row per user: a single atomic upsert restarts `count` at 1
+-- when `window_start` is older than the current window, else increments it while it is below
+-- the limit. A refused write (429 `rate_limited`, `Retry-After` = seconds to the window end)
+-- writes nothing. Written only by app.db.write_rate.
+CREATE TABLE write_rate_counters (
+  user_id      uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  window_start timestamptz NOT NULL,  -- start of the user's current window
+  count        integer NOT NULL       -- writes accepted in it
+);
 ```
 
 ### Semantics
@@ -341,6 +355,7 @@ Rules:
 - **Deterministic:** stable sort keys only — never iterate a `set` into an ordering. Tested by running identical input under two `PYTHONHASHSEED` values in subprocesses and comparing outputs byte-for-byte.
 - **`verify(plan, input) -> list[Violation]`** is a separate pure module from the packer: checks overlap, busy/window/exception/pin/buffer violations. Called before every `persist_plan`; doubles as the `hypothesis` property-test oracle. The DB exclusion constraint only covers block-vs-block — `verify()` covers everything else.
 - **Golden replay tests:** stored `solver_input` snapshots from real plans re-solve to identical output across releases (or the change is a deliberate, versioned solver bump).
+- **Off the event loop, with a timeout** (issue #22, 2026-11-25): the server never calls `pack` directly; it always goes through `app.db.solve.solve`, which runs it in a worker thread bounded by `SOLVER_TIMEOUT_SECONDS` (default 5 s). A timed-out solve is not killed — its thread runs to completion and the result is discarded — and the request fails as 503 `solver_timeout` (in-stream `error` for `POST /agent/message`) with its transaction rolled back.
 
 ## 5. Pydantic Extraction Contracts
 
