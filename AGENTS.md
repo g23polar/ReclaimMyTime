@@ -61,7 +61,7 @@ From `server/` with the venv active:
 ruff check . && ruff format --check .
 lint-imports
 TEST_DATABASE_URL=postgresql+asyncpg://postgres@localhost:54329/reclaim_test3 \
-  pytest -q -rs -o faulthandler_timeout=60          # ~4 min; Postgres tests must not skip
+  ../factory/bin/locked --max 900 pg pytest -q -rs -o faulthandler_timeout=60   # ~4 min; must not skip
 uv run --with openapi-spec-validator --with 'jsonschema[format]' --with rfc3339-validator \
   python ../contracts/validate_fixtures.py
 ```
@@ -69,17 +69,25 @@ uv run --with openapi-spec-validator --with 'jsonschema[format]' --with rfc3339-
 When `ios/` or `contracts/` changed, from the repo root:
 
 ```bash
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild test \
+factory/bin/locked --max 600 sim env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild test \
   -project ios/ReclaimMyTime.xcodeproj -scheme ReclaimMyTime \
   -destination 'platform=iOS Simulator,name=iPhone 17'        # ~3 min
 ```
 
-pytest and xcodebuild have each hung for over an hour here. Never run them without a kill guard
-(`factory/checks.sh` has one: `run_guarded`); kill and report a run that takes over 2× normal.
+Every checkout on this machine (the main one, factory worktrees, Orca workspaces) shares one test
+database and one simulator. Run pytest only as `factory/bin/locked pg …`, and xcodebuild or any
+`simctl` sequence only as `factory/bin/locked sim …` (`checks.sh` already does). It waits up to
+10 min for the resource, then exits 75 ("busy", naming the holder): try again later, never bypass it.
+
+pytest and xcodebuild have each hung for over an hour here. `locked --max <seconds>` is the kill
+guard (default 900): past it the whole run is killed and `locked` exits 124. Keep `--max` near 2×
+the normal run time (900 for pytest, 600 for xcodebuild) and report any run it had to kill.
 
 ## iOS screenshots
 
-For visible iOS changes, screenshots come from the simulator against the **mock API**, never prod:
+For visible iOS changes, screenshots come from the simulator against the **mock API**, never prod.
+Hold the simulator lock for the whole sequence: save it as a script and run
+`factory/bin/locked sim bash <script>`.
 
 ```bash
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
@@ -97,10 +105,26 @@ sleep 4 && xcrun simctl io "iPhone 17" screenshot <path>.png
 opens a fixed state; `-MockGcalSync <case>` serves a sync variant. If a new state needs a new
 demo scenario, adding one under `#if DEBUG` is in scope. `ios/DerivedData/` is gitignored.
 
+## Working an issue outside the factory (Orca)
+
+An agent started on a GitHub issue outside `/factory run` (e.g. from Orca's GitHub integration):
+
+1. **Claim it first.** `gh issue view <n> --json labels`. If it's labeled `factory`, stop and say
+   so: the factory owns it. Otherwise `gh issue edit <n> --add-label orca`.
+2. Open a **draft** PR early whose body says `Closes #<n>` (exactly one issue).
+3. Run pytest, xcodebuild and the simulator only through `factory/bin/locked` (above).
+4. When done, `gh pr ready <pr>`. That hands it to the factory, which reviews it (intake, spec,
+   checks, routed reviewers, approver) and merges it under the same auto-merge policy. Never
+   merge it yourself.
+5. Review findings arrive as a prompt in your terminal. Fix them on the same branch, push, keep
+   the PR ready, and end your reply with a last line starting `READY` or `BLOCKED: <reason>`.
+
 ## Software factory
 
 `/factory run` builds every open GitHub issue labeled `factory` through
-intake → spec → build → gate → review → approve, one PR per issue. State is in
+intake → spec → build → gate → review → approve, one PR per issue. It also adopts
+the ready PR of every issue labeled `orca` and runs it through the same stages,
+with the Orca agent as the builder. State is in
 `factory/jobs/` (gitignored); `factory/bin/job` is its only writer. Checks:
 `factory/checks.sh`. Dashboard: `cd factory && python3 -m http.server`, then
 open http://localhost:8000/dashboard.html.

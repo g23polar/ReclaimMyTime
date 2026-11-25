@@ -9,6 +9,8 @@ orchestrator never improvises them.
 Usage:
   job queue                      what /factory run should do with each labeled issue
   job create <issue>             new job for an open `factory` issue; prints the job id
+  job adopt <pr>                 new review-only job for a ready PR an Orca agent built (issue labeled `orca`)
+  job block <job>                build → needs-human for an adopted job whose Orca agent is blocked (reason on stdin)
   job advance <job> <stage>      move a job to <stage>, or refuse
   job merge <job>                APPROVE → sync with the base branch, gate, merge the PR
   job feedback <job>             needs-human → build, with your feedback (stdin) as feedback-<k>.md
@@ -38,6 +40,9 @@ CONFIG = json.loads((FACTORY / "config.json").read_text())
 LABELS = CONFIG["labels"]
 BASE = CONFIG["base_branch"]
 MARKER = "<!-- factory -->"
+# Issues an Orca agent claimed (AGENTS.md "Working an issue outside the factory").
+# The factory never builds them; it adopts their ready PRs for review instead.
+ORCA = LABELS.get("orca", "orca")
 
 TRANSITIONS = {
     "intake": {"needs-info", "rejected", "spec"},
@@ -128,6 +133,11 @@ def all_jobs():
     if not JOBS.exists():
         return []
     return [load(p.name) for p in sorted(JOBS.iterdir()) if (p / "job.json").exists()]
+
+
+def is_orca(job):
+    """An adopted job: an Orca agent owns the branch and does the building."""
+    return job.get("origin") == "orca"
 
 
 def running(jobs):
@@ -383,10 +393,14 @@ def advance(job, stage):
         reason = (d / "rejection.md").read_text().split("\n", 1)[1].strip()
         comment("issue", job["issue"], f"### Factory: rejected\n\n{reason}")
         waiting = LABELS["needs_info"] if old == "needs-info" else LABELS["needs_human"]
-        label("issue", job["issue"], remove=f"{LABELS['queue']},{waiting}")
-        if job["pr"]:
-            gh("pr", "close", str(job["pr"]))
-            run(["git", "push", "origin", "--delete", job["branch"]], check=False)
+        if is_orca(job):
+            # The PR and branch belong to the Orca agent: leave them, and the claim.
+            label("issue", job["issue"], remove=waiting)
+        else:
+            label("issue", job["issue"], remove=f"{LABELS['queue']},{waiting}")
+            if job["pr"]:
+                gh("pr", "close", str(job["pr"]))
+                run(["git", "push", "origin", "--delete", job["branch"]], check=False)
 
     elif old == "intake":
         want = {"needs-info": "NEEDS-INFO", "rejected": "REJECT", "spec": "ACCEPT"}[stage]
@@ -400,7 +414,14 @@ def advance(job, stage):
         if stage == "needs-info":
             label("issue", job["issue"], add=LABELS["needs_info"])
         elif stage == "rejected":
-            label("issue", job["issue"], remove=LABELS["queue"])
+            if not is_orca(job):
+                label("issue", job["issue"], remove=LABELS["queue"])
+        elif is_orca(job):
+            # The Orca worktree has the branch checked out, and git allows that only
+            # once: review a detached copy of the PR head instead.
+            run(["git", "fetch", "origin", BASE, job["branch"]])
+            Path(job["worktree"]).parent.mkdir(parents=True, exist_ok=True)
+            run(["git", "worktree", "add", "--detach", job["worktree"], f"origin/{job['branch']}"])
         else:
             run(["git", "fetch", "origin", BASE])
             Path(job["worktree"]).parent.mkdir(parents=True, exist_ok=True)
@@ -417,6 +438,21 @@ def advance(job, stage):
     elif old == "spec":
         require((d / "spec.md").exists(), "spec.md doesn't exist")
         next_round(job)
+
+    elif old == "build" and stage == "gate" and is_orca(job):
+        pr = gh_json("pr", "view", str(job["pr"]), "--json", "state,isDraft,headRefOid")
+        require(pr["state"] == "OPEN", f"PR #{job['pr']} is {pr['state'].lower()}")
+        require(not pr["isDraft"], f"PR #{job['pr']} is a draft: the Orca agent hasn't handed it back")
+        head = pr["headRefOid"]
+        last_gate = header(round_dir(job, job["round"] - 1) / "checks.md").get("GATE") \
+            if job["round"] > 1 and (round_dir(job, job["round"] - 1) / "checks.md").exists() else None
+        # The same commit may be gated again only when its last gate didn't pass (a flake).
+        require(head != job.get("gated_sha") or last_gate != "PASS",
+                f"PR #{job['pr']} has no new commits since {head[:7]} passed the gate; wait for the Orca agent to push")
+        require(not git(job, "status", "--porcelain").stdout.strip(), "the worktree has uncommitted changes")
+        git(job, "fetch", "origin", job["branch"])
+        git(job, "checkout", "--detach", head)
+        job["gated_sha"] = head
 
     elif old == "build" and stage == "gate":
         status = first_line(d / "build.md")
@@ -500,7 +536,8 @@ def advance(job, stage):
 
     if stage in TERMINAL and Path(job["worktree"]).exists():
         run(["git", "worktree", "remove", "--force", job["worktree"]])
-        run(["git", "branch", "-D", job["branch"]], check=False)
+        if not is_orca(job):  # an adopted job's branch is the Orca agent's
+            run(["git", "branch", "-D", job["branch"]], check=False)
 
     job["stage"] = stage
     job["ended"] = now() if stage in TERMINAL | WAITING else None
@@ -515,6 +552,30 @@ def slugify(title):
     return "-".join(words) or "issue"
 
 
+def new_job(issue, **fields):
+    JOBS.mkdir(parents=True, exist_ok=True)
+    numbers = [int(p.name.split("-")[0]) for p in JOBS.iterdir() if p.name[:3].isdigit()]
+    job_id = f"{max(numbers, default=0) + 1:03d}-{slugify(issue['title'])}"
+    job_dir(job_id).mkdir()
+    job = {
+        "id": job_id, "issue": issue["number"], "title": issue["title"], "issue_url": issue["url"],
+        "origin": "factory", "pr": None, "pr_url": None,
+        "branch": f"factory/{job_id}",
+        "worktree": str(REPO / ".worktrees" / job_id),
+        "stage": "intake", "round": 0, "round_limit": CONFIG["max_rounds"],
+        "intake": None, "agents": None, "gate": None, "reviews": {},
+        "cost_usd": 0.0, "started": now(), "ended": None,
+    }
+    job.update(fields)
+    write_issue_md(job)
+    save(job)
+    return job
+
+
+def label_names(issue):
+    return {l["name"] for l in issue["labels"]}
+
+
 def cmd_create(number):
     existing = [j for j in all_jobs() if j["issue"] == int(number)]
     if existing:
@@ -526,43 +587,99 @@ def cmd_create(number):
     issue = fetch_issue(number)
     if issue["state"] != "OPEN":
         die(f"issue #{number} is {issue['state'].lower()}")
-    if LABELS["queue"] not in {l["name"] for l in issue["labels"]}:
+    if LABELS["queue"] not in label_names(issue):
         die(f"issue #{number} isn't labeled {LABELS['queue']}")
-    JOBS.mkdir(parents=True, exist_ok=True)
-    numbers = [int(p.name.split("-")[0]) for p in JOBS.iterdir() if p.name[:3].isdigit()]
-    job_id = f"{max(numbers, default=0) + 1:03d}-{slugify(issue['title'])}"
-    job_dir(job_id).mkdir()
-    job = {
-        "id": job_id, "issue": issue["number"], "title": issue["title"], "issue_url": issue["url"],
-        "pr": None, "pr_url": None,
-        "branch": f"factory/{job_id}",
-        "worktree": str(REPO / ".worktrees" / job_id),
-        "stage": "intake", "round": 0, "round_limit": CONFIG["max_rounds"],
-        "intake": None, "agents": None, "gate": None, "reviews": {},
-        "cost_usd": 0.0, "started": now(), "ended": None,
-    }
-    write_issue_md(job)
-    save(job)
-    print(job_id)
+    if ORCA in label_names(issue):
+        die(f"issue #{number} is claimed by an Orca agent (labeled {ORCA}); "
+            f"`job adopt <pr>` reviews its PR once it's ready")
+    print(new_job(issue)["id"])
 
 
-def cmd_queue():
-    """Rows in the order to start them. `resume` and `new` rows fit in the
-    concurrency slots; the rest show as `hold` until a running job finishes."""
-    jobs = {j["issue"]: j for j in all_jobs()}
-    # A job is done once its PR is merged on GitHub, which also closes the issue.
-    for j in jobs.values():
-        if j["stage"] not in TERMINAL and j["pr"] and pr_state(j) == "MERGED":
-            save(advance(sync(j), "merged"))
-    issues = gh_json("issue", "list", "--label", LABELS["queue"], "--state", "open",
-                     "--limit", "200", "--json", "number,title")
-    open_numbers = {i["number"] for i in issues}
+def adopt_refusal(pr, issue, existing_job):
+    """Why `job adopt` must refuse this PR, or None."""
+    if pr["state"] != "OPEN":
+        return f"PR #{pr['number']} is {pr['state'].lower()}"
+    if pr["isDraft"]:
+        return f"PR #{pr['number']} is a draft: the Orca agent marks it ready when it's done"
+    if pr.get("isCrossRepository"):
+        return f"PR #{pr['number']} comes from a fork; only branches on origin can be adopted"
+    closes = [i["number"] for i in pr["closingIssuesReferences"]]
+    if len(closes) != 1:
+        return f"PR #{pr['number']} must close exactly one issue (`Closes #<n>`); it closes {closes or 'none'}"
+    if issue["state"] != "OPEN":
+        return f"issue #{issue['number']} is {issue['state'].lower()}"
+    labels = label_names(issue)
+    if ORCA not in labels:
+        return f"issue #{issue['number']} isn't labeled {ORCA}"
+    if LABELS["queue"] in labels:
+        return (f"issue #{issue['number']} is labeled both {LABELS['queue']} and {ORCA}; "
+                f"remove one so only one of them builds it")
+    if existing_job:
+        return f"issue #{issue['number']} already has job {existing_job['id']} ({existing_job['stage']})"
+    return None
+
+
+def cmd_adopt(number):
+    pr = gh_json("pr", "view", str(number), "--json",
+                 "number,state,isDraft,isCrossRepository,headRefName,url,closingIssuesReferences")
+    closes = [i["number"] for i in pr["closingIssuesReferences"]]
+    issue = fetch_issue(closes[0]) if len(closes) == 1 else {}
+    existing = next((j for j in all_jobs() if j["issue"] == issue.get("number")), None)
+    why = adopt_refusal(pr, issue, existing)
+    if why:
+        die(why)
+    try:
+        require_slot(None)
+    except Refused as e:
+        die(str(e))
+    job = new_job(issue, origin="orca", pr=pr["number"], pr_url=pr["url"], branch=pr["headRefName"])
+    print(job["id"])
+
+
+def cmd_block(job, text):
+    if not is_orca(job) or job["stage"] != "build":
+        die(f"{job['id']}: `job block` is for an adopted job in build; a factory builder writes build.md itself")
+    if not text.strip():
+        die("no reason on stdin")
+    (job_dir(job["id"]) / "build.md").write_text(
+        f"STATUS: BLOCKED\n\nThe Orca agent on PR #{job['pr']} reported it is blocked.\n\n## Blocked\n{text.strip()}\n")
+    save(advance(sync(job), "needs-human"))
+    print(f"{job['id']}: needs-human")
+
+
+def queue_rows(jobs, factory_issues, orca_issues, prs):
+    """Rows for `job queue`, in start order. Pure: jobs by issue number, the open
+    `factory` and `orca` issues ({number, title}), the open PRs ({number, isDraft,
+    issues}). An `adopt` row's note names the PR to pass to `job adopt`."""
+    factory_numbers = {i["number"] for i in factory_issues}
+    orca_numbers = {i["number"] for i in orca_issues}
+    titles = {i["number"]: i["title"] for i in factory_issues + orca_issues}
+    ready = {}
+    unadoptable = {}
+    for pr in sorted(prs, key=lambda p: p["number"]):
+        for n in pr["issues"]:
+            if pr["isDraft"] or n not in orca_numbers:
+                continue
+            if len(pr["issues"]) != 1:
+                unadoptable[n] = f"PR #{pr['number']} closes {len(pr['issues'])} issues; adopt needs exactly one"
+            elif pr.get("isCrossRepository"):
+                unadoptable[n] = f"PR #{pr['number']} comes from a fork; can't be adopted"
+            else:
+                ready.setdefault(n, pr["number"])
     running_rows, replied_rows, new_rows, other_rows = [], [], [], []
-    for issue in sorted(issues, key=lambda i: i["number"]):
-        n = issue["number"]
+    for n in sorted(titles):
         j = jobs.get(n)
         if not j:
-            new_rows.append(("new", n, "-", "-", issue["title"]))
+            if n in orca_numbers and n in factory_numbers:
+                other_rows.append(("skip", n, "-", "-", f"labeled both {LABELS['queue']} and {ORCA}; remove one"))
+            elif n in orca_numbers and n in ready:
+                new_rows.append(("adopt", n, "-", "-", f"PR #{ready[n]}"))
+            elif n in orca_numbers and n in unadoptable:
+                other_rows.append(("skip", n, "-", "-", unadoptable[n]))
+            elif n in orca_numbers:
+                other_rows.append(("skip", n, "-", "-", "claimed by orca; no ready PR yet"))
+            else:
+                new_rows.append(("new", n, "-", "-", titles[n]))
         elif j["stage"] == "needs-info":
             if replied_since_question(fetch_issue(n)):
                 replied_rows.append(("resume", n, j["id"], j["stage"], "author replied"))
@@ -576,10 +693,12 @@ def cmd_queue():
         elif j["stage"] == "merged":
             other_rows.append(("skip", n, j["id"], j["stage"], "merged"))
         else:
-            running_rows.append(("resume", n, j["id"], j["stage"], f"round {j['round']}"))
+            running_rows.append(("resume", n, j["id"], j["stage"], f"round {j['round']}"
+                                 + (" (orca)" if is_orca(j) else "")))
     for n, j in sorted(jobs.items()):
-        if n not in open_numbers and j["stage"] not in TERMINAL | WAITING:
-            other_rows.append(("skip", n, j["id"], j["stage"], f"issue is closed or no longer labeled {LABELS['queue']}"))
+        if n not in titles and j["stage"] not in TERMINAL | WAITING:
+            label_name = ORCA if is_orca(j) else LABELS["queue"]
+            other_rows.append(("skip", n, j["id"], j["stage"], f"issue is closed or no longer labeled {label_name}"))
     # Jobs already in a running stage hold a slot whether or not an agent is on them.
     slots = CONCURRENCY - len(running(jobs.values()))
     rows = list(running_rows)
@@ -589,7 +708,28 @@ def cmd_queue():
             slots -= 1
         else:
             rows.append(("hold",) + row[1:4] + (f"concurrency {CONCURRENCY} reached",))
-    for row in rows + other_rows:
+    return rows + other_rows
+
+
+def cmd_queue():
+    """Rows in the order to start them. `resume`, `new` and `adopt` rows fit in the
+    concurrency slots; the rest show as `hold` until a running job finishes."""
+    jobs = {j["issue"]: j for j in all_jobs()}
+    # A job is done once its PR is merged on GitHub, which also closes the issue.
+    for j in jobs.values():
+        if j["stage"] not in TERMINAL and j["pr"] and pr_state(j) == "MERGED":
+            save(advance(sync(j), "merged"))
+    factory_issues = gh_json("issue", "list", "--label", LABELS["queue"], "--state", "open",
+                             "--limit", "200", "--json", "number,title")
+    orca_issues = gh_json("issue", "list", "--label", ORCA, "--state", "open",
+                          "--limit", "200", "--json", "number,title")
+    prs = []
+    if orca_issues:
+        prs = [{"number": p["number"], "isDraft": p["isDraft"], "isCrossRepository": p["isCrossRepository"],
+                "issues": [i["number"] for i in p["closingIssuesReferences"]]}
+               for p in gh_json("pr", "list", "--state", "open", "--limit", "200",
+                                "--json", "number,isDraft,isCrossRepository,closingIssuesReferences")]
+    for row in queue_rows(jobs, factory_issues, orca_issues, prs):
         print("\t".join(str(c) for c in row))
 
 
@@ -661,14 +801,22 @@ def cmd_merge(job):
         return fail(f"The gate failed after syncing with {BASE}. "
                     f"See round-{job['round']}/merge-checks.md.\n\n{gate.stdout.strip()}")
     try:
-        git(job, "push", "origin", job["branch"])
+        if is_orca(job):
+            # The branch is the Orca agent's: push nothing. The gate just tested the
+            # PR head merged with the base, which is what GitHub's merge produces.
+            head = job["gated_sha"]
+        else:
+            git(job, "push", "origin", job["branch"])
+            head = git(job, "rev-parse", "HEAD").stdout.strip()
         if gh_json("pr", "view", str(job["pr"]), "--json", "isDraft")["isDraft"]:
             gh("pr", "ready", str(job["pr"]))
-        gh("pr", "merge", str(job["pr"]), f"--{CONFIG['merge_method']}")
+        # Merge only the commit that was gated and reviewed, never a later push.
+        gh("pr", "merge", str(job["pr"]), f"--{CONFIG['merge_method']}", "--match-head-commit", head)
     except Refused as e:
         return fail(f"The merge failed:\n\n```\n{e}\n```")
-    # GitHub may already have deleted the branch on merge.
-    run(["git", "push", "origin", "--delete", job["branch"]], check=False)
+    # GitHub may already have deleted the branch on merge. An Orca branch stays.
+    if not is_orca(job):
+        run(["git", "push", "origin", "--delete", job["branch"]], check=False)
     save(advance(sync(job), "merged"))
     print(f"{job['id']}: merged PR #{job['pr']}")
 
@@ -732,6 +880,10 @@ def main(argv):
             cmd_queue()
         elif cmd == "create" and len(args) == 1 and args[0].isdigit():
             cmd_create(args[0])
+        elif cmd == "adopt" and len(args) == 1 and args[0].isdigit():
+            cmd_adopt(args[0])
+        elif cmd == "block" and len(args) == 1:
+            cmd_block(resolve(args[0]), sys.stdin.read())
         elif cmd == "advance" and len(args) == 2:
             job = advance(sync(resolve(args[0])), args[1])
             save(sync(job))

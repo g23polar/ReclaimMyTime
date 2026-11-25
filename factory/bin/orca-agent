@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Reach the Orca agent that owns an adopted job's PR branch.
+
+Usage:
+  orca-agent <job> find      print the agent's terminal handle
+  orca-agent <job> status    print `<state>\t<READY|BLOCKED|->` from the agent's last message
+  orca-agent <job> send      send stdin to the agent as a prompt (submitted with Enter)
+
+The agent is found through Orca: the workspace whose branch is the job's branch,
+then its agent's terminal. Exits 1 when Orca has no workspace or agent for the
+branch (the worktree was removed, or Orca isn't running); the orchestrator then
+escalates the job instead of guessing.
+"""
+
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+JOBS = Path(__file__).resolve().parents[1] / "jobs"
+
+
+def die(msg):
+    print(f"orca-agent: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def orca(*args):
+    res = subprocess.run(["orca", *args, "--json"], capture_output=True, text=True)
+    try:
+        out = json.loads(res.stdout)
+    except json.JSONDecodeError:
+        die(f"`orca {' '.join(args)}` failed: {(res.stderr or res.stdout).strip()[:300]}")
+    if not out.get("ok", res.returncode == 0):
+        die(f"`orca {' '.join(args)}` failed: {json.dumps(out.get('error'))[:300]}")
+    return out["result"]
+
+
+def load_job(arg):
+    for path in sorted(JOBS.glob("*/job.json")):
+        job = json.loads(path.read_text())
+        if job["id"] == arg or (arg.isdigit() and job["issue"] == int(arg)):
+            return job
+    die(f"no job {arg}")
+
+
+def workspace(branch):
+    rows = [w for w in orca("worktree", "ps")["worktrees"]
+            if w.get("branch") in {branch, f"refs/heads/{branch}"}]
+    if len(rows) != 1:
+        die(f"expected one Orca workspace on {branch}, found {len(rows)}")
+    return rows[0]
+
+
+def pick_terminal(agent, terminals):
+    """The agent's terminal: matched by pane tab id, else the only agent terminal."""
+    tab = (agent.get("paneKey") or "").split(":", 1)[0]
+    by_tab = [t for t in terminals if tab and t.get("tabId") == tab]
+    if len(by_tab) == 1:
+        return by_tab[0]["handle"]
+    agents = [t for t in terminals if t.get("agentIdentity")]
+    if len(agents) == 1:
+        return agents[0]["handle"]
+    return None
+
+
+def verdict(message):
+    """READY or BLOCKED when the message's last non-empty line starts with one, else `-`.
+    Only the last line counts: an opening "READY?" or a mid-message status isn't a verdict."""
+    lines = [l.strip(" *`#") for l in (message or "").splitlines() if l.strip()]
+    m = re.match(r"(READY|BLOCKED)(?![/\w])", lines[-1]) if lines else None
+    return m.group(1) if m else "-"
+
+
+def main(argv):
+    if len(argv) != 2 or argv[1] not in {"find", "status", "send"}:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    job = load_job(argv[0])
+    if job.get("origin") != "orca":
+        die(f"{job['id']} isn't an adopted Orca job")
+    ws = workspace(job["branch"])
+    agents = ws.get("agents") or []
+    if not agents:
+        die(f"the Orca workspace on {job['branch']} has no agent")
+    agent = agents[0]
+    if argv[1] == "status":
+        print(f"{agent.get('state')}\t{verdict(agent.get('lastAssistantMessage'))}")
+        return 0
+    address = (ws.get("address") or {}).get("worktree")
+    if not address:
+        die(f"Orca gives no address for the workspace on {job['branch']}")
+    handle = pick_terminal(agent, orca("terminal", "list", "--worktree", address)["terminals"])
+    if not handle:
+        die(f"can't tell which terminal is the agent's on {job['branch']}")
+    if argv[1] == "find":
+        print(handle)
+        return 0
+    text = sys.stdin.read().strip()
+    if not text:
+        die("nothing to send on stdin")
+    sent = orca("terminal", "send", "--terminal", handle, "--text", text, "--enter")
+    if not sent.get("send", {}).get("accepted"):
+        die(f"Orca didn't accept the prompt for {handle}")
+    print(handle)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

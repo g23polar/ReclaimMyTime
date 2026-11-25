@@ -7,8 +7,9 @@
 #
 # Mirrors .github/workflows/server.yml (lint, import contracts, full pytest incl.
 # Postgres-only tests, contract fixtures), plus the iOS suite when ios/ or
-# contracts/ changed. Every long step runs under a hard kill guard: macOS has no
-# `timeout`, and pytest/xcodebuild have both hung for over an hour here before.
+# contracts/ changed. Every long step runs under a hard kill guard (bin/locked
+# --max): macOS has no `timeout`, and pytest/xcodebuild have both hung for over
+# an hour here before. Exit 75 means a shared test resource stayed busy.
 set -euo pipefail
 
 WORKTREE="$(pwd)"
@@ -23,27 +24,12 @@ export TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql+asyncpg://postgres@loc
 
 step() { echo; echo "== $*"; }
 
-# run_guarded <seconds> <label> <cmd...>: run cmd, kill its whole tree after <seconds>.
-kill_tree() {
-  local pid=$1 child
-  for child in $(pgrep -P "$pid" 2>/dev/null); do kill_tree "$child"; done
-  kill -9 "$pid" 2>/dev/null || true
-}
-run_guarded() {
-  local limit=$1 label=$2; shift 2
-  "$@" &
-  local pid=$! waited=0
-  while kill -0 "$pid" 2>/dev/null; do
-    if (( waited >= limit )); then
-      echo "!! $label exceeded ${limit}s; killing it" >&2
-      kill_tree "$pid"
-      wait "$pid" 2>/dev/null || true
-      return 124
-    fi
-    sleep 5; waited=$((waited + 5))
-  done
-  wait "$pid"
-}
+# pytest and xcodebuild run through bin/locked: it takes the machine-wide lock on
+# the shared resource (reclaim_test3, the iPhone 17 simulator), so factory gates
+# and Orca agents never overlap, then kills the whole run past --max. A lock
+# that stays busy exits 75; this script passes 75 on, and the gate reports BUSY
+# instead of FAIL.
+LOCKED="$(cd "$(dirname "$0")" && pwd)/bin/locked"
 
 step "factory: policy tests"
 python3 -B -m unittest discover -q -s "$(dirname "$0")/tests"
@@ -70,7 +56,7 @@ step "server: import contracts"
 lint-imports
 
 step "server: pytest (incl. Postgres-only)"
-run_guarded 900 pytest pytest -q -rs -o faulthandler_timeout=60 -p no:cacheprovider \
+"$LOCKED" --max 900 pg pytest -q -rs -o faulthandler_timeout=60 -p no:cacheprovider \
   2>&1 | tee "$LOGDIR/pytest.log"
 if grep -q "TEST_DATABASE_URL not set" "$LOGDIR/pytest.log"; then
   echo "Postgres-only tests were skipped; the gate requires them" >&2
@@ -87,10 +73,11 @@ BASE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["base_br
   "$(dirname "$0")/config.json")"
 if git diff --name-only "origin/$BASE...HEAD" -- ios contracts | grep -q .; then
   step "ios: xcodebuild test (ios/ or contracts/ changed)"
-  run_guarded 600 xcodebuild env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  "$LOCKED" --max 600 sim env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
     xcodebuild test -quiet -project ios/ReclaimMyTime.xcodeproj -scheme ReclaimMyTime \
     -destination 'platform=iOS Simulator,name=iPhone 17' 2>&1 | tee "$LOGDIR/xcodebuild.log" \
-    || { grep "Test Case .* started" "$LOGDIR/xcodebuild.log" | tail -1 >&2; exit 1; }
+    || { grep -q "^locked: sim busy" "$LOGDIR/xcodebuild.log" && exit 75
+         grep "Test Case .* started" "$LOGDIR/xcodebuild.log" | tail -1 >&2; exit 1; }
 else
   step "ios: skipped (no ios/ or contracts/ changes vs origin/$BASE)"
 fi
