@@ -256,8 +256,8 @@ CREATE TABLE mutations (
   created_at     timestamptz NOT NULL DEFAULT now()
 );
 
--- One row per POST /agent/message turn: eval capture + the §9 per-user token budget (migration
--- 0004, T6.2, user decision 2026-11-17). Text columns are NULL unless AGENT_CAPTURE_TURNS is on.
+-- One row per POST /agent/message turn: eval capture + the §8 per-user daily token budget
+-- (migration 0004, T6.2, user decision 2026-11-17). Text columns are NULL unless AGENT_CAPTURE_TURNS is on.
 -- 30-day retention: each insert purges EVERY user's expired rows (app.db.agent_turns; a row
 -- exactly 30 days old is kept), so inactive users' captured text still ages out.
 CREATE TABLE agent_turns (
@@ -282,6 +282,18 @@ CREATE TABLE agent_turns (
 );
 CREATE INDEX agent_turns_user_id_created_at_idx ON agent_turns (user_id, created_at);
 CREATE INDEX agent_turns_created_at_idx ON agent_turns (created_at);   -- global retention purge
+
+-- One agent turn in flight per user, across every server process (migration 0006, issue #3).
+-- A lease, not a lock: POST /agent/message inserts it before any work and deletes it on every
+-- exit, holding no connection or transaction in between. TTL = open timeout + turn timeout +
+-- 30 s (180 s by default), judged against the request `now`, so a holder that died blocks its
+-- user for 3 minutes at most; the next acquire overwrites an expired row. Release deletes by
+-- `token`, so a holder whose lease was taken over never deletes the new holder's row.
+CREATE TABLE agent_turn_leases (
+  user_id    uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  token      uuid NOT NULL,          -- identifies the holder; release matches on it
+  expires_at timestamptz NOT NULL
+);
 ```
 
 ### Semantics
@@ -374,7 +386,7 @@ GET    /gcal/connect             GET /gcal/callback
 
 **Model & mechanics:** `claude-haiku-5-5` ($0.10/$0.50 per MTok → ≈$0.0005 per typical turn), id in config — an upgrade is a config change (note: prompt caches are per-model). Adaptive thinking at default effort; streaming (SSE passthrough to the app); no prefill (removed on current models). **Haiku has no server-side refusal fallback:** the handler checks `stop_reason == "refusal"` and replies with a polite decline, zero state change.
 
-**Quality & cost guardrails:** the `(state snapshot, staged mutations, solver_input)` triples we already persist double as eval raw material — build an extraction eval before TestFlight so any model upgrade (Haiku → Sonnet/Opus) is measured, not vibes. Haiku's extraction risk degrades safely by design: strict schemas, closed tag enums, confirmation cards, and `verify()` turn weakness into clarifying questions, not corrupted state. Per-user daily token budget: §9 trigger table. Every turn is captured in `agent_turns` (§3): token counts, outcome, staged result and ids always; the user's text and the state snapshot only when `AGENT_CAPTURE_TURNS` is on; 30-day retention. The §9 token budget will sum `agent_turns` (input + output + cache-write tokens) — there is no separate `llm_usage` table.
+**Quality & cost guardrails:** the `(state snapshot, staged mutations, solver_input)` triples we already persist double as eval raw material — build an extraction eval before TestFlight so any model upgrade (Haiku → Sonnet/Opus) is measured, not vibes. Haiku's extraction risk degrades safely by design: strict schemas, closed tag enums, confirmation cards, and `verify()` turn weakness into clarifying questions, not corrupted state. Every turn is captured in `agent_turns` (§3): token counts, outcome, staged result and ids always; the user's text and the state snapshot only when `AGENT_CAPTURE_TURNS` is on; 30-day retention. `POST /agent/message` enforces three per-user limits (issue #3, 2026-11-24): (1) a **daily token budget**, 1,000,000 tokens per rolling 24 h by default (`AGENT_DAILY_TOKEN_BUDGET`), summing `agent_turns` (input + output + cache-write tokens, `tokens_used_since`; there is no separate `llm_usage` table) — checked before the first model call (429 `agent_budget_exceeded`) and by the loop before each later call against that baseline plus the turn's own tokens (in-stream `error` `agent_budget_exceeded`, nothing staged, the turn still recorded); (2) a **32,000-character transcript** total (code points; 422 `validation_failed`), which the client trims to; (3) **one turn in flight**, a cross-process DB lease in `agent_turn_leases` (§3) taken before any other work and released on every exit — a concurrent request gets 429 `agent_turn_in_progress`, not queued. The loop stays DB-free: the router reads the baseline and passes it in.
 
 ## 9. Deferred, With Triggers
 
@@ -384,5 +396,4 @@ GET    /gcal/connect             GET /gcal/callback
 | Event mirror + `events.watch` channels | freeBusy polling proves insufficient |
 | Email magic links | second platform, or App Review requires demo access |
 | Plan-version GC job | `blocks` approaches ~1M rows (keep live + solver_input after week end; drop rejected after 7 days) |
-| Per-user LLM token budget (sums `agent_turns`, §3; `tokens_used_since`) | TestFlight beyond friends |
 | — (not deferred, noting here) iOS caps pending local notifications at 64 | v1 schedules a rolling 48h window, topped up on foreground/background refresh |

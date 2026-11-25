@@ -134,4 +134,73 @@ final class ChatStreamingTests: XCTestCase {
         XCTAssertEqual(trimmed.first?.content, "m5", "oldest messages are dropped first")
         XCTAssertEqual(trimmed.last?.content.count, 8000)
     }
+
+    func testTranscriptTrimmingDropsOldestToFitTheTotal() {
+        let transcript = (0..<10).map { TranscriptMessage(role: $0.isMultiple(of: 2) ? .user : .assistant, content: "\($0)" + String(repeating: "x", count: 4999)) }
+        let trimmed = ChatModel.trimmedForRequest(transcript)
+        XCTAssertEqual(trimmed.count, 6, "6 × 5,000 fits in 32,000; 7 would not")
+        XCTAssertEqual(trimmed.first?.content, transcript[4].content, "oldest messages are dropped first")
+        XCTAssertEqual(trimmed.last, transcript.last, "the last message is kept unchanged")
+    }
+
+    func testTranscriptTrimmingCutsALongLastMessageInUnicodeScalars() {
+        let trimmed = ChatModel.trimmedForRequest([TranscriptMessage(role: .user, content: String(repeating: "é", count: 9000))])
+        XCTAssertEqual(trimmed.count, 1, "the last message is always kept")
+        XCTAssertEqual(trimmed.last?.content.unicodeScalars.count, 8000)
+    }
+
+    /// "👍🏽" is one `Character` but two scalars; the server counts scalars (code points).
+    func testTranscriptTrimmingCountsScalarsNotCharacters() {
+        let thumbs = String(repeating: "👍🏽", count: 5000)
+        XCTAssertEqual(thumbs.count, 5000)
+        let transcript = (0..<10).map { TranscriptMessage(role: $0.isMultiple(of: 2) ? .user : .assistant, content: thumbs) }
+        let trimmed = ChatModel.trimmedForRequest(transcript)
+        XCTAssertTrue(trimmed.allSatisfy { $0.content.unicodeScalars.count <= ChatModel.maxMessageLength })
+        XCTAssertEqual(trimmed.last?.content.unicodeScalars.count, 8000, "cut to 8,000 scalars, not 8,000 characters")
+        XCTAssertLessThanOrEqual(trimmed.reduce(0) { $0 + $1.content.unicodeScalars.count }, ChatModel.maxTranscriptCharacters)
+        XCTAssertEqual(trimmed.count, 4)
+    }
+
+    // MARK: agent limits (issue #3)
+
+    private static let budgetCopy = "You've reached today's limit for the assistant. Try again later."
+    private static let inProgressCopy = "I'm still writing a reply to your last message. Try again in a moment."
+
+    func testBudgetExceededMidTurnShowsBudgetRow() async throws {
+        let h = try T52Harness()
+        await h.mock.setVariant("budget_exceeded_mid_turn", for: "postAgentMessage")
+        await h.chat.submit("I don't have my laptop today or tomorrow.")
+        XCTAssertEqual(h.chat.entries.last?.content, .failure(.budgetExceeded))
+        XCTAssertEqual(ChatModel.TurnFailure.budgetExceeded.message, Self.budgetCopy)
+        XCTAssertTrue(h.chat.hasFailedTurn, "the row keeps Retry")
+        XCTAssertNil(h.pending.pending, "nothing was staged")
+    }
+
+    func testBudgetExceededBeforeTheStreamShowsBudgetRow() async throws {
+        let h = try T52Harness()
+        await h.mock.setVariant("budget_exceeded", for: "postAgentMessage")
+        await h.chat.submit("I don't have my laptop today or tomorrow.")
+        XCTAssertEqual(h.chat.entries.last?.content, .failure(.budgetExceeded))
+        XCTAssertTrue(h.chat.hasFailedTurn)
+        XCTAssertFalse(h.chat.isStreaming)
+    }
+
+    func testTurnInProgressShowsInProgressRow() async throws {
+        let h = try T52Harness()
+        await h.mock.setVariant("turn_in_progress", for: "postAgentMessage")
+        await h.chat.submit("I don't have my laptop today or tomorrow.")
+        XCTAssertEqual(h.chat.entries.last?.content, .failure(.turnInProgress))
+        XCTAssertEqual(ChatModel.TurnFailure.turnInProgress.message, Self.inProgressCopy)
+        XCTAssertTrue(h.chat.hasFailedTurn)
+
+        await h.mock.setVariant("laptop", for: "postAgentMessage")
+        await h.chat.retry()
+        XCTAssertFalse(h.chat.hasFailedTurn, "Retry sends the turn again")
+    }
+
+    func testUnknownCodesStillShowUnreachable() {
+        XCTAssertEqual(ChatModel.TurnFailure(code: "agent_something_new"), .unreachable)
+        XCTAssertEqual(ChatModel.TurnFailure(code: nil).message, "Couldn't reach the assistant.")
+        XCTAssertEqual(ChatModel.TurnFailure(code: KnownErrorCode.gcalUnavailable), .gcal(.unavailable))
+    }
 }

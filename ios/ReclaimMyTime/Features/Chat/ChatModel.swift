@@ -54,11 +54,25 @@ final class ChatModel {
         case unreachable
         /// In-stream (or pre-stream) `gcal_reconnect_required` / `gcal_unavailable` (T4.2).
         case gcal(GcalSolveFailure)
+        /// In-stream or pre-stream 429 `agent_budget_exceeded`: the daily token budget is used up.
+        case budgetExceeded
+        /// Pre-stream 429 `agent_turn_in_progress`: another turn for this user is still running.
+        case turnInProgress
+
+        init(code: String?) {
+            switch code {
+            case KnownErrorCode.agentBudgetExceeded: self = .budgetExceeded
+            case KnownErrorCode.agentTurnInProgress: self = .turnInProgress
+            default: self = GcalSolveFailure(code: code).map(TurnFailure.gcal) ?? .unreachable
+            }
+        }
 
         var message: String {
             switch self {
             case .unreachable: "Couldn't reach the assistant."
             case .gcal(let failure): failure.message
+            case .budgetExceeded: "You've reached today's limit for the assistant. Try again later."
+            case .turnInProgress: "I'm still writing a reply to your last message. Try again in a moment."
             }
         }
     }
@@ -68,6 +82,7 @@ final class ChatModel {
     static let preferencesQuestionDiversity = "Do you like themed days where you hammer one thing, or variety in every day?"
     static let maxTranscriptMessages = 200
     static let maxMessageLength = 8000
+    static let maxTranscriptCharacters = 32000
 
     private(set) var entries: [Entry]
     /// What the server sees: user turns and `done.reply` texts only (no static copy).
@@ -335,7 +350,7 @@ final class ChatModel {
     private func fail(_ id: UUID, code: String?) {
         logger.notice("Agent turn failed: \(code ?? "transport", privacy: .public)")
         entries.removeAll { $0.id == id }
-        entries.append(Entry(content: .failure(GcalSolveFailure(code: code).map(TurnFailure.gcal) ?? .unreachable)))
+        entries.append(Entry(content: .failure(TurnFailure(code: code))))
     }
 
     private static func isFailure(_ entry: Entry) -> Bool {
@@ -356,14 +371,21 @@ final class ChatModel {
         Entry(content: .agent(text: openingMessage, state: .done, status: nil))
     }
 
-    /// Contract limits (D14): at most 200 messages, oldest trimmed first; 8000 chars each.
+    /// Contract limits (D14, issue #3): at most 200 messages, 8000 characters each and 32,000 in
+    /// total, oldest messages dropped first; the last message is always kept. Characters are
+    /// Unicode scalars, as the server counts them (a `Character` can hold several).
     static func trimmedForRequest(_ transcript: [TranscriptMessage]) -> [TranscriptMessage] {
-        transcript.suffix(maxTranscriptMessages).map { message in
+        var messages = transcript.suffix(maxTranscriptMessages).map { message in
             var message = message
-            if message.content.count > maxMessageLength {
-                message.content = String(message.content.prefix(maxMessageLength))
+            if message.content.unicodeScalars.count > maxMessageLength {
+                message.content = String(String.UnicodeScalarView(message.content.unicodeScalars.prefix(maxMessageLength)))
             }
             return message
         }
+        var total = messages.reduce(0) { $0 + $1.content.unicodeScalars.count }
+        while total > maxTranscriptCharacters, messages.count > 1 {
+            total -= messages.removeFirst().content.unicodeScalars.count
+        }
+        return messages
     }
 }

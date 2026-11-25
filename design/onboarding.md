@@ -65,6 +65,8 @@ Lives in the **Chat** tab; onboarding simply opens it with the agent's first mes
 | Done, with proposal | `done` + `changeset` | Bubble finishes, then summary cards and/or the proposal banner appear below it |
 | Refused | `done` + `outcome: refused` | Bubble shows the agent's decline text; nothing else changes |
 | Error | `error` / 503 `agent_unavailable` | Inline row "Couldn't reach the assistant." with **Retry**. Retrying is a new turn (not idempotent). |
+| Daily limit reached | `error` / 429 `agent_budget_exceeded` | Same row and **Retry**, copy "You've reached today's limit for the assistant. Try again later." |
+| Reply still running | 429 `agent_turn_in_progress` | Same row and **Retry**, copy "I'm still writing a reply to your last message. Try again in a moment." |
 
 ### Project summary card
 Shown under the agent message when a changeset stages `project_created` (or `project_updated`). One card per project.

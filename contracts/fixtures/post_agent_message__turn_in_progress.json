@@ -1,0 +1,30 @@
+{
+  "operation": "postAgentMessage",
+  "method": "POST",
+  "path": "/agent/message",
+  "case": "turn_in_progress",
+  "description": "Another turn for this user is still running (on any server): pre-stream 429, not queued.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "I don't have my laptop today or tomorrow."
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 429,
+    "body": {
+      "error": {
+        "code": "agent_turn_in_progress",
+        "message": "A reply is still being written. Wait for it to finish, then try again."
+      }
+    }
+  }
+}

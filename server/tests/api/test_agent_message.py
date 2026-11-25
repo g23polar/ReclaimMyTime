@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import uuid
-from datetime import timedelta
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
@@ -12,16 +16,29 @@ import pytest
 from fastapi import FastAPI
 from jsonschema import Draft202012Validator
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.agent.loop import StaleBase, drain_traces
+from app.agent.loop import AgentTurn, StaleBase, drain_traces
 from app.agent.router import DbProposer
 from app.agent.router import router as agent_router
 from app.agent.settings import AgentSettings
+from app.api.deps import current_user_id
+from app.db.agent_turns import AgentTurnRecord, record_agent_turn
+from app.errors import AppError
 from app.gcal.busy import GcalBusy
-from tests.agent.fake_anthropic import Call, Failure, FakeAnthropic, Hang, Text, Tool
-from tests.api.conftest import NOW, new_user
+from tests.agent.fake_anthropic import Call, Failure, FakeAnthropic, Gate, Hang, Text, Tool
+from tests.api.conftest import NOW, Who, build_app, new_user
 from tests.api.contract import _FORMATS, _REGISTRY, BASE, assert_conforms, load_fixture
-from tests.db.conftest import PORTFOLIO, at, exception_added, prefs, propose, rows, staged
+from tests.db.conftest import (
+    PORTFOLIO,
+    at,
+    exception_added,
+    make_engine,
+    prefs,
+    propose,
+    rows,
+    staged,
+)
 
 pytestmark = pytest.mark.usefixtures("world")
 
@@ -472,3 +489,426 @@ async def test_an_upstream_outage_before_the_stream_is_traced(agent_app, client,
     assert res.status_code == 503
     [row] = await agent_turns(maker, who.user_id)
     assert row[:3] == ("error", "agent_unavailable", 1)
+
+
+# ---------------------------------------------------------------- limits (issue #3)
+
+
+def _body(*contents: str) -> dict[str, Any]:
+    """A transcript alternating user/assistant that ends with a user message."""
+    n = len(contents)
+    roles = ["user" if (n - 1 - i) % 2 == 0 else "assistant" for i in range(n)]
+    return {"messages": [{"role": r, "content": c} for r, c in zip(roles, contents, strict=True)]}
+
+
+HI = _body("hi")
+
+
+@dataclass
+class Twin:
+    """A second app instance: own engine and pool on the same schema, same Anthropic fake and
+    clock. Stands in for another server machine."""
+
+    app: FastAPI
+    client: httpx.AsyncClient
+    who: Who
+
+
+@pytest.fixture
+async def twin(schema, clock, who, fake) -> AsyncIterator[Twin]:
+    eng = await make_engine(schema)
+    application = build_app()
+    application.include_router(agent_router)
+    application.state.sessionmaker = async_sessionmaker(eng, expire_on_commit=False)
+    application.state.clock = clock
+    application.state.anthropic_client = fake.client()
+    twin_who = Who(who.user_id)
+    application.dependency_overrides[current_user_id] = lambda: twin_who.user_id
+    transport = httpx.ASGITransport(app=application, raise_app_exceptions=False)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers={"X-Timezone": "America/Los_Angeles"}
+    ) as c:
+        yield Twin(application, c, twin_who)
+    await drain_traces()  # lease releases on this engine finish before it is disposed
+    await eng.dispose()
+
+
+async def leases(maker, uid) -> list[tuple[Any, ...]]:
+    await drain_traces()  # releases run detached from the request
+    return await rows(
+        maker, "SELECT token, expires_at FROM agent_turn_leases WHERE user_id = :u", u=uid
+    )
+
+
+async def use_tokens(maker, uid, tokens: int, when: datetime) -> None:
+    row = AgentTurnRecord(
+        user_id=uid, model="claude-haiku-5-5", outcome="completed", error_code=None,
+        stop_reason="end_turn", model_calls=1, input_tokens=tokens, output_tokens=0,
+        cache_read_tokens=0, cache_write_tokens=0, transcript_len=1, staged=[],
+        changeset_id=None, plan_id=None, user_message=None, snapshot=None,
+    )  # fmt: skip
+    async with maker() as s, s.begin():
+        await record_agent_turn(s, row, now=when)
+
+
+async def test_transcript_of_exactly_32000_code_points_streams(agent_app, client, fake):
+    # Multi-byte text: 32,000 code points is far more than 32,000 UTF-8 bytes or UTF-16 units.
+    fake.script = [Call([Text("Ok.")])]
+    body = _body("é" * 8000, "👍" * 8000, "日" * 8000, "x" * 7999 + "👍")
+    res = await client.post("/agent/message", json=body)
+    assert res.status_code == 200
+    assert parse_sse(res.text)[-1]["event"] == "done"
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        ("é" * 8000, "👍" * 8000, "日" * 8000, "x" * 8000, "!"),
+        ("a" * 8000, "b" * 8000, "c" * 8000, "d" * 7999 + "👍", "👍"),
+    ],
+)
+async def test_transcript_over_32000_code_points_is_422(
+    agent_app, client, fake, maker, who, contents
+):
+    res = await client.post("/agent/message", json=_body(*contents))
+    assert res.status_code == 422
+    body = res.json()
+    assert_conforms("postAgentMessage", 422, body)
+    assert body["error"]["code"] == "validation_failed"
+    assert [f["path"] for f in body["error"]["details"]["fields"]] == ["messages"]
+    assert fake.requests == []
+    assert await leases(maker, who.user_id) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"messages": []},
+        {"messages": [{"role": "assistant", "content": "Hello!"}]},
+        _body("x" * 8000, "x" * 8000, "x" * 8000, "x" * 8000, "x"),
+    ],
+    ids=["bad_body", "last_not_user", "over_cap"],
+)
+async def test_a_422_takes_no_lease(agent_app, client, fake, maker, who, body):
+    res = await client.post("/agent/message", json=body)
+    assert res.status_code == 422
+    assert await leases(maker, who.user_id) == []
+
+
+# ---------------------------------------------------------------- daily token budget
+
+
+async def test_budget_used_up_is_429_before_the_stream(agent_app, client, fake, maker, who):
+    agent_app.state.agent_settings = AgentSettings(daily_token_budget=500)
+    await use_tokens(maker, who.user_id, 500, NOW - timedelta(hours=1))
+    before = await agent_turns(maker, who.user_id)
+    fx = load_fixture("post_agent_message__budget_exceeded.json")
+    res = await client.post("/agent/message", json=fx["request"]["body"])
+    assert res.status_code == 429
+    assert_conforms("postAgentMessage", 429, res.json())
+    assert res.json() == fx["response"]["body"]
+    assert fake.requests == []
+    assert await agent_turns(maker, who.user_id) == before  # no row for a refusal
+    assert await leases(maker, who.user_id) == []
+
+
+async def test_one_token_under_budget_runs_the_turn(agent_app, client, fake, maker, who):
+    agent_app.state.agent_settings = AgentSettings(daily_token_budget=500)
+    await use_tokens(maker, who.user_id, 499, NOW - timedelta(hours=1))
+    fake.script = [Call([Text("Sure.")])]
+    events = await turn(client, ("user", "hi"))
+    assert events[-1]["data"]["outcome"] == "completed"
+
+
+@pytest.mark.parametrize(
+    ("age", "counts"),
+    [(timedelta(hours=24), True), (timedelta(hours=24, seconds=1), False)],
+    ids=["at_24h", "past_24h"],
+)
+async def test_the_budget_window_is_a_rolling_24h(agent_app, client, fake, maker, who, age, counts):
+    agent_app.state.agent_settings = AgentSettings(daily_token_budget=500)
+    await use_tokens(maker, who.user_id, 500, NOW - age)
+    fake.script = [Call([Text("Sure.")])]
+    res = await client.post("/agent/message", json=HI)
+    if counts:
+        assert res.status_code == 429 and res.json()["error"]["code"] == "agent_budget_exceeded"
+    else:
+        assert res.status_code == 200 and parse_sse(res.text)[-1]["event"] == "done"
+
+
+async def test_another_users_usage_does_not_count(agent_app, client, fake, maker, who):
+    agent_app.state.agent_settings = AgentSettings(daily_token_budget=500)
+    await use_tokens(maker, await new_user(maker), 10_000, NOW - timedelta(hours=1))
+    fake.script = [Call([Text("Sure.")])]
+    events = await turn(client, ("user", "hi"))
+    assert events[-1]["data"]["outcome"] == "completed"
+
+
+# Each fake call uses 100 input + 20 output tokens (no cache writes).
+@pytest.mark.parametrize(("used", "budget"), [(0, 120), (380, 500)])
+async def test_budget_running_out_mid_turn_ends_with_an_error(
+    agent_app, client, fake, maker, who, used, budget
+):
+    agent_app.state.agent_settings = AgentSettings(daily_token_budget=budget)
+    if used:
+        await use_tokens(maker, who.user_id, used, NOW - timedelta(hours=1))
+    fake.script = [
+        Call([Text("Got it: no laptop"), Tool("stage_exception_add", LAPTOP)], "tool_use"),
+        Call([Text("Never sent.")]),
+    ]
+    before = await changesets(maker, who.user_id)
+    events = await turn(client, ("user", "I don't have my laptop today or tomorrow."))
+    fx = load_fixture("post_agent_message__budget_exceeded_mid_turn.json")
+    assert [e["event"] for e in events] == ["delta", "status", "error"]
+    assert [e for e in events if e["event"] != "status"] == fx["response"]["body"]
+    assert len(fake.requests) == 1
+    assert await changesets(maker, who.user_id) == before  # nothing proposed
+    row = (await agent_turns(maker, who.user_id))[-1]
+    assert row[:5] == ("error", "agent_budget_exceeded", 1, 100, 20)
+    assert row[6:9] == (0, None, None)  # nothing staged or proposed
+
+
+# ---------------------------------------------------------------- one turn in flight
+
+
+async def test_one_turn_in_flight_across_app_instances(agent_app, client, fake, maker, who, twin):
+    gate = Gate(Call([Text("Held.")]))
+    fake.script = [gate, Call([Text("Other user.")]), Call([Text("Again.")])]
+    held = asyncio.create_task(client.post("/agent/message", json=HI))
+    await asyncio.wait_for(gate.reached.wait(), 5)  # instance 1 holds the lease, mid-open
+
+    fx = load_fixture("post_agent_message__turn_in_progress.json")
+    res = await twin.client.post("/agent/message", json=fx["request"]["body"])
+    assert res.status_code == 429
+    assert_conforms("postAgentMessage", 429, res.json())
+    assert res.json() == fx["response"]["body"]
+    assert len(fake.requests) == 1  # no model call for the refused request
+
+    twin.who.user_id = await new_user(maker)  # another user is never blocked
+    assert (await turn(twin.client, ("user", "hi")))[-1]["event"] == "done"
+    twin.who.user_id = who.user_id
+
+    gate.open.set()
+    first = await held
+    assert first.status_code == 200 and parse_sse(first.text)[-1]["event"] == "done"
+    await drain_traces()
+    assert (await turn(twin.client, ("user", "hi")))[-1]["event"] == "done"
+    assert len(await agent_turns(maker, who.user_id)) == 2  # the 429 was not recorded
+
+
+async def test_a_dead_holders_lease_expires(agent_app, client, fake, maker, who, clock):
+    expires = NOW + timedelta(seconds=90)  # a machine died mid-turn holding this lease
+    async with maker() as s, s.begin():
+        await s.execute(
+            text(
+                "INSERT INTO agent_turn_leases (user_id, token, expires_at)"
+                " VALUES (:u, gen_random_uuid(), :e)"
+            ),
+            {"u": who.user_id, "e": expires},
+        )
+    res = await client.post("/agent/message", json=HI)
+    assert res.status_code == 429 and res.json()["error"]["code"] == "agent_turn_in_progress"
+    assert fake.requests == []
+
+    clock.current = expires + timedelta(seconds=1)
+    fake.script = [Call([Text("Back.")])]
+    assert (await turn(client, ("user", "hi")))[-1]["event"] == "done"
+    assert await leases(maker, who.user_id) == []
+
+
+async def test_the_lease_outlives_a_live_turn(agent_app, client, fake, maker, who):
+    # open (30 s) + turn (120 s) + 30 s margin, from the request clock.
+    gate = Gate(Call([Text("Held.")]))
+    fake.script = [gate]
+    held = asyncio.create_task(client.post("/agent/message", json=HI))
+    await asyncio.wait_for(gate.reached.wait(), 5)
+    [(_, expires)] = await rows(
+        maker, "SELECT token, expires_at FROM agent_turn_leases WHERE user_id = :u", u=who.user_id
+    )
+    assert expires == NOW + timedelta(seconds=180)
+    gate.open.set()
+    assert (await held).status_code == 200
+
+
+# ------------------------------------------------ the lease is released on every exit
+
+
+_SCOPE: dict[str, Any] = {
+    "type": "http",
+    "http_version": "1.1",
+    "method": "POST",
+    "scheme": "http",
+    "path": "/agent/message",
+    "raw_path": b"/agent/message",
+    "root_path": "",
+    "query_string": b"",
+    "headers": [
+        (b"host", b"test"),
+        (b"content-type", b"application/json"),
+        (b"x-timezone", b"America/Los_Angeles"),
+    ],
+    "server": ("test", 80),
+    "client": ("client", 1),
+}
+
+
+async def disconnect_after_first_event(app: FastAPI) -> list[bytes]:
+    """The client reads one SSE frame and goes away (ASGI 2.0: Starlette sees the
+    disconnect on `receive` and cancels the stream)."""
+    gone = asyncio.Event()
+    chunks: list[bytes] = []
+    sent = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": json.dumps(HI).encode(), "more_body": False}
+        await gone.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, Any]) -> None:
+        if message["type"] == "http.response.body" and message.get("body"):
+            chunks.append(message["body"])
+            gone.set()
+
+    await app({**_SCOPE, "asgi": {"version": "3.0", "spec_version": "2.0"}}, receive, send)
+    return chunks
+
+
+async def gone_before_the_body(app: FastAPI) -> list[dict[str, Any]]:
+    """The client is gone when the response starts (ASGI 2.4: `send` raises OSError), so
+    Starlette never iterates the streaming body."""
+    sent: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": json.dumps(HI).encode(), "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+        if message["type"] == "http.response.start":
+            raise OSError("client gone")
+
+    with contextlib.suppress(Exception):
+        await app({**_SCOPE, "asgi": {"version": "3.0", "spec_version": "2.4"}}, receive, send)
+    return sent
+
+
+EXITS = [
+    "done",
+    "refused",
+    "upstream_error",
+    "turn_timeout",
+    "open_failed",
+    "open_timeout",
+    "budget_exceeded",
+    "load_turn_raises",
+    "client_disconnect",
+    "body_never_iterated",
+]
+
+
+@pytest.mark.parametrize("exit_", EXITS)
+async def test_the_lease_is_released_on_every_exit(
+    agent_app, client, fake, maker, who, twin, monkeypatch, exit_
+):
+    import app.agent.router as router_mod
+
+    stage = Call([Text("Got it"), Tool("stage_exception_add", LAPTOP)], "tool_use")
+    settings = AgentSettings()
+    status = 200
+    if exit_ == "done":
+        fake.script = [Call([Text("Sure.")])]
+    elif exit_ == "refused":
+        fake.script = [Call([], "refusal")]
+    elif exit_ == "upstream_error":
+        fake.script = [stage, Failure(500)]
+    elif exit_ == "turn_timeout":
+        settings = AgentSettings(turn_timeout_seconds=0.3)
+        fake.script = [stage, Hang(5)]
+    elif exit_ == "open_failed":
+        fake.script, status = [Failure(529)], 503
+    elif exit_ == "open_timeout":
+        settings = AgentSettings(open_timeout_seconds=0.2)
+        fake.script, status = [Hang(5)], 503
+    elif exit_ == "budget_exceeded":
+        settings = AgentSettings(daily_token_budget=10)
+        await use_tokens(maker, who.user_id, 10, NOW - timedelta(hours=1))
+        status = 429
+    elif exit_ == "load_turn_raises":
+
+        async def broken(*args: Any, **kwargs: Any) -> Any:
+            raise AppError(409, "gcal_reconnect_required", "Reconnect Google Calendar.")
+
+        monkeypatch.setattr(router_mod, "load_turn", broken)
+        status = 409
+    else:
+        fake.script = [stage, Hang(5)]
+    agent_app.state.agent_settings = settings
+
+    if exit_ == "client_disconnect":
+        chunks = await disconnect_after_first_event(agent_app)
+        assert [e["event"] for e in parse_sse(b"".join(chunks).decode())] == ["delta"]
+    elif exit_ == "body_never_iterated":
+        sent = await gone_before_the_body(agent_app)
+        assert [m["type"] for m in sent] == ["http.response.start"]
+        assert sent[0]["status"] == 200
+    else:
+        res = await client.post("/agent/message", json=HI)
+        assert res.status_code == status, res.text
+        if status == 200:
+            assert parse_sse(res.text)[-1]["event"] in ("done", "error")
+
+    assert await leases(maker, who.user_id) == []
+    fake.script = [*fake.script, Call([Text("Next.")])]
+    res = await twin.client.post("/agent/message", json=HI)
+    if res.status_code != 200:
+        assert res.json()["error"]["code"] != "agent_turn_in_progress"
+
+
+async def test_a_disconnect_mid_turn_ends_the_turn_before_the_lease_is_freed(
+    agent_app, client, fake, maker, who, twin, monkeypatch
+):
+    # ASGI 2.4: `send` fails while the turn waits on its second model call. Starlette leaves
+    # the body suspended at its `yield`; the turn must be cancelled before the lease goes, or a
+    # second turn could start while this one can still call the model and commit.
+    import app.agent.router as router_mod
+
+    agent_app.state.agent_settings = AgentSettings(heartbeat_seconds=0.05)
+    stage = Call([Text("Got it"), Tool("stage_exception_add", LAPTOP)], "tool_use")
+    gate = Gate(Call([Text("Too late.")]))
+    fake.script = [stage, gate]
+    before = await changesets(maker, who.user_id)
+    order: list[str] = []
+    release, record = router_mod.release_turn_lease, AgentTurn._record
+
+    async def traced_release(tx, user_id, token):
+        order.append("lease released")
+        await release(tx, user_id, token)
+
+    def traced_record(self):
+        order.append("turn ended")  # _produce's finally: the turn task is finishing
+        record(self)
+
+    monkeypatch.setattr(router_mod, "release_turn_lease", traced_release)
+    monkeypatch.setattr(AgentTurn, "_record", traced_record)
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": json.dumps(HI).encode(), "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        if message["type"] == "http.response.body" and gate.reached.is_set():
+            raise OSError("client gone")  # the first frame (a ping) after the turn is held
+
+    with contextlib.suppress(Exception):
+        await agent_app(
+            {**_SCOPE, "asgi": {"version": "3.0", "spec_version": "2.4"}}, receive, send
+        )
+
+    assert await leases(maker, who.user_id) == []
+    assert order == ["turn ended", "lease released"]
+    assert [r[:2] for r in await agent_turns(maker, who.user_id)] == [("error", "cancelled")]
+    gate.open.set()
+    await asyncio.sleep(0.1)
+    assert len(fake.requests) == 2  # no further model call once the client is gone
+    assert await changesets(maker, who.user_id) == before  # nothing committed

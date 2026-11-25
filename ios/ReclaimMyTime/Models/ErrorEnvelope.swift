@@ -39,6 +39,8 @@ enum KnownErrorCode {
     static let validationFailed = "validation_failed"
     static let internalError = "internal_error"
     static let agentUnavailable = "agent_unavailable"
+    static let agentBudgetExceeded = "agent_budget_exceeded"
+    static let agentTurnInProgress = "agent_turn_in_progress"
     static let appleUnavailable = "apple_unavailable"
     static let appleRevocationFailed = "apple_revocation_failed"
 }

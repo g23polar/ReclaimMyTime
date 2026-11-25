@@ -112,7 +112,7 @@ async def record_agent_turn(tx: AsyncSession, record: AgentTurnRecord, *, now: d
 
 async def tokens_used_since(tx: AsyncSession, user_id: uuid.UUID, since: datetime) -> int:
     """Sum of input+output+cache_write tokens for the user's turns with created_at >= since
-    (for the future daily budget; cache reads excluded)."""
+    (the daily token budget; cache reads excluded)."""
     total = func.coalesce(
         func.sum(
             cast(AgentTurnRow.input_tokens, BigInteger)
