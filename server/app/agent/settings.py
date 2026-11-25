@@ -22,10 +22,16 @@ class AgentSettings:
     # capture, decision 2026-11-17). Off unless AGENT_CAPTURE_TURNS is set; counts and
     # outcomes are stored either way.
     capture_turns: bool = False
+    # Per user per rolling 24 h: input + output + cache-write tokens (`tokens_used_since`).
+    # Checked before every model call; overridable with AGENT_DAILY_TOKEN_BUDGET.
+    daily_token_budget: int = 1_000_000
 
     @classmethod
     def from_env(cls) -> AgentSettings:
         return cls(
             model=os.environ.get("AGENT_MODEL", cls.model),
             capture_turns=os.environ.get("AGENT_CAPTURE_TURNS", "").lower() in ("1", "true", "yes"),
+            daily_token_budget=int(
+                os.environ.get("AGENT_DAILY_TOKEN_BUDGET", cls.daily_token_budget)
+            ),
         )

@@ -137,8 +137,18 @@ class Hang:
     seconds: float = 30.0
 
 
+@dataclass
+class Gate:
+    """A call held until `open` is set, then answered with `call` (holds a turn in flight).
+    `reached` is set when the call arrives."""
+
+    call: Call
+    open: asyncio.Event = field(default_factory=asyncio.Event)
+    reached: asyncio.Event = field(default_factory=asyncio.Event)
+
+
 class FakeAnthropic:
-    def __init__(self, *script: Call | Failure | Hang) -> None:
+    def __init__(self, *script: Call | Failure | Hang | Gate) -> None:
         self.script = list(script)
         self.requests: list[dict[str, Any]] = []
 
@@ -149,6 +159,10 @@ class FakeAnthropic:
             if n > len(self.script):
                 raise AssertionError(f"unexpected model call #{n}")
             step = self.script[n - 1]
+            if isinstance(step, Gate):
+                step.reached.set()
+                await step.open.wait()
+                step = step.call
             if isinstance(step, Hang):
                 await asyncio.sleep(step.seconds)
             if isinstance(step, Hang):

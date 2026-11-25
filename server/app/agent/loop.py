@@ -19,7 +19,7 @@ import asyncio
 import contextlib
 import logging
 import traceback
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -46,6 +46,7 @@ FALLBACK = "Sorry, I didn't catch that. Could you say it another way?"
 UPDATED = "Here's the proposal:"
 UNAVAILABLE = "The assistant is temporarily unavailable. Nothing was changed; try again."
 INTERNAL = "Something went wrong on our side. Nothing was changed; try again."
+BUDGET_EXCEEDED = "You've reached today's assistant limit. Try again later."
 STALE = (
     "Your pending changes were updated somewhere else while I was working. Nothing was "
     "changed; try again."
@@ -62,7 +63,8 @@ class TranscriptMessage(Protocol):
 
 class TurnAborted(Exception):
     """Ends the turn with an in-stream `error` event carrying `code` (T4.2: busy time could
-    not be read — `gcal_unavailable` / `gcal_reconnect_required`). Nothing was committed."""
+    not be read — `gcal_unavailable` / `gcal_reconnect_required`; issue #3: the daily token
+    budget ran out mid-turn — `agent_budget_exceeded`). Nothing was committed."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(code)
@@ -108,14 +110,24 @@ class TurnSummary:
 Recorder = Callable[[TurnSummary], Awaitable[None]]
 _RECORD_TIMEOUT = 5.0  # seconds; a stuck trace write is abandoned, never retried
 
-# Trace writes run detached from the request: the app closes the SSE stream as soon as it
-# reads `done`, which cancels the response task, and a write inside it would be cut off
-# mid-transaction (seen on prod 2026-11-18). Strong refs keep the tasks alive until done.
+# Trace writes (and the router's turn-lease releases) run detached from the request: the app
+# closes the SSE stream as soon as it reads `done`, which cancels the response task, and a
+# write inside it would be cut off mid-transaction (seen on prod 2026-11-18). Strong refs keep
+# the tasks alive until done.
 _TRACES: set[asyncio.Task[None]] = set()
 
 
+def detach(write: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
+    """Run a DB write in its own task, held in `_TRACES` until it finishes. Synchronous, so it
+    also works while the calling task is being cancelled."""
+    task = asyncio.create_task(write)
+    _TRACES.add(task)
+    task.add_done_callback(_TRACES.discard)
+    return task
+
+
 async def drain_traces() -> None:
-    """Wait for pending trace writes (tests, shutdown)."""
+    """Wait for pending trace writes and lease releases (tests, shutdown)."""
     while pending := [t for t in _TRACES if not t.done()]:
         await asyncio.gather(*pending, return_exceptions=True)
 
@@ -146,9 +158,13 @@ class AgentTurn:
         snapshot: str,
         proposer: Proposer,
         recorder: Recorder | None = None,
+        tokens_used: int = 0,
     ) -> None:
         self._client = client
         self._settings = settings
+        # The user's tokens in the 24 h before this turn (read by the caller; the loop stays
+        # DB-free). Each later call checks it plus this turn's own against the daily budget.
+        self._tokens_used = tokens_used
         self._staging = staging
         self._proposer = proposer
         self._recorder = recorder
@@ -244,9 +260,7 @@ class AgentTurn:
         if not self._terminal:
             s.error_code = "cancelled"  # the client went away before the turn ended
         s.staged = tuple(self._staging.mutations) if s.outcome == "completed" else ()
-        task = asyncio.create_task(_write_trace(self._recorder, s))
-        _TRACES.add(task)
-        task.add_done_callback(_TRACES.discard)
+        detach(_write_trace(self._recorder, s))
 
     # ------------------------------------------------------------ loop
 
@@ -272,6 +286,10 @@ class AgentTurn:
                 assert self._first is not None, "open() first"
                 stream = self._first
             else:
+                if self._tokens_used + _budget_tokens(self.summary) >= (
+                    self._settings.daily_token_budget
+                ):
+                    raise TurnAborted("agent_budget_exceeded", BUDGET_EXCEEDED)
                 self.summary.model_calls += 1
                 stream = await self._stack.enter_async_context(self._stream())
             first_text = True
@@ -353,6 +371,11 @@ class AgentTurn:
         s.output_tokens += usage.output_tokens or 0
         s.cache_read_tokens += getattr(usage, "cache_read_input_tokens", None) or 0
         s.cache_write_tokens += getattr(usage, "cache_creation_input_tokens", None) or 0
+
+
+def _budget_tokens(s: TurnSummary) -> int:
+    """This turn's tokens as `tokens_used_since` counts them (cache reads excluded)."""
+    return s.input_tokens + s.output_tokens + s.cache_write_tokens
 
 
 async def _write_trace(recorder: Recorder, summary: TurnSummary) -> None:

@@ -4,6 +4,12 @@ The only code path that invokes the LLM, and only for a request whose transcript
 user message (ARCH §8: never without a user action). Pre-stream failures are JSON errors;
 once the 200 is sent, every outcome is an SSE event and exactly one `done` or `error` ends
 the stream.
+
+Limits (issue #3): the transcript totals at most `MAX_TRANSCRIPT_CHARS`; one turn per user is
+in flight at a time, across every server process (a lease row in `agent_turn_leases`, taken
+before any other work and released on every exit); and the user's tokens in the last 24 h stay
+under `daily_token_budget`, checked here before the first model call and by the loop before
+each later one.
 """
 
 from __future__ import annotations
@@ -14,7 +20,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 
 import anthropic
@@ -26,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.context import load_turn
 from app.agent.loop import (
+    BUDGET_EXCEEDED,
     AgentTurn,
     DryRun,
     Event,
@@ -34,6 +41,8 @@ from app.agent.loop import (
     StaleBase,
     TurnAborted,
     TurnSummary,
+    _redacted_trace,
+    detach,
     upstream_summary,
 )
 from app.agent.narration import narrate, project_names
@@ -53,9 +62,10 @@ from app.api.deps import (
 )
 from app.api.outbox import kick_outbox
 from app.api.views import changeset_view
-from app.db.agent_turns import AgentTurnRecord, record_agent_turn
+from app.db.agent_turns import AgentTurnRecord, record_agent_turn, tokens_used_since
 from app.db.models import Changeset
 from app.db.models.staged import InvalidMutation, StagedMutation, dump_staged
+from app.db.turn_leases import acquire_turn_lease, release_turn_lease
 from app.db.write_paths import (
     WritePathError,
     lock_user,
@@ -87,6 +97,11 @@ class _Request(BaseModel):
 
 _REQUEST: TypeAdapter[_Request] = TypeAdapter(_Request)
 
+# Contract: total `content` length of one request, in code points (Python `len`); the client
+# drops the oldest messages to fit.
+MAX_TRANSCRIPT_CHARS = 32000
+BUDGET_WINDOW = timedelta(hours=24)  # rolling, per user
+
 
 @router.post("/agent/message")
 async def post_agent_message(
@@ -99,15 +114,56 @@ async def post_agent_message(
     body: RawBody,
 ) -> StreamingResponse:
     req = parse_body(_REQUEST, body)
+    if sum(len(m.content) for m in req.messages) > MAX_TRANSCRIPT_CHARS:
+        raise validation_failed(
+            [
+                {
+                    "path": "messages",
+                    "message": f"total content exceeds {MAX_TRANSCRIPT_CHARS} characters",
+                }
+            ],
+            "The transcript is too long.",
+        )
     last = len(req.messages) - 1
     if req.messages[last].role != "user":
         raise validation_failed(
             [{"path": f"messages[{last}].role", "message": "expected 'user'"}],
             "The last transcript message must have role 'user'.",
         )
-    async with transaction(maker) as tx:
-        ctx = await load_turn(tx, user_id, now=now, device_tz=tz.key)
     settings = agent_settings(request)
+    async with transaction(maker) as tx:
+        token = await acquire_turn_lease(tx, user_id, now=now, ttl=lease_ttl(settings))
+    if token is None:
+        raise AppError(429, "agent_turn_in_progress", _IN_PROGRESS)
+    release = _lease_releaser(maker, user_id, token)
+    try:
+        return await _start_turn(request, req, user_id, maker, now, tz.key, busy, settings, release)
+    except Exception:
+        await asyncio.shield(release())  # freed before the error reaches the client
+        raise
+    except BaseException:
+        release()  # cancelled: the detached release still runs
+        raise
+
+
+async def _start_turn(
+    request: Request,
+    req: _Request,
+    user_id: uuid.UUID,
+    maker: async_sessionmaker[AsyncSession],
+    now: datetime,
+    tz: str,
+    busy: BusyProvider,
+    settings: AgentSettings,
+    release: Callable[[], asyncio.Task[None]],
+) -> StreamingResponse:
+    """Everything after the lease is taken; the caller releases it if this raises."""
+    last = len(req.messages) - 1
+    async with transaction(maker) as tx:
+        used = await tokens_used_since(tx, user_id, now - BUDGET_WINDOW)
+        if used >= settings.daily_token_budget:
+            raise AppError(429, "agent_budget_exceeded", BUDGET_EXCEEDED)
+        ctx = await load_turn(tx, user_id, now=now, device_tz=tz)
     snapshot = render_snapshot(ctx.staging, ctx.snapshot)
     turn = AgentTurn(
         client=anthropic_client(request),
@@ -119,7 +175,7 @@ async def post_agent_message(
             maker,
             user_id,
             now=now,
-            device_tz=tz.key,
+            device_tz=tz,
             committed_names=ctx.committed_names,
             pending_id=ctx.pending_id,
             busy=busy,
@@ -134,6 +190,7 @@ async def post_agent_message(
             snapshot=snapshot,
             transcript_len=len(req.messages),
         ),
+        tokens_used=used,
     )
     try:
         # Bounded, retries included: the request is not streaming yet, so a client that
@@ -146,8 +203,9 @@ async def post_agent_message(
         else:
             log.warning("agent open timed out after %ss", settings.open_timeout_seconds)
         raise AppError(503, "agent_unavailable", _UNAVAILABLE_PRE) from exc
-    return StreamingResponse(
+    return _LeasedStream(
         sse(turn.events(), heartbeat=settings.heartbeat_seconds),
+        release=release,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -156,6 +214,75 @@ async def post_agent_message(
 log = logging.getLogger(__name__)
 
 _UNAVAILABLE_PRE = "The assistant is temporarily unavailable. Try again in a moment."
+_IN_PROGRESS = "A reply is still being written. Wait for it to finish, then try again."
+
+
+# ---------------------------------------------------------------- one turn in flight
+
+
+_LEASE_MARGIN = timedelta(seconds=30)
+_RELEASE_TIMEOUT = 5.0  # seconds; a stuck release is abandoned and the lease expires instead
+
+
+def lease_ttl(settings: AgentSettings) -> timedelta:
+    """Outlives any live turn (open and turn are each bounded by their timeout), so a healthy
+    turn never loses its lease; a holder that died blocks its user this long at most."""
+    return (
+        timedelta(seconds=settings.open_timeout_seconds + settings.turn_timeout_seconds)
+        + _LEASE_MARGIN
+    )
+
+
+def _lease_releaser(
+    maker: async_sessionmaker[AsyncSession], user_id: uuid.UUID, token: uuid.UUID
+) -> Callable[[], asyncio.Task[None]]:
+    """Release the lease once, however often it is called; every call returns that one
+    release task. The delete runs detached (like the trace write) so it survives the
+    cancellation of the response task; it does not wait for the trace. Callers that are not
+    being cancelled await it, so the user's next request never races it."""
+    task: asyncio.Task[None] | None = None
+
+    def release() -> asyncio.Task[None]:
+        nonlocal task
+        if task is None:
+            task = detach(_release(maker, user_id, token))
+        return task
+
+    return release
+
+
+async def _release(
+    maker: async_sessionmaker[AsyncSession], user_id: uuid.UUID, token: uuid.UUID
+) -> None:
+    try:
+        async with asyncio.timeout(_RELEASE_TIMEOUT), transaction(maker) as tx:
+            await release_turn_lease(tx, user_id, token)
+    except Exception as exc:
+        # Best-effort: the lease expires through its TTL instead.
+        log.warning("agent turn lease not released:\n%s", _redacted_trace(exc))
+
+
+class _LeasedStream(StreamingResponse):
+    """Releases the turn lease when the response ends, however it ends: streamed to the end,
+    client gone mid-stream, or a body Starlette never iterates because the client left first
+    (so a `finally` inside the body generator is not enough)."""
+
+    def __init__(
+        self,
+        content: AsyncIterator[str],
+        *,
+        release: Callable[[], asyncio.Task[None]],
+        **kw: Any,
+    ) -> None:
+        super().__init__(content, **kw)
+        self._release = release
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            released = self._release()
+        await asyncio.shield(released)  # not cancelled: finish the release before returning
 
 
 # ---------------------------------------------------------------- turn trace
