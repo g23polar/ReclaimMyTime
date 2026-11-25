@@ -18,7 +18,7 @@ from jsonschema import Draft202012Validator
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.agent.loop import StaleBase, drain_traces
+from app.agent.loop import AgentTurn, StaleBase, drain_traces
 from app.agent.router import DbProposer
 from app.agent.router import router as agent_router
 from app.agent.settings import AgentSettings
@@ -864,3 +864,51 @@ async def test_the_lease_is_released_on_every_exit(
     res = await twin.client.post("/agent/message", json=HI)
     if res.status_code != 200:
         assert res.json()["error"]["code"] != "agent_turn_in_progress"
+
+
+async def test_a_disconnect_mid_turn_ends_the_turn_before_the_lease_is_freed(
+    agent_app, client, fake, maker, who, twin, monkeypatch
+):
+    # ASGI 2.4: `send` fails while the turn waits on its second model call. Starlette leaves
+    # the body suspended at its `yield`; the turn must be cancelled before the lease goes, or a
+    # second turn could start while this one can still call the model and commit.
+    import app.agent.router as router_mod
+
+    agent_app.state.agent_settings = AgentSettings(heartbeat_seconds=0.05)
+    stage = Call([Text("Got it"), Tool("stage_exception_add", LAPTOP)], "tool_use")
+    gate = Gate(Call([Text("Too late.")]))
+    fake.script = [stage, gate]
+    before = await changesets(maker, who.user_id)
+    order: list[str] = []
+    release, record = router_mod.release_turn_lease, AgentTurn._record
+
+    async def traced_release(tx, user_id, token):
+        order.append("lease released")
+        await release(tx, user_id, token)
+
+    def traced_record(self):
+        order.append("turn ended")  # _produce's finally: the turn task is finishing
+        record(self)
+
+    monkeypatch.setattr(router_mod, "release_turn_lease", traced_release)
+    monkeypatch.setattr(AgentTurn, "_record", traced_record)
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": json.dumps(HI).encode(), "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        if message["type"] == "http.response.body" and gate.reached.is_set():
+            raise OSError("client gone")  # the first frame (a ping) after the turn is held
+
+    with contextlib.suppress(Exception):
+        await agent_app(
+            {**_SCOPE, "asgi": {"version": "3.0", "spec_version": "2.4"}}, receive, send
+        )
+
+    assert await leases(maker, who.user_id) == []
+    assert order == ["turn ended", "lease released"]
+    assert [r[:2] for r in await agent_turns(maker, who.user_id)] == [("error", "cancelled")]
+    gate.open.set()
+    await asyncio.sleep(0.1)
+    assert len(fake.requests) == 2  # no further model call once the client is gone
+    assert await changesets(maker, who.user_id) == before  # nothing committed

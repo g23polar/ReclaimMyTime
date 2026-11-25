@@ -265,7 +265,13 @@ async def _release(
 class _LeasedStream(StreamingResponse):
     """Releases the turn lease when the response ends, however it ends: streamed to the end,
     client gone mid-stream, or a body Starlette never iterates because the client left first
-    (so a `finally` inside the body generator is not enough)."""
+    (so a `finally` inside the body generator is not enough).
+
+    The body is closed first: when `send` fails (ASGI 2.4 `ClientDisconnect`) the generator is
+    left suspended at its `yield` with the turn still running, and releasing then would let a
+    second turn in while this one can still call the model and commit. Closing it cancels the
+    turn and waits for it (`sse` → `AgentTurn.events`); on a finished or unstarted body it is a
+    no-op."""
 
     def __init__(
         self,
@@ -281,6 +287,8 @@ class _LeasedStream(StreamingResponse):
         try:
             await super().__call__(scope, receive, send)
         finally:
+            with contextlib.suppress(BaseException):
+                await self.body_iterator.aclose()  # type: ignore[attr-defined]
             released = self._release()
         await asyncio.shield(released)  # not cancelled: finish the release before returning
 
