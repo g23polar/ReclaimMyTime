@@ -341,6 +341,7 @@ Rules:
 - **Deterministic:** stable sort keys only — never iterate a `set` into an ordering. Tested by running identical input under two `PYTHONHASHSEED` values in subprocesses and comparing outputs byte-for-byte.
 - **`verify(plan, input) -> list[Violation]`** is a separate pure module from the packer: checks overlap, busy/window/exception/pin/buffer violations. Called before every `persist_plan`; doubles as the `hypothesis` property-test oracle. The DB exclusion constraint only covers block-vs-block — `verify()` covers everything else.
 - **Golden replay tests:** stored `solver_input` snapshots from real plans re-solve to identical output across releases (or the change is a deliberate, versioned solver bump).
+- **Off the event loop, with a timeout** (issue #22, 2026-11-25): the server never calls `pack` directly; it always goes through `app.db.solve.solve`, which runs it in a worker thread bounded by `SOLVER_TIMEOUT_SECONDS` (default 5 s). A timed-out solve is not killed — its thread runs to completion and the result is discarded — and the request fails as 503 `solver_timeout` (in-stream `error` for `POST /agent/message`) with its transaction rolled back.
 
 ## 5. Pydantic Extraction Contracts
 

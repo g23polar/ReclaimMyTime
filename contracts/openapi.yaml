@@ -864,6 +864,9 @@ paths:
         read; what was written stays written, the rest stays pending, and no Google edit is
         applied when the busy read fails; retry later). 2026-11-16 (T4.3b): the same two
         errors now also come from the ingest and drift steps.
+        2026-11-25 (issue #22): 503 `solver_timeout` when a solve in the ingest or drift step
+        runs out of time; nothing from those steps is applied or staged, what the drain wrote
+        stays written; retry.
       parameters: [{$ref: '#/components/parameters/XTimezone'}]
       responses:
         '200':
