@@ -2,7 +2,8 @@
 """The deterministic gate: does the job's branch pass the repo's checks?
 
 Usage:
-  gate <job-id>            write round-N/checks.md; exit 0 on PASS, 1 on FAIL
+  gate <job-id>            write round-N/checks.md; exit 0 on PASS, 1 on FAIL,
+                           3 on BUSY (a shared test resource stayed locked; nothing written, run it again later)
   gate <job-id> --merge    same, as round-N/merge-checks.md (job merge runs it)
   gate --hook              builder SubagentStop hook: run the checks once, exit 2 on failure
 
@@ -24,6 +25,7 @@ FACTORY = REPO / "factory"
 CONFIG = json.loads((FACTORY / "config.json").read_text())
 CHECKS = FACTORY / "checks.sh"
 TAIL = 80
+BUSY = 75  # checks.sh: bin/locked gave up waiting for a shared test resource
 
 
 def die(msg):
@@ -67,6 +69,11 @@ def gate(job_id, merge):
     commit = git(worktree, "rev-parse", "HEAD").strip()
     protected = protected_changes(worktree)
     code, log, seconds = run_checks(worktree)
+    if code == BUSY:
+        # Untested, not failed: don't spend the job's round on someone else's lock.
+        busy = [l for l in log.splitlines() if l.startswith("locked: ")]
+        print(f"GATE: BUSY ({job_id} round {job['round']}: {busy[-1] if busy else 'a test resource stayed locked'})")
+        sys.exit(3)
     verdict = "PASS" if code == 0 and not protected else "FAIL"
     name = "merge-checks" if merge else "checks"
     (round_dir / f"{name}.log").write_text(log)

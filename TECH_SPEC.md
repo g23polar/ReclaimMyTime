@@ -120,7 +120,7 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 
 ## Progress checklist
 
-*Maintained by the main session; a task is checked only when committed to `main` after local checks + review. Last updated 2026-11-17.*
+*Maintained by the main session; a task is checked only when committed to `main` after local checks + review. Last updated 2026-11-24.*
 
 **M0 — Foundations**
 - [x] T0.1 API contracts — `9b94804`, frozen `86024f2`
@@ -173,6 +173,14 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
   - [x] Simulator pass on prod 2026-11-18: Google sign-in + calendar connected; skip past block; drag → pin → diff → confirm → plan v5 synced to Google; agent intake that doesn't fit → trade-off sheet → reject; agent_turns traced (cache read on call 2)
   - [ ] Eyeball Google Calendar: moved block on Thu; archived "Grant application" events (local-dev era) gone
   - [ ] Destructive, last: `DELETE /gcal`, `DELETE /me` (revokes the Google grant)
+
+**Todos v1** (tracking only: daily / weekly recurring checklists + one-offs; no solver, no agent; planned 2026-11-24, via software factory)
+- [x] TD.A Todos contract (openapi + fixtures + Swift model decode) — #8, PR #11
+- [x] TD.B Todos server (migration 0005, `/todos` API, period validation) — #10, PR #13
+- [x] TD.C Todos iOS tab (5th tab, optimistic ticks, reorder) — #9, PR #12
+
+**Tooling**
+- [x] Factory/Orca integration: shared pg/sim locks, `orca` claims, adopted-PR review — factory-orca-integration
   - [x] Finding (1) fixed 2026-11-17: strict preferred windows replace availability for their project (solver 1.1.0; slack rule measured inside work hours); agent prompt/tool text steers one-project time to strict windows. Verified live: hours narrowed to 08–18 with Reading kept at 18–22.
   - [x] Findings (2) repeated pin narration and (3) agent deferring to the card — fixed `566d19c`
   - [x] Finding (5) strict project with empty windows → logged as an OPEN question in PRD §10 (to figure out; not blocking T6.1)
