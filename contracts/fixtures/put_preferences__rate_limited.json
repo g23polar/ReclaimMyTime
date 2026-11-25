@@ -1,0 +1,75 @@
+{
+  "operation": "putPreferences",
+  "method": "PUT",
+  "path": "/preferences",
+  "case": "rate_limited",
+  "description": "Over the per-user write rate limit (issue #23): refused before any work, nothing staged; Retry-After gives the seconds to the window end.",
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "timezone": "America/Los_Angeles",
+      "schedulable_windows": {
+        "mon": [
+          [
+            "07:00",
+            "22:00"
+          ]
+        ],
+        "tue": [
+          [
+            "07:00",
+            "22:00"
+          ]
+        ],
+        "wed": [
+          [
+            "07:00",
+            "22:00"
+          ]
+        ],
+        "thu": [
+          [
+            "07:00",
+            "22:00"
+          ]
+        ],
+        "fri": [
+          [
+            "07:00",
+            "22:00"
+          ]
+        ],
+        "sat": [
+          [
+            "09:00",
+            "20:00"
+          ]
+        ],
+        "sun": [
+          [
+            "09:00",
+            "20:00"
+          ]
+        ]
+      },
+      "day_diversity": "mixed",
+      "buffer_minutes": 15,
+      "week_start": 1
+    }
+  },
+  "response": {
+    "status": 429,
+    "headers": {
+      "Retry-After": "45"
+    },
+    "body": {
+      "error": {
+        "code": "rate_limited",
+        "message": "Too many changes at once. Try again in a moment."
+      }
+    }
+  }
+}
