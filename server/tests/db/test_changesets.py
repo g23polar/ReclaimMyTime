@@ -455,7 +455,7 @@ async def test_tag_cap_refuses_an_over_cap_list_at_staging(
         assert await rows(maker, pending) == [(0,)]
         assert await rows(maker, "SELECT count(*) FROM projects WHERE id = :p", p=GRANT) == [(0,)]
     update = {"project_id": str(WORKOUT), "changes": {"requirements": ["gym", "a", "b"]}}
-    with pytest.raises(InvalidMutation):
+    with pytest.raises(InvalidMutation, match=CAP_MESSAGE):
         async with maker() as s, s.begin():
             await stage_changeset(
                 s, user_id, staged({"kind": "project_updated", "payload": update}), now=T0
