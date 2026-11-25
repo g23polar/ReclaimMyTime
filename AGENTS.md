@@ -40,7 +40,9 @@ solver contract and agent runtime: **ARCHITECTURE.md**. Task breakdown: **TECH_S
 - Tests for all new features, covering happy path and edge cases. Match surrounding code; don't
   reformat files you didn't otherwise change.
 - **Never** deploy, run migrations against Neon, or point anything at production. The iOS app
-  defaults to prod, so always launch it with `-UseMockAPI YES` (below).
+  defaults to prod, so always launch it with `-UseMockAPI YES` (below). Sole exception: the
+  user-only `/launch-prod` skill (`disable-model-invocation`). No agent or subagent may invoke it,
+  run its commands, or launch the app without `-UseMockAPI YES`.
 - Never run `rm`, `rmdir`, `unlink`, `find -delete` or `rmtree`. Leave stray files and say so.
 
 ## Fresh checkout setup
