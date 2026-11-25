@@ -1,6 +1,7 @@
 """Alembic migrations: up/down/up on a scratch schema, migrated schema == Base.metadata, and the
 per-revision data checks (0002 reason backfill, 0003 google identities, 0004 agent_turns,
-0005 todos, 0006 agent_turn_leases)."""
+0005 todos, 0006 agent_turn_leases,
+0007 write_rate_counters)."""
 
 from __future__ import annotations
 
@@ -36,6 +37,7 @@ TABLES = {
     "agent_turns",
     *TODO_TABLES,
     "agent_turn_leases",  # migration 0006 (issue #3)
+    "write_rate_counters",  # migration 0007 (issue #23)
 }
 
 
@@ -301,11 +303,12 @@ async def test_0004_agent_turns_round_trips(schema: str) -> None:
             assert got == [(0, 0, 0, 0, "[]", None, None)]
 
             await conn.run_sync(run_alembic, "downgrade", "0003_google_identity")
-            # Head includes 0005 and 0006, so downgrading past 0004 drops their tables too.
+            # Head includes 0005 to 0007, so downgrading past 0004 drops their tables too.
             assert await conn.run_sync(_tables) == TABLES - {
                 "agent_turns",
                 *TODO_TABLES,
                 "agent_turn_leases",
+                "write_rate_counters",
             }
             assert (await conn.execute(text("SELECT count(*) FROM users"))).scalar_one() == 1
             await conn.run_sync(run_alembic, "upgrade", "head")
@@ -398,10 +401,51 @@ async def test_0006_agent_turn_leases_round_trips(schema: str) -> None:
             await conn.execute(text(f"INSERT INTO users (id) VALUES ('{uid}')"))
             await conn.execute(text(lease))
             await conn.run_sync(run_alembic, "downgrade", "0005_todos")
-            assert await conn.run_sync(_tables) == TABLES - {"agent_turn_leases"}
+            assert await conn.run_sync(_tables) == TABLES - {
+                "agent_turn_leases",
+                "write_rate_counters",
+            }
             assert (await conn.execute(text("SELECT count(*) FROM users"))).scalar_one() == 1
             await conn.run_sync(run_alembic, "upgrade", "head")
             n = (await conn.execute(text("SELECT count(*) FROM agent_turn_leases"))).scalar_one()
+            assert n == 0
+    finally:
+        await engine.dispose()
+
+
+async def test_0007_write_rate_counters_round_trips(schema: str) -> None:
+    """Migration 0007 (issue #23): one counter row per user (primary key), cascading with the
+    user; downgrade drops only that table; up again recreates it empty."""
+    uid = "00000000-0000-4000-8000-000000000007"
+    counter = (
+        "INSERT INTO write_rate_counters (user_id, window_start, count)"
+        f" VALUES ('{uid}', '2026-11-17T18:30:00Z', 1)"
+    )
+    engine = await make_engine(schema)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(run_alembic, "upgrade", "0006_agent_turn_leases")
+            assert "write_rate_counters" not in await conn.run_sync(_tables)
+            await conn.execute(text(f"INSERT INTO users (id) VALUES ('{uid}')"))
+
+            await conn.run_sync(run_alembic, "upgrade", "head")
+            assert await conn.run_sync(_tables) == TABLES
+            await conn.execute(text(counter))
+            with pytest.raises(IntegrityError):  # pk_write_rate_counters: one row per user
+                async with conn.begin_nested():
+                    await conn.execute(text(counter))
+
+            await conn.execute(text(f"DELETE FROM users WHERE id = '{uid}'"))
+            n = (await conn.execute(text("SELECT count(*) FROM write_rate_counters"))).scalar_one()
+            assert n == 0  # cascade
+
+            await conn.execute(text(f"INSERT INTO users (id) VALUES ('{uid}')"))
+            await conn.execute(text(counter))
+            await conn.run_sync(run_alembic, "downgrade", "0006_agent_turn_leases")
+            assert await conn.run_sync(_tables) == TABLES - {"write_rate_counters"}
+            assert (await conn.execute(text("SELECT count(*) FROM users"))).scalar_one() == 1
+            await conn.run_sync(run_alembic, "upgrade", "head")
+            n = (await conn.execute(text("SELECT count(*) FROM write_rate_counters"))).scalar_one()
             assert n == 0
     finally:
         await engine.dispose()
