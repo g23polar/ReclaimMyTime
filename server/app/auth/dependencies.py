@@ -172,7 +172,9 @@ def default_runtime(*, apple_client: AppleClient | None = None) -> AuthRuntime:
     database_url = os.environ.get("DATABASE_URL", "")
     if not database_url:
         raise RuntimeError("DATABASE_URL must be set")
-    engine = create_async_engine(database_url, pool_pre_ping=True)
+    # hide_parameters: bound values (token hashes, emails, encrypted refresh tokens) never
+    # reach logs or exception messages.
+    engine = create_async_engine(database_url, pool_pre_ping=True, hide_parameters=True)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     gcal = GcalSettings.from_env(require_oauth=False)  # revoke endpoint/timeout only
     return build_runtime(
