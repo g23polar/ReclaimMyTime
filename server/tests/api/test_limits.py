@@ -6,14 +6,22 @@ forward."""
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 from typing import Any
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db.models.staged import MAX_TAGS, MAX_WINDOWS_PER_DAY, parse_staged
-from tests.api.conftest import NOW
-from tests.db.conftest import WORKOUT, prefs, propose, requires_db, rows
+from app.db.models.staged import (
+    MAX_TAGS,
+    MAX_USER_EXCEPTIONS,
+    MAX_USER_PINS,
+    MAX_USER_PROJECTS,
+    MAX_WINDOWS_PER_DAY,
+    parse_staged,
+)
+from tests.api.conftest import NOW, future_block
+from tests.db.conftest import WORKOUT, in_use, prefs, propose, requires_db, rows, seed_in_use
 
 pytestmark = requires_db
 Maker = async_sessionmaker[AsyncSession]
@@ -229,3 +237,69 @@ async def test_stored_over_cap_changeset_then_valid_create(
     assert resp.status_code == 202, resp.text
     status = "SELECT status::text FROM changesets WHERE id = :c"
     assert await rows(maker, status, c=old) == [("expired",)]
+
+
+# ---------------------------------------------------------------- per-user row caps (issue #24)
+
+
+async def assert_limit(
+    client: httpx.AsyncClient, maker: Maker, method: str, path: str, body: Any, details: Any
+) -> None:
+    before = await changeset_count(maker)
+    resp = await client.request(method, path, json=body)
+    assert resp.status_code == 409, resp.text
+    error = resp.json()["error"]
+    assert error["code"] == "limit_reached"
+    assert "at most" in error["message"]
+    assert error["details"] == details
+    assert await changeset_count(maker) == before  # nothing staged
+
+
+async def test_post_projects_at_the_project_cap(
+    client: httpx.AsyncClient, maker: Maker, user_id: uuid.UUID, world: uuid.UUID
+) -> None:
+    await seed_in_use(maker, user_id, "projects", MAX_USER_PROJECTS)
+    details = {"resource": "projects", "limit": MAX_USER_PROJECTS}
+    await assert_limit(client, maker, "POST", "/projects", READING, details)
+
+
+async def test_post_exceptions_at_the_exception_cap(
+    client: httpx.AsyncClient, maker: Maker, user_id: uuid.UUID, world: uuid.UUID
+) -> None:
+    await seed_in_use(maker, user_id, "exceptions", MAX_USER_EXCEPTIONS)
+    details = {"resource": "exceptions", "limit": MAX_USER_EXCEPTIONS}
+    body = FRIDAY_NO_TAGS | {"blocks_all": True}
+    await assert_limit(client, maker, "POST", "/exceptions", body, details)
+
+
+async def test_patch_blocks_at_the_pin_cap(
+    client: httpx.AsyncClient, maker: Maker, user_id: uuid.UUID, world: uuid.UUID
+) -> None:
+    await seed_in_use(maker, user_id, "pins", MAX_USER_PINS)
+    block = await future_block(maker, user_id)
+    start = block.span.lower + timedelta(hours=1)
+    edit = {"start": start.isoformat(), "end": (start + timedelta(minutes=30)).isoformat()}
+    details = {"resource": "pins", "limit": MAX_USER_PINS}
+    for body in ({"action": "edit", "span": edit}, {"action": "delete"}):
+        await assert_limit(client, maker, "PATCH", f"/blocks/{block.id}", body, details)
+
+
+async def test_confirm_at_the_project_cap(
+    client: httpx.AsyncClient, maker: Maker, user_id: uuid.UUID, world: uuid.UUID
+) -> None:
+    await seed_in_use(maker, user_id, "projects", MAX_USER_PROJECTS - 1)
+    resp = await client.post("/projects", json=READING)
+    assert resp.status_code == 202, resp.text
+    cs = resp.json()["id"]
+    await seed_in_use(maker, user_id, "projects", MAX_USER_PROJECTS)  # committed elsewhere
+    resp = await client.post(f"/changesets/{cs}/confirm")
+    assert resp.status_code == 409, resp.text
+    error = resp.json()["error"]
+    assert (error["code"], error["details"]) == (
+        "limit_reached",
+        {"resource": "projects", "limit": MAX_USER_PROJECTS},
+    )
+    assert "at most" in error["message"]
+    assert await in_use(maker, user_id, "projects") == MAX_USER_PROJECTS
+    status = "SELECT status::text FROM changesets WHERE id = :c"
+    assert await rows(maker, status, c=cs) == [("pending",)]

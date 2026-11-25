@@ -13,6 +13,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from app.db.models.staged import LimitReached
 from app.db.write_paths import (
     BlockNotFound,
     BlockNotStarted,
@@ -40,6 +41,7 @@ INVALID_MUTATION_STATUS: dict[str, int] = {
     "project_exists": 409,
     "exception_exists": 409,
     "pin_exists": 409,
+    "limit_reached": 409,
 }
 
 _STATUS_MESSAGES = {
@@ -50,6 +52,9 @@ _STATUS_MESSAGES = {
 
 
 def invalid_mutation_error(exc: InvalidMutation) -> AppError:
+    if isinstance(exc, LimitReached):
+        details = {"resource": exc.resource, "limit": exc.limit}
+        return AppError(409, "limit_reached", exc.message, details)
     status = INVALID_MUTATION_STATUS.get(exc.code, 422)
     if status == 422:
         # TODO(contract): semantic failures carry no field path; `path` is "" for those.

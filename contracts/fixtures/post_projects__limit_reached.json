@@ -1,0 +1,33 @@
+{
+  "operation": "createProject",
+  "method": "POST",
+  "path": "/projects",
+  "case": "limit_reached",
+  "description": "The user already has 100 non-archived projects: over the per-user project cap (issue #24).",
+  "request_valid": true,
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "name": "Reading",
+      "kind": "perennial",
+      "weekly_target_hours": 2.0,
+      "max_block_minutes": 60
+    }
+  },
+  "response": {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "limit_reached",
+        "message": "You can have at most 100 projects. Archive one to add another.",
+        "details": {
+          "resource": "projects",
+          "limit": 100
+        }
+      }
+    }
+  }
+}

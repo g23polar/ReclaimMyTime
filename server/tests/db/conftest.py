@@ -255,3 +255,63 @@ async def constraint_snapshot(
         "tags": "SELECT tag FROM user_tags WHERE user_id = :u ORDER BY tag",
     }
     return {k: await rows(maker, sql, u=user) for k, sql in q.items()}
+
+
+# ---------------------------------------------------------------- issue #24: rows in use
+
+FAR = at(21, "09:00")  # three weeks out: in use, but outside every horizon solved in tests
+_IN_USE = {
+    "projects": "SELECT count(*) FROM projects WHERE user_id = :u"
+    " AND status IN ('active', 'paused', 'done')",
+    "exceptions": "SELECT count(*) FROM availability_exceptions WHERE user_id = :u"
+    " AND upper(span) > :now",
+    "pins": "SELECT count(*) FROM block_pins WHERE user_id = :u AND upper(span) > :now",
+}
+
+
+async def in_use(
+    maker: async_sessionmaker[AsyncSession], user: uuid.UUID, resource: str, now: datetime = T0
+) -> int:
+    params: dict[str, Any] = {"u": user} if resource == "projects" else {"u": user, "now": now}
+    return (await rows(maker, _IN_USE[resource], **params))[0][0]
+
+
+async def seed_in_use(
+    maker: async_sessionmaker[AsyncSession],
+    user: uuid.UUID,
+    resource: str,
+    total: int,
+    *,
+    end: datetime = FAR,
+    status: str = "paused",
+) -> list[uuid.UUID]:
+    """Insert rows directly until `total` are in use at T0 (staging would refuse first).
+    Seeded projects are paused (not solved); pins alternate pin / forbid. `end` / `status`
+    shape the LAST row only, so a test can make one of them not count."""
+    n = total - await in_use(maker, user, resource)
+    ids = [uuid.uuid4() for _ in range(n)]
+    sql = {
+        "projects": "INSERT INTO projects (id, user_id, name, kind, weekly_target_hours,"
+        " max_block_minutes, min_block_minutes, status)"
+        " VALUES (:id, :u, 'Seed', 'perennial', 1, 60, 25, CAST(:status AS project_status))",
+        "exceptions": "INSERT INTO availability_exceptions (id, user_id, span, blocks_all)"
+        " VALUES (:id, :u, tstzrange(:s, :e), true)",
+        "pins": "INSERT INTO block_pins (id, user_id, project_id, span, kind)"
+        " VALUES (:id, :u, :p, tstzrange(:s, :e), CAST(:k AS pin_kind))",
+    }[resource]
+    params = [
+        {
+            "id": i,
+            "u": user,
+            "status": status if k == n - 1 else "paused",
+            "s": (end if k == n - 1 else FAR) - timedelta(hours=1),
+            "e": end if k == n - 1 else FAR,
+            "p": WORKOUT if k % 2 else None,
+            "k": "pin" if k % 2 else "forbid",
+        }
+        for k, i in enumerate(ids)
+    ]
+    if params:
+        async with maker() as s, s.begin():
+            await s.execute(text(sql), params)
+    return ids

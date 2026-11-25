@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from app.api import gcal_sync
+from app.db.models.staged import MAX_USER_PINS
 from app.db.outbox import event_id_for, ingest_candidates
 from app.db.write_paths import propose_changeset
 from tests.api.conftest import NOW, live_blocks
@@ -34,10 +35,12 @@ from tests.db.conftest import (
     confirm,
     deadline_project,
     exception_added,
+    in_use,
     prefs,
     propose,
     requires_db,
     rows,
+    seed_in_use,
     workout,
 )
 from tests.gcal.calendar_fakes import FakeCalendar, seed_connection, z
@@ -302,6 +305,24 @@ async def test_move_case_iii_overlap_stages_everything(app, stable, client, make
     await settle(app)
     # The Google event stays where the user put it.
     assert cal.events[(CAL1, eid(wed))]["start"] == {"dateTime": z(at(3, "08:30"))}
+
+
+async def test_google_edits_are_exempt_from_the_pin_cap(stable, client, maker, cal):
+    """Issue #24: a move made in Google is applied (case i) or confirmed (case iii) even
+    with the user's 200 upcoming pins already in use."""
+    await seed_in_use(maker, stable, "pins", MAX_USER_PINS)
+    wed = await block_at(maker, stable, 2, "08:00")
+    cal.user_move(CAL1, eid(wed), at(6, "10:00"), at(6, "11:00"))  # case i, as above
+    assert (await sync(client))["pending_changeset"] is None
+    assert (await block_at(maker, stable, 6, "10:00")).lineage_id == wed.lineage_id
+    assert await in_use(maker, stable, "pins", NOW) == MAX_USER_PINS + 1
+
+    thu = await block_at(maker, stable, 3, "08:00")
+    cal.user_move(CAL1, eid(thu), at(4, "08:30"), at(4, "09:30"))  # onto Friday's Workout
+    cs = (await sync(client))["pending_changeset"]
+    assert (cs["reason"], [m["source"] for m in cs["staged"]]) == ("google_edit", ["system"])
+    await ok(client.post(f"/changesets/{cs['id']}/confirm"), 200)
+    assert await in_use(maker, stable, "pins", NOW) == MAX_USER_PINS + 2
 
 
 @pytest.mark.parametrize(

@@ -56,6 +56,7 @@ from app.db.models.staged import (
     ProjectCreated,
     ProjectUpdated,
     StagedMutation,
+    check_row_caps,
     created_project_ids,
     dump_staged,
     parse_staged,
@@ -445,6 +446,34 @@ def _check_tag_cap(vocabulary: set[str], tags: Sequence[str]) -> None:
             f"new tags {sorted(new)} would exceed the tag limit. "
             f"You can have at most {MAX_USER_TAGS} tags.",
         )
+
+
+async def _check_row_caps(
+    tx: AsyncSession, user_id: uuid.UUID, staged: Sequence[StagedMutation], now: datetime
+) -> None:
+    """Issue #24: `check_row_caps` against the committed rows in use at `now`."""
+
+    async def ids(stmt: Any) -> list[uuid.UUID]:
+        return list((await tx.execute(stmt)).scalars())
+
+    check_row_caps(
+        projects=await ids(
+            select(Project.id).where(
+                Project.user_id == user_id, Project.status.in_(("active", "paused", "done"))
+            )
+        ),
+        exceptions=await ids(
+            select(AvailabilityException.id).where(
+                AvailabilityException.user_id == user_id,
+                func.upper(AvailabilityException.span) > now,
+            )
+        ),
+        pins=await ids(
+            select(BlockPin.id).where(BlockPin.user_id == user_id, func.upper(BlockPin.span) > now)
+        ),
+        staged=staged,
+        now=now,
+    )
 
 
 async def _add_tags(tx: AsyncSession, user_id: uuid.UUID, tags: Sequence[str]) -> None:
@@ -864,6 +893,7 @@ async def stage_changeset(
 
     # Fail at staging, not at confirm, if the list cannot apply to committed state.
     _check_tag_cap(await _vocabulary(tx, user_id), staged_tags(staged))
+    await _check_row_caps(tx, user_id, staged, now)
     prefs = overlay(await load_constraint_state(tx, user_id), staged).preferences
     if solver_input is None and prefs is not None:
         # A planless changeset is only for onboarding, before any preferences exist: once a
@@ -1238,6 +1268,7 @@ async def confirm_changeset(
        `_stale_check`) → ChangesetStale, nothing applied; a planless
        changeset reaching a user who now has preferences → InvalidMutation; a live plan
        whose upcoming blocks fall outside the horizon → InvalidMutation (`_check_supersedable`);
+       a list past a per-user row cap → LimitReached (issue #24, `check_row_caps`);
     3. apply staged mutations via `apply_mutation` (staged projects → `active`);
     4. lazy-sweep past blocks (so the superseded plan's finished work is `completed` and
        stays credited), then supersede the old live plan(s) over the horizon, STRICTLY BEFORE
@@ -1279,6 +1310,7 @@ async def confirm_changeset(
             "preferences now exist: re-propose so the change is solved against the live plan",
         )
 
+    await _check_row_caps(tx, user_id, staged, now)
     for m in staged:
         await apply_mutation(tx, user_id, m, now=now, changeset_id=cs.id, plan_id=cs.plan_id)
 

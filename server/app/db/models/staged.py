@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -40,6 +40,27 @@ class InvalidMutation(ValueError):
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+
+
+LimitResource = Literal["projects", "exceptions", "pins"]
+
+
+class LimitReached(InvalidMutation):
+    """Issue #24: a write that would add a row past a per-user cap (409 `limit_reached`)."""
+
+    def __init__(self, resource: LimitResource, limit: int) -> None:
+        super().__init__("limit_reached", _LIMIT_MESSAGES[resource].format(limit=limit))
+        self.resource = resource
+        self.limit = limit
+
+
+_LIMIT_MESSAGES: dict[str, str] = {
+    "projects": "You can have at most {limit} projects. Archive one to add another.",
+    "exceptions": "You can have at most {limit} upcoming exceptions. Remove one to add another.",
+    "pins": (
+        "You can have at most {limit} upcoming pins and blocked times. Remove one to add another."
+    ),
+}
 
 
 # ---------------------------------------------------------------- windows
@@ -97,6 +118,10 @@ def validate_timezone(value: str) -> str:
 WeekWindows = Annotated[dict[str, list[list[str]]], Field()]
 Tag = Annotated[str, Field(min_length=1, max_length=40)]
 MAX_USER_TAGS = 50  # issue #7: size of one user's `user_tags` vocabulary
+# issue #24: rows in use per user (`check_row_caps`)
+MAX_USER_PROJECTS = 100
+MAX_USER_EXCEPTIONS = 200
+MAX_USER_PINS = 200
 
 # Write-side caps (issue #4), enforced by the request models (`app.api.schemas`) and the agent
 # tool drafts, not here: stored rows over a cap must still parse.
@@ -423,3 +448,53 @@ def staged_tags(staged: Sequence[StagedMutation]) -> list[str]:
         elif isinstance(m, ExceptionAdded):
             tags.extend(m.payload.blocks_tags)
     return list(dict.fromkeys(tags))
+
+
+def check_row_caps(
+    *,
+    projects: Iterable[uuid.UUID],
+    exceptions: Iterable[uuid.UUID],
+    pins: Iterable[uuid.UUID],
+    staged: Sequence[StagedMutation],
+    now: datetime,
+) -> None:
+    """Issue #24: refuse a list that adds a row past a per-user cap. `projects` / `exceptions`
+    / `pins` are the committed rows in use (projects neither archived nor staged; exceptions
+    and pins whose span ends after `now`). The list is judged on its net result: archives and
+    removals of in-use rows count down, adds that are still upcoming count up, and Google
+    edits (`system` pins) never count. A kind is refused only when the list adds a counted
+    row of it and ends above the cap, so updates, archives and removals always pass. Raises
+    `LimitReached` for the first such kind (projects, exceptions, pins)."""
+    counted: dict[LimitResource, set[uuid.UUID]] = {
+        "projects": set(projects),
+        "exceptions": set(exceptions),
+        "pins": set(pins),
+    }
+    adds: set[LimitResource] = set()
+
+    def add(resource: LimitResource, ident: uuid.UUID) -> None:
+        if ident not in counted[resource]:
+            counted[resource].add(ident)
+            adds.add(resource)
+
+    for m in staged:
+        if isinstance(m, ProjectArchived):
+            counted["projects"].discard(m.payload.project_id)
+        elif isinstance(m, ExceptionRemoved):
+            counted["exceptions"].discard(m.payload.exception_id)
+        elif isinstance(m, PinRemoved):
+            counted["pins"].discard(m.payload.pin_id)
+        elif isinstance(m, ProjectCreated):
+            add("projects", m.payload.project_id)
+        elif isinstance(m, ExceptionAdded) and m.payload.span.end > now:
+            add("exceptions", m.payload.exception_id)
+        elif isinstance(m, PinAdded) and m.payload.span.end > now and m.source != "system":
+            add("pins", m.payload.pin_id)
+    limits: dict[LimitResource, int] = {
+        "projects": MAX_USER_PROJECTS,
+        "exceptions": MAX_USER_EXCEPTIONS,
+        "pins": MAX_USER_PINS,
+    }
+    for resource, limit in limits.items():
+        if resource in adds and len(counted[resource]) > limit:
+            raise LimitReached(resource, limit)

@@ -13,6 +13,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import User
+from app.db.models.staged import (
+    MAX_USER_EXCEPTIONS,
+    MAX_USER_PINS,
+    MAX_USER_PROJECTS,
+    LimitReached,
+)
 from app.db.solver_io import build_solver_input, week_horizon
 from app.db.write_paths import (
     BlockNotFound,
@@ -31,6 +37,7 @@ from app.db.write_paths import (
 from app.scheduler import Interval
 from tests.db.conftest import (
     EXC,
+    FAR,
     GRANT,
     HORIZON,
     T0,
@@ -40,10 +47,13 @@ from tests.db.conftest import (
     confirm,
     deadline_project,
     exception_added,
+    in_use,
     prefs,
     propose,
     requires_db,
     rows,
+    seed_in_use,
+    span,
     staged,
     workout,
 )
@@ -461,3 +471,174 @@ async def test_tag_cap_refuses_an_over_cap_list_at_staging(
                 s, user_id, staged({"kind": "project_updated", "payload": update}), now=T0
             )
     assert await _tag_count(maker, user_id) == 49
+
+
+# ---------------------------------------------------------------- issue #24: row caps
+
+CAPS = {"projects": MAX_USER_PROJECTS, "exceptions": MAX_USER_EXCEPTIONS, "pins": MAX_USER_PINS}
+
+
+def _project(pid: uuid.UUID = GRANT) -> dict[str, Any]:
+    return deadline_project(pid, hours=1.0, name="Grant")
+
+
+def _exception(eid: uuid.UUID = EXC, end: datetime = FAR + timedelta(hours=1)) -> dict[str, Any]:
+    return exception_added(FAR, end, eid)
+
+
+def _pin(
+    pid: uuid.UUID | None = None,
+    *,
+    kind: str = "forbid",
+    end: datetime = FAR + timedelta(hours=1),
+    source: str = "agent",
+) -> dict[str, Any]:
+    return {
+        "kind": "pin_added",
+        "source": source,
+        "payload": {
+            "pin_id": str(pid or uuid.uuid4()),
+            "project_id": str(WORKOUT) if kind == "pin" else None,
+            "span": span(FAR, end),
+            "kind": kind,
+            "created_from_block_id": None,
+        },
+    }
+
+
+ADD = {"projects": _project, "exceptions": _exception, "pins": _pin}
+
+
+@pytest.mark.parametrize("resource", ["projects", "exceptions", "pins"])
+async def test_row_cap_allows_the_last_row(maker: Maker, user_id: uuid.UUID, resource: str) -> None:
+    await bootstrap(maker, user_id)
+    await seed_in_use(maker, user_id, resource, CAPS[resource] - 1)
+    cs = await propose(maker, user_id, [ADD[resource]()])
+    await confirm(maker, user_id, cs)
+    assert await in_use(maker, user_id, resource) == CAPS[resource]
+
+
+@pytest.mark.parametrize(
+    ("resource", "item"),
+    [
+        ("projects", _project),
+        ("exceptions", _exception),
+        ("pins", lambda: _pin(kind="pin")),
+        ("pins", lambda: _pin(kind="forbid")),
+    ],
+)
+async def test_row_cap_refuses_at_staging(
+    maker: Maker, user_id: uuid.UUID, resource: str, item: Any
+) -> None:
+    await bootstrap(maker, user_id)
+    await seed_in_use(maker, user_id, resource, CAPS[resource])
+    earlier = await propose(maker, user_id, [_rename(WORKOUT)])
+    for attempt in (
+        lambda: propose(maker, user_id, [item()]),
+        lambda: _stage_only(maker, user_id, [item()]),
+    ):
+        with pytest.raises(LimitReached) as err:
+            await attempt()
+        assert (err.value.code, err.value.resource, err.value.limit) == (
+            "limit_reached",
+            resource,
+            CAPS[resource],
+        )
+        assert "at most" in err.value.message
+        assert await rows(
+            maker, "SELECT id, status::text FROM changesets WHERE status = 'pending'"
+        ) == [(earlier, "pending")]
+        assert await rows(maker, "SELECT count(*) FROM projects WHERE status = 'staged'") == [(0,)]
+        assert await in_use(maker, user_id, resource) == CAPS[resource]
+
+
+def _rename(pid: uuid.UUID) -> dict[str, Any]:
+    return {
+        "kind": "project_updated",
+        "payload": {"project_id": str(pid), "changes": {"name": "R"}},
+    }
+
+
+async def _stage_only(maker: Maker, user: uuid.UUID, items: list[dict[str, Any]]) -> uuid.UUID:
+    async with maker() as s, s.begin():
+        return await stage_changeset(s, user, staged(*items), now=T0)
+
+
+async def test_row_cap_ignores_archived_projects(maker: Maker, user_id: uuid.UUID) -> None:
+    await bootstrap(maker, user_id)
+    await seed_in_use(maker, user_id, "projects", MAX_USER_PROJECTS, status="archived")
+    total = "SELECT count(*) FROM projects WHERE user_id = :u"
+    assert await rows(maker, total, u=user_id) == [(MAX_USER_PROJECTS,)]
+    await confirm(maker, user_id, await propose(maker, user_id, [_project()]))
+    assert await in_use(maker, user_id, "projects") == MAX_USER_PROJECTS
+
+
+@pytest.mark.parametrize("resource", ["exceptions", "pins"])
+async def test_row_cap_ignores_ended_rows(maker: Maker, user_id: uuid.UUID, resource: str) -> None:
+    await bootstrap(maker, user_id)
+    ended = at(-1, "10:00")  # upper(span) <= T0
+    await seed_in_use(maker, user_id, resource, CAPS[resource], end=ended)
+    assert await in_use(maker, user_id, resource) == CAPS[resource] - 1
+    await confirm(maker, user_id, await propose(maker, user_id, [ADD[resource]()]))
+    assert await in_use(maker, user_id, resource) == CAPS[resource]
+
+
+async def test_row_cap_judges_the_net_result(maker: Maker, user_id: uuid.UUID) -> None:
+    await bootstrap(maker, user_id)
+    seeded = await seed_in_use(maker, user_id, "pins", MAX_USER_PINS)
+    remove = [{"kind": "pin_removed", "payload": {"pin_id": str(p)}} for p in seeded[:2]]
+    for items in ([remove[0], _pin()], [_pin(), remove[1]]):  # add before remove too
+        await confirm(maker, user_id, await propose(maker, user_id, items))
+        assert await in_use(maker, user_id, "pins") == MAX_USER_PINS
+
+
+async def test_row_cap_never_refuses_updates_archives_or_removals(
+    maker: Maker, user_id: uuid.UUID
+) -> None:
+    await bootstrap(maker, user_id)
+    projects = await seed_in_use(maker, user_id, "projects", MAX_USER_PROJECTS)
+    exceptions = await seed_in_use(maker, user_id, "exceptions", MAX_USER_EXCEPTIONS)
+    pins = await seed_in_use(maker, user_id, "pins", MAX_USER_PINS + 1)  # over the cap
+    writes = [
+        [_rename(projects[0])],
+        [{"kind": "project_archived", "payload": {"project_id": str(projects[1])}}],
+        [{"kind": "exception_removed", "payload": {"exception_id": str(exceptions[0])}}],
+        [{"kind": "pin_removed", "payload": {"pin_id": str(pins[0])}}],
+        [_exception()],  # a kind not at its cap (one exception was just removed)
+    ]
+    for items in writes:
+        await confirm(maker, user_id, await propose(maker, user_id, items))
+    assert [await in_use(maker, user_id, r) for r in CAPS] == [
+        MAX_USER_PROJECTS - 1,
+        MAX_USER_EXCEPTIONS,
+        MAX_USER_PINS,
+    ]
+
+
+async def test_row_cap_is_checked_again_at_confirm(maker: Maker, user_id: uuid.UUID) -> None:
+    await bootstrap(maker, user_id)
+    await seed_in_use(maker, user_id, "projects", MAX_USER_PROJECTS - 1)
+    cs = await propose(maker, user_id, [_project()])
+    # A 100th project committed by another path (paused: the proposal is not stale).
+    await seed_in_use(maker, user_id, "projects", MAX_USER_PROJECTS)
+    with pytest.raises(LimitReached) as err:
+        await confirm(maker, user_id, cs)
+    assert (err.value.resource, err.value.limit) == ("projects", MAX_USER_PROJECTS)
+    assert await in_use(maker, user_id, "projects") == MAX_USER_PROJECTS
+    assert await rows(maker, "SELECT status::text FROM changesets WHERE id = :c", c=cs) == [
+        ("pending",)
+    ]
+    assert await rows(maker, "SELECT status::text FROM projects WHERE id = :p", p=GRANT) == [
+        ("staged",)
+    ]
+
+
+async def test_row_cap_counts_pins_at_the_injected_now(maker: Maker, user_id: uuid.UUID) -> None:
+    await bootstrap(maker, user_id)
+    ends = T0 + timedelta(hours=1)
+    await seed_in_use(maker, user_id, "pins", MAX_USER_PINS, end=ends)  # the last ends at `ends`
+    with pytest.raises(LimitReached):
+        await propose(maker, user_id, [_pin()], now=T0)
+    later = ends + timedelta(minutes=30)
+    await confirm(maker, user_id, await propose(maker, user_id, [_pin()], now=later), now=later)
+    assert await in_use(maker, user_id, "pins", now=later) == MAX_USER_PINS
