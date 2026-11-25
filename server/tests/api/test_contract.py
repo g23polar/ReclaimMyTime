@@ -16,6 +16,7 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.db.models.staged import MAX_USER_PROJECTS
 from tests.api.conftest import NOW, SettableClock, future_block, started_block
 from tests.api.contract import assert_conforms, in_scope_fixtures, load_fixture
 from tests.db.conftest import (
@@ -29,6 +30,7 @@ from tests.db.conftest import (
     reject,
     requires_db,
     rows,
+    seed_in_use,
 )
 from tests.gcal.calendar_fakes import FakeCalendar, install, new_cipher, seed_connection
 from tests.gcal.fakes import FakeGoogle, Reply
@@ -199,6 +201,14 @@ async def _(ctx: Ctx) -> None:
     await onboarded(ctx)
     body = await ctx.call("POST", "/projects", ctx.body)
     assert [f["path"] for f in body["error"]["details"]["fields"]] == ["requirements"]
+
+
+@case("post_projects__limit_reached.json")
+async def _(ctx: Ctx) -> None:
+    await onboarded(ctx)
+    await seed_in_use(ctx.maker, ctx.uid, "projects", MAX_USER_PROJECTS)
+    body = await ctx.call("POST", "/projects", ctx.body)
+    assert body == ctx.fixture["response"]["body"]
 
 
 @case("patch_projects_id__weekly_target.json")

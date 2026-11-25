@@ -72,6 +72,7 @@ Every non-2xx/3xx JSON response uses this shape:
 | 409 | `block_immutable` | `edit`/`delete` on a past or in-progress block (Principle 4) |
 | 409 | `block_superseded` | PATCH on a block that isn't in the current live plan |
 | 409 | `project_archived` | PATCH/DELETE on an archived project |
+| 409 | `limit_reached` | a staged write would add a row past a per-user cap: `project_created` past 100 non-archived projects, `exception_added` past 200 exceptions that have not ended, or `pin_added` past 200 pins/forbids that have not ended. Refused at staging (`POST /projects`, `POST /exceptions`, `PATCH /blocks/{id}` edit/delete, agent staging) and again at confirm (`POST /changesets/{id}/confirm`; nothing applied, the changeset stays pending). The list is judged on its net result (removing a row and adding one at the cap passes); updates, archives and removals are never refused; Google Calendar edits are exempt. `details: {resource: "projects"\|"exceptions"\|"pins", limit}` (issue #24, 2026-11-25) |
 | 404 | `gcal_not_connected` | `DELETE /gcal` with no connection |
 | 409 | `project_unavailable` | Todos (2026-11-24, Todos v1): a todo's `project_id` names a project in status `staged` (or `archived`, on a new link). Only the user's own `active`, `paused` or `done` projects can be linked; an unknown or foreign project is 404 `not_found` (2026-11-24, Todos v1) |
 | 409 | `todo_recurring` | Todos v1: `done` or a non-null `due_date` sent on a daily or weekly todo (2026-11-24, Todos v1) |
