@@ -1,7 +1,9 @@
-"""agent_turns: one row per POST /agent/message turn (migration 0004, T6.2 eval capture).
+"""agent_turns: one row per POST /agent/message turn (migration 0004, T6.2 eval capture), and
+agent_turn_leases: one turn in flight per user (migration 0006, issue #3).
 
-Written only by `app.db.agent_turns.record_agent_turn`. No relationships and no ORM cascades:
-deletes rely on the DDL (users CASCADE; changesets / week_plans SET NULL).
+`agent_turns` is written only by `app.db.agent_turns.record_agent_turn`, `agent_turn_leases`
+only by `app.db.turn_leases`. No relationships and no ORM cascades: deletes rely on the DDL
+(users CASCADE; changesets / week_plans SET NULL).
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ class AgentTurnRow(Base):
         ),
         CheckConstraint("model_calls >= 0", name="model_calls"),
         *(CheckConstraint(f"{c} >= 0", name=c) for c in TOKEN_COLUMNS),
-        # Per-user token window (`tokens_used_since`, the future daily budget).
+        # Per-user token window (`tokens_used_since`, the daily token budget).
         Index("agent_turns_user_id_created_at_idx", "user_id", "created_at"),
         # Global retention purge (`record_agent_turn` deletes every user's expired rows).
         Index("agent_turns_created_at_idx", "created_at"),
@@ -73,3 +75,13 @@ class AgentTurnRow(Base):
     # Present only when AGENT_CAPTURE_TURNS is on; NULL otherwise.
     user_message: Mapped[str | None] = mapped_column(Text)
     snapshot: Mapped[str | None] = mapped_column(Text)
+
+
+class AgentTurnLease(Base):
+    __tablename__ = "agent_turn_leases"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        _UUID, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    token: Mapped[uuid.UUID] = mapped_column(_UUID, nullable=False)  # release matches on it
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

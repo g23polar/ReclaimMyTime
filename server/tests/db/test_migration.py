@@ -1,5 +1,6 @@
 """Alembic migrations: up/down/up on a scratch schema, migrated schema == Base.metadata, and the
-per-revision data checks (0002 reason backfill, 0003 google identities, 0004 agent_turns)."""
+per-revision data checks (0002 reason backfill, 0003 google identities, 0004 agent_turns,
+0005 todos, 0006 agent_turn_leases)."""
 
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ TABLES = {
     "mutations",
     "agent_turns",
     *TODO_TABLES,
+    "agent_turn_leases",  # migration 0006 (issue #3)
 }
 
 
@@ -299,8 +301,12 @@ async def test_0004_agent_turns_round_trips(schema: str) -> None:
             assert got == [(0, 0, 0, 0, "[]", None, None)]
 
             await conn.run_sync(run_alembic, "downgrade", "0003_google_identity")
-            # Head includes 0005, so downgrading past 0004 drops the todos tables too.
-            assert await conn.run_sync(_tables) == TABLES - {"agent_turns", *TODO_TABLES}
+            # Head includes 0005 and 0006, so downgrading past 0004 drops their tables too.
+            assert await conn.run_sync(_tables) == TABLES - {
+                "agent_turns",
+                *TODO_TABLES,
+                "agent_turn_leases",
+            }
             assert (await conn.execute(text("SELECT count(*) FROM users"))).scalar_one() == 1
             await conn.run_sync(run_alembic, "upgrade", "head")
             assert await conn.run_sync(_tables) == TABLES
@@ -356,8 +362,46 @@ async def test_0005_todos_round_trips(schema: str) -> None:
             assert left == 0  # cascade
 
             await conn.run_sync(run_alembic, "downgrade", "0004_agent_turns")
-            assert not (set(TODO_TABLES) & await conn.run_sync(_tables))
+            assert not ({*TODO_TABLES, "agent_turn_leases"} & await conn.run_sync(_tables))
             assert (await conn.run_sync(_enums, schema)).get("todo_kind") is None
             assert (await conn.execute(text("SELECT count(*) FROM users"))).scalar_one() == 1
+    finally:
+        await engine.dispose()
+
+
+async def test_0006_agent_turn_leases_round_trips(schema: str) -> None:
+    """Migration 0006 (issue #3): one lease row per user (primary key), cascading with the
+    user; downgrade drops only that table; up again recreates it empty."""
+    uid = "00000000-0000-4000-8000-000000000006"
+    lease = (
+        "INSERT INTO agent_turn_leases (user_id, token, expires_at)"
+        f" VALUES ('{uid}', gen_random_uuid(), '2026-11-17T18:33:00Z')"
+    )
+    engine = await make_engine(schema)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(run_alembic, "upgrade", "0005_todos")
+            assert "agent_turn_leases" not in await conn.run_sync(_tables)
+            await conn.execute(text(f"INSERT INTO users (id) VALUES ('{uid}')"))
+
+            await conn.run_sync(run_alembic, "upgrade", "head")
+            assert await conn.run_sync(_tables) == TABLES
+            await conn.execute(text(lease))
+            with pytest.raises(IntegrityError):  # pk_agent_turn_leases: one lease per user
+                async with conn.begin_nested():
+                    await conn.execute(text(lease))
+
+            await conn.execute(text(f"DELETE FROM users WHERE id = '{uid}'"))
+            n = (await conn.execute(text("SELECT count(*) FROM agent_turn_leases"))).scalar_one()
+            assert n == 0  # cascade
+
+            await conn.execute(text(f"INSERT INTO users (id) VALUES ('{uid}')"))
+            await conn.execute(text(lease))
+            await conn.run_sync(run_alembic, "downgrade", "0005_todos")
+            assert await conn.run_sync(_tables) == TABLES - {"agent_turn_leases"}
+            assert (await conn.execute(text("SELECT count(*) FROM users"))).scalar_one() == 1
+            await conn.run_sync(run_alembic, "upgrade", "head")
+            n = (await conn.execute(text("SELECT count(*) FROM agent_turn_leases"))).scalar_one()
+            assert n == 0
     finally:
         await engine.dispose()
