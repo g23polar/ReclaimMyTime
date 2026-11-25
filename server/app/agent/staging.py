@@ -38,6 +38,7 @@ from app.agent.schemas import (
 )
 from app.db.models.staged import (
     DAY_KEYS,
+    MAX_TAGS,
     ExceptionRemoved,
     InvalidMutation,
     PinAdded,
@@ -361,7 +362,10 @@ class TurnStaging:
             if existing != tag:
                 raise ToolError(f"tag {tag!r} duplicates tag {existing!r}; use that")
             out.append(tag)
-        return list(dict.fromkeys(out))
+        tags = list(dict.fromkeys(out))
+        if len(tags) > MAX_TAGS:
+            raise ToolError(f"requirements: at most {MAX_TAGS} tags per project, got {len(tags)}")
+        return tags
 
     def _span(self, start: LocalTime, end: LocalTime) -> dict[str, str]:
         prefs = self.state().preferences

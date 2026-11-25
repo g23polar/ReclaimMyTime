@@ -1003,8 +1003,12 @@ components:
       maxLength: 40
     TagList:
       type: array
+      description: |
+        Unique tags. At most 20 on writes (REST bodies and agent tool calls); rows stored
+        before the cap are still served as they are.
       items: {$ref: '#/components/schemas/Tag'}
       uniqueItems: true
+      maxItems: 20
     Span:
       type: object
       description: |
@@ -1027,8 +1031,11 @@ components:
       maxItems: 2
     DayWindows:
       type: array
-      description: Sorted, non-overlapping windows for one weekday.
+      description: |
+        Sorted, non-overlapping windows for one weekday. At most 10 on writes (REST bodies and
+        agent tool calls); rows stored before the cap are still served as they are.
       items: {$ref: '#/components/schemas/TimeWindow'}
+      maxItems: 10
     WeekWindows:
       type: object
       description: |

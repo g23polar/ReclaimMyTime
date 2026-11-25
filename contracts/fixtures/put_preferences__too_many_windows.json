@@ -1,0 +1,121 @@
+{
+  "operation": "putPreferences",
+  "method": "PUT",
+  "path": "/preferences",
+  "case": "too_many_windows",
+  "description": "11 windows on Wednesday: over the 10-windows-per-day write cap (issue #4).",
+  "request_valid": false,
+  "request": {
+    "headers": {
+      "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
+      "X-Timezone": "America/Los_Angeles"
+    },
+    "body": {
+      "timezone": "America/Los_Angeles",
+      "schedulable_windows": {
+        "mon": [
+          [
+            "07:00",
+            "22:00"
+          ]
+        ],
+        "tue": [
+          [
+            "07:00",
+            "22:00"
+          ]
+        ],
+        "wed": [
+          [
+            "08:00",
+            "08:30"
+          ],
+          [
+            "09:00",
+            "09:30"
+          ],
+          [
+            "10:00",
+            "10:30"
+          ],
+          [
+            "11:00",
+            "11:30"
+          ],
+          [
+            "12:00",
+            "12:30"
+          ],
+          [
+            "13:00",
+            "13:30"
+          ],
+          [
+            "14:00",
+            "14:30"
+          ],
+          [
+            "15:00",
+            "15:30"
+          ],
+          [
+            "16:00",
+            "16:30"
+          ],
+          [
+            "17:00",
+            "17:30"
+          ],
+          [
+            "18:00",
+            "18:30"
+          ]
+        ],
+        "thu": [
+          [
+            "07:00",
+            "22:00"
+          ]
+        ],
+        "fri": [
+          [
+            "07:00",
+            "22:00"
+          ]
+        ],
+        "sat": [
+          [
+            "07:00",
+            "22:00"
+          ]
+        ],
+        "sun": [
+          [
+            "07:00",
+            "22:00"
+          ]
+        ]
+      },
+      "day_diversity": "focused",
+      "buffer_minutes": 10,
+      "week_start": 1
+    }
+  },
+  "response": {
+    "status": 422,
+    "body": {
+      "error": {
+        "code": "validation_failed",
+        "message": "Request body is invalid.",
+        "details": {
+          "fields": [
+            {
+              "path": "schedulable_windows.wed",
+              "message": "List should have at most 10 items after validation, not 11"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

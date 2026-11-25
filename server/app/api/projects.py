@@ -28,17 +28,18 @@ from app.api.deps import (
 )
 from app.api.mappers import project_out
 from app.api.outbox import kick_outbox
+from app.api.schemas import ProjectDraftRequest, ProjectPatchRequest
 from app.api.staging import manual, stage_request
 from app.auth.dependencies import require_timezone
 from app.db.models import Project
-from app.db.models.staged import ProjectDraft, ProjectPatch, StagedMutation
+from app.db.models.staged import StagedMutation
 from app.db.write_paths import apply_mutation, sweep_past_blocks
 from app.errors import AppError
 
 router = APIRouter(tags=["projects"], dependencies=[Depends(require_timezone)])
 
-_DRAFT: TypeAdapter[Any] = TypeAdapter(ProjectDraft)
-_PATCH: TypeAdapter[ProjectPatch] = TypeAdapter(ProjectPatch)
+_DRAFT: TypeAdapter[Any] = TypeAdapter(ProjectDraftRequest)
+_PATCH: TypeAdapter[ProjectPatchRequest] = TypeAdapter(ProjectPatchRequest)
 _OTHER_KIND_FIELDS = {
     "deadline": ("weekly_target_hours",),
     "perennial": ("target_date", "estimated_total_hours"),
