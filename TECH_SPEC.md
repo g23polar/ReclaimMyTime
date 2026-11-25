@@ -175,9 +175,12 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
   - [ ] Destructive, last: `DELETE /gcal`, `DELETE /me` (revokes the Google grant)
 
 **Todos v1** (tracking only: daily / weekly recurring checklists + one-offs; no solver, no agent; planned 2026-11-24, via software factory)
-- [ ] TD.A Todos contract (openapi + fixtures + Swift model decode) — #8
-- [ ] TD.B Todos server (migration 0005, `/todos` API, period validation) — #10
-- [ ] TD.C Todos iOS tab (5th tab, optimistic ticks, reorder) — #9
+- [x] TD.A Todos contract (openapi + fixtures + Swift model decode) — #8, PR #11
+- [x] TD.B Todos server (migration 0005, `/todos` API, period validation) — #10, PR #13
+- [x] TD.C Todos iOS tab (5th tab, optimistic ticks, reorder) — #9, PR #12
+
+**Tooling**
+- [x] Factory/Orca integration: shared pg/sim locks, `orca` claims, adopted-PR review — factory-orca-integration
   - [x] Finding (1) fixed 2026-11-17: strict preferred windows replace availability for their project (solver 1.1.0; slack rule measured inside work hours); agent prompt/tool text steers one-project time to strict windows. Verified live: hours narrowed to 08–18 with Reading kept at 18–22.
   - [x] Findings (2) repeated pin narration and (3) agent deferring to the card — fixed `566d19c`
   - [x] Finding (5) strict project with empty windows → logged as an OPEN question in PRD §10 (to figure out; not blocking T6.1)
