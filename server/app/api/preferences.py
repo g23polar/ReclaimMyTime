@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.busy import Busy
 from app.api.deps import Maker, Now, RawBody, Tx, UserId, parse_body
 from app.api.mappers import preferences_out
+from app.api.rate_limit import LimitWrites
 from app.api.schemas import PreferencesRequest
 from app.api.staging import manual, stage_request
 from app.auth.dependencies import require_timezone
@@ -37,7 +38,9 @@ async def get_preferences(user_id: UserId, tx: Tx, now: Now) -> dict[str, Any]:
     return preferences_out(row)
 
 
-@router.put("/preferences", operation_id="putPreferences", status_code=202)
+@router.put(
+    "/preferences", operation_id="putPreferences", status_code=202, dependencies=[LimitWrites]
+)
 async def put_preferences(
     user_id: UserId, maker: Maker, now: Now, busy: Busy, body: RawBody
 ) -> JSONResponse:

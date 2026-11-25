@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.busy import Busy
 from app.api.deps import Maker, Now, Tx, UserId, not_found
 from app.api.mappers import pin_out
+from app.api.rate_limit import LimitWrites
 from app.api.staging import manual, stage_request
 from app.auth.dependencies import require_timezone
 from app.db.models import BlockPin
@@ -35,7 +36,9 @@ async def list_pins(
     return {"pins": [pin_out(p) for p in (await tx.execute(query)).scalars()]}
 
 
-@router.delete("/pins/{pin_id}", operation_id="deletePin", status_code=202)
+@router.delete(
+    "/pins/{pin_id}", operation_id="deletePin", status_code=202, dependencies=[LimitWrites]
+)
 async def delete_pin(
     user_id: UserId, maker: Maker, now: Now, busy: Busy, pin_id: uuid.UUID
 ) -> JSONResponse:

@@ -25,6 +25,7 @@ from app.api.deps import (
     validation_failed,
 )
 from app.api.mappers import exception_out, ts
+from app.api.rate_limit import LimitWrites
 from app.api.schemas import ExceptionDraft
 from app.api.staging import manual, stage_request
 from app.auth.dependencies import require_timezone
@@ -63,7 +64,9 @@ async def list_exceptions(
     return {"exceptions": [exception_out(e) for e in (await tx.execute(query)).scalars()]}
 
 
-@router.post("/exceptions", operation_id="createException", status_code=202)
+@router.post(
+    "/exceptions", operation_id="createException", status_code=202, dependencies=[LimitWrites]
+)
 async def create_exception(
     user_id: UserId, maker: Maker, now: Now, tz: DeviceTz, busy: Busy, body: RawBody
 ) -> JSONResponse:
@@ -110,7 +113,12 @@ async def get_exception(
     return exception_out(row)
 
 
-@router.delete("/exceptions/{exception_id}", operation_id="deleteException", status_code=202)
+@router.delete(
+    "/exceptions/{exception_id}",
+    operation_id="deleteException",
+    status_code=202,
+    dependencies=[LimitWrites],
+)
 async def delete_exception(
     user_id: UserId, maker: Maker, now: Now, busy: Busy, exception_id: uuid.UUID
 ) -> JSONResponse:
