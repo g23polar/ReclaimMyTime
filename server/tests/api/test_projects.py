@@ -6,6 +6,7 @@ from __future__ import annotations
 import uuid
 
 import httpx
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tests.api.contract import assert_conforms
@@ -106,3 +107,24 @@ async def test_hours_round_to_one_decimal(client: httpx.AsyncClient, world: uuid
     resp = await client.post("/projects", json=READING | {"weekly_target_hours": 2.04})
     assert resp.status_code == 202
     assert resp.json()["staged"][0]["payload"]["project"]["weekly_target_hours"] == 2.0
+
+
+async def test_new_tag_past_the_tag_cap_is_422(
+    client: httpx.AsyncClient, maker: Maker, user_id: uuid.UUID, world: uuid.UUID
+) -> None:
+    async with maker() as s, s.begin():
+        for i in range(49):  # + "gym" from the onboarding = 50
+            insert = "INSERT INTO user_tags (user_id, tag) VALUES (:u, :t)"
+            await s.execute(text(insert), {"u": user_id, "t": f"t{i:02}"})
+    requests = [
+        ("POST", "/projects", READING | {"requirements": ["gym", "music"]}),
+        ("PATCH", f"/projects/{WORKOUT}", {"requirements": ["music"]}),
+    ]
+    for method, path, body in requests:
+        resp = await client.request(method, path, json=body)
+        assert (resp.status_code, resp.json()["error"]["code"]) == (422, "validation_failed")
+        assert "at most 50 tags" in resp.json()["error"]["message"]
+    assert await rows(maker, "SELECT count(*) FROM changesets WHERE status = 'pending'") == [(0,)]
+    assert await rows(maker, "SELECT count(*) FROM user_tags") == [(50,)]
+    resp = await client.post("/projects", json=READING | {"requirements": ["gym", "t48"]})
+    assert resp.status_code == 202, resp.text

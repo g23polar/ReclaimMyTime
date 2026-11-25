@@ -375,6 +375,37 @@ def test_near_duplicate_new_tag_rejected():
         _turn().call("stage_project_create", _create(new_tags=["Deep Work"]))
 
 
+def test_new_tag_past_the_tag_cap_rejected():
+    t = _turn(vocabulary=_tags(50))
+    with pytest.raises(ToolError, match="at most 50 tags") as err:
+        t.call("stage_project_create", _create(new_tags=["music"]))
+    assert "Reuse an existing tag" in str(err.value)
+    assert t.staged == []
+
+
+def test_existing_tags_at_the_tag_cap_accepted():
+    t = _turn(vocabulary=_tags(50))
+    t.call("stage_project_create", _create(requirements=["tag-00", "tag-49"]))
+    assert t.mutations[0].payload.project.requirements == ["tag-00", "tag-49"]
+
+
+def test_two_new_tags_past_the_tag_cap_rejected():
+    t = _turn(vocabulary=_tags(49))
+    with pytest.raises(ToolError, match="at most 50 tags"):
+        t.call("stage_project_create", _create(new_tags=["music", "art"]))
+    assert t.staged == []
+
+
+def test_tag_cap_counts_tags_staged_earlier_in_the_turn():
+    t = _turn(vocabulary=_tags(49))
+    t.call("stage_project_create", _create(new_tags=["music"]))
+    with pytest.raises(ToolError, match="at most 50 tags"):
+        t.call("stage_project_create", _create(name="Art", new_tags=["art"]))
+    assert len(t.staged) == 1
+    t.call("stage_project_create", _create(name="Band", requirements=["music"]))
+    assert len(t.staged) == 2
+
+
 def test_update_new_tags_extend_current_requirements():
     t = _turn()
     t.call("stage_project_update", _update(new_tags=["writing"]))

@@ -346,7 +346,7 @@ Rules:
 
 `server/app/agent/schemas.py` defines `ProjectDraft`, `PreferencesDraft`, `ExceptionDraft`, `PinDraft` — the Anthropic tool-use schemas *and* the API request bodies. The deadline/perennial XOR is a model validator matching the DB CHECK. Two rules from the review:
 - **The LLM never writes an absolute timestamp.** Extraction fields are local dates/times; the server applies the user's timezone. `now` and the timezone are always in the prompt; the agent's one-line confirmation (stored as `mutations.interpretation`) is the safety net for "tomorrow"-near-midnight ambiguity.
-- **Tags are a closed enum per request,** built from `user_tags`. A tag outside the vocabulary requires explicit user confirmation, which inserts into `user_tags` first.
+- **Tags are a closed enum per request,** built from `user_tags`. A tag outside the vocabulary requires explicit user confirmation, which inserts into `user_tags` first. A user has at most 50 tags (`MAX_USER_TAGS`): a write that would add a tag past that is refused with 422 `validation_failed` (a tool error when the agent stages it), and a write that only uses existing tags is never refused (issue #7, 2026-11-25).
 
 ## 6. Auth Design (Google sign-in, v1; Apple optional)
 

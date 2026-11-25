@@ -39,6 +39,7 @@ from app.agent.schemas import (
 from app.db.models.staged import (
     DAY_KEYS,
     MAX_TAGS,
+    MAX_USER_TAGS,
     ExceptionRemoved,
     InvalidMutation,
     PinAdded,
@@ -365,6 +366,12 @@ class TurnStaging:
         tags = list(dict.fromkeys(out))
         if len(tags) > MAX_TAGS:
             raise ToolError(f"requirements: at most {MAX_TAGS} tags per project, got {len(tags)}")
+        added = {t for t in new_tags if t not in vocabulary}
+        if added and len(vocabulary) + len(added) > MAX_USER_TAGS:
+            raise ToolError(
+                f"new tags {sorted(added)} would exceed the tag limit. You can have at most "
+                f"{MAX_USER_TAGS} tags. Reuse an existing tag from: {vocabulary}"
+            )
         return tags
 
     def _span(self, start: LocalTime, end: LocalTime) -> dict[str, str]:
