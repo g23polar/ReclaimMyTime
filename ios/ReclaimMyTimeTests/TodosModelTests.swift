@@ -424,7 +424,8 @@ final class TodosModelTests: XCTestCase {
         let created = TodoJSON.todo(id: "7e1c0a52-1d3b-4c1e-9a10-0000000000fe", kind: "daily", title: "Log workout")
         await transport.expect("POST", "/todos", respond: 201, body: TodoJSON.data(created))
         try await model.create(TodoDraft(kind: .daily, title: "Log workout", notes: "Legs"))
-        let body = try XCTUnwrap(await transport.sentBodies.map(TodosModelTests.object).last)
+        let sent = await transport.sentBodies.map(TodosModelTests.object).last
+        let body = try XCTUnwrap(sent)
         XCTAssertEqual(Set(body.keys), ["kind", "title", "notes"], "no project_id: todos carry no project link")
     }
 
