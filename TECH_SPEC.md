@@ -174,7 +174,7 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
   - [ ] Eyeball Google Calendar: moved block on Thu; archived "Grant application" events (local-dev era) gone
   - [ ] Destructive, last: `DELETE /gcal`, `DELETE /me` (revokes the Google grant)
 
-**Todos v1** (tracking only: daily / weekly recurring checklists + one-offs; no solver, no agent; planned 2026-11-24, via software factory)
+**Todos v1** (tracking only: daily / weekly recurring checklists + one-offs; no solver; the agent reads open todos as read-only context (#28); planned 2026-11-24, via software factory)
 - [x] TD.A Todos contract (openapi + fixtures + Swift model decode) — #8, PR #11
 - [x] TD.B Todos server (migration 0005, `/todos` API, period validation) — #10, PR #13
 - [x] TD.C Todos iOS tab (5th tab, optimistic ticks, reorder) — #9, PR #12
