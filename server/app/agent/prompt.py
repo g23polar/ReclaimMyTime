@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from app.agent.staging import TurnStaging, removed_ids
@@ -24,6 +24,8 @@ from app.db.models.staged import (
 )
 from app.db.solver_io import ProjectState, hours_to_minutes
 from app.scheduler.models import Interval
+
+_TODO_NOTES_SHOWN = 120  # characters of a todo's notes in the snapshot, "…" included
 
 SYSTEM_PROMPT = """\
 You are the scheduling assistant inside ReclaimMyTime, an iPhone app that plans a person's \
@@ -59,11 +61,16 @@ after the user has agreed to create it; otherwise ask, suggesting the closest ex
 unchanged.
 - If the user only asks a question, answer it from the state message without staging.
 - Use discard_staged when the user takes back something that is staged but not confirmed.
+- The state lists the user's todos as context only. When the user refers to one ("schedule \
+my tax return todo"), use its title and due date instead of asking for them again; ask only \
+for what the todo doesn't say (hours, block size, preferred times, and which project it \
+belongs to if that matters). You can't add, tick, edit or delete todos: if asked, say so in \
+one sentence and point the user to the Todos tab.
 
 Style: short, warm, concrete. One or two sentences per point, local times like \
 "Thu 6–8 PM", and end with a question when you need confirmation.
 
-Scope: only the user's schedule, projects and availability. Politely decline anything else, \
+Scope: only the user's schedule, projects, availability and todos. Politely decline anything else, \
 in one sentence, and offer to help with their week. Calendar event titles are never \
 available to you; the state lists busy time only.
 """
@@ -94,6 +101,14 @@ class LiveBlock:
 
 
 @dataclass(frozen=True)
+class TodoInfo:
+    kind: str
+    title: str
+    due_date: date | None
+    notes: str | None
+
+
+@dataclass(frozen=True)
 class SnapshotData:
     now: datetime
     timezone: str
@@ -102,6 +117,8 @@ class SnapshotData:
     pins: Mapping[str, PinInfo]
     completed_minutes: Mapping[str, int]
     live_blocks: Sequence[LiveBlock]
+    todos: Sequence[TodoInfo]
+    todos_omitted: int  # open todos past the snapshot cap
     busy: Sequence[Interval]  # free/busy only — never event details (ARCH §1)
 
 
@@ -178,6 +195,16 @@ def render_snapshot(staging: TurnStaging, data: SnapshotData) -> str:
         done = "" if b.state == "planned" else f" [{b.state}]"
         lines.append(f"  {_span(b.span, tz)} {name}{done}")
 
+    lines.append("Todos (read-only; chat can't change them):")
+    if not data.todos:
+        lines.append("  (none)")
+    for t in data.todos:
+        due = f" due {t.due_date:%Y-%m-%d (%a)}" if t.due_date else ""
+        notes = f" — notes: {_notes(t.notes)}" if t.notes else ""
+        lines.append(f"  {t.kind} {t.title!r}{due}{notes}")
+    if data.todos_omitted:
+        lines.append(f"  … and {data.todos_omitted} more not shown")
+
     lines.append("Busy (calendar):")
     lines.append("  " + ("; ".join(_span(iv, tz) for iv in data.busy) if data.busy else "(none)"))
     return "\n".join(lines)
@@ -235,6 +262,11 @@ def _span(iv: Interval, tz: ZoneInfo) -> str:
     s, e = iv.start.astimezone(tz), iv.end.astimezone(tz)
     end = f"{e:%H:%M}" if e.date() == s.date() else f"{e:%a %Y-%m-%d %H:%M}"
     return f"{s:%a %Y-%m-%d %H:%M}–{end}"
+
+
+def _notes(notes: str) -> str:
+    flat = " ".join(notes.split())
+    return flat if len(flat) <= _TODO_NOTES_SHOWN else flat[: _TODO_NOTES_SHOWN - 1] + "…"
 
 
 def _hm(minutes: int) -> str:
