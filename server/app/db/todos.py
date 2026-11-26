@@ -1,8 +1,8 @@
 """Todos repository (Todos v1): direct CRUD, no changeset, no solve, no `mutations` row.
 
 Deliberate exception to "writes go through app.db.write_paths" (see app.db.models.intent). The
-API layer (app.api.todos) owns the rules (kind immutability, project link checks, which periods
-are allowed); this module only reads and writes rows, scoped to `user_id` on every statement.
+API layer (app.api.todos) owns the rules (kind immutability, which periods are allowed); this
+module only reads and writes rows, scoped to `user_id` on every statement.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Project, Todo, TodoCompletion
+from app.db.models import Todo, TodoCompletion
 
 # A one-off done more than this long ago drops out of listTodos unless include_done is set.
 DONE_WINDOW = timedelta(days=7)
@@ -28,7 +28,6 @@ class TodoState:
     """A todo row plus what the API reports about it."""
 
     row: Todo
-    project_archived: bool
     completed_periods: tuple[date, ...]  # recurring only; sorted; ⊆ the allowed periods
 
 
@@ -42,11 +41,7 @@ async def list_states(
 ) -> list[TodoState]:
     """Todos for the user, in (kind, position, created_at, id) order. `allowed` maps each
     recurring kind to its current and previous period starts."""
-    query = (
-        select(Todo, Project.status)
-        .outerjoin(Project, Project.id == Todo.project_id)
-        .where(Todo.user_id == user_id)
-    )
+    query = select(Todo).where(Todo.user_id == user_id)
     if not include_done:
         query = query.where(
             (Todo.kind != "one_off")
@@ -54,8 +49,8 @@ async def list_states(
             | (Todo.completed_at >= now - DONE_WINDOW)
         )
     query = query.order_by(Todo.kind, Todo.position, Todo.created_at, Todo.id)
-    pairs = [(row, status) for row, status in (await tx.execute(query)).all()]
-    return await _with_completions(tx, pairs, allowed)
+    rows = list((await tx.execute(query)).scalars())
+    return await _with_completions(tx, rows, allowed)
 
 
 async def get_state(
@@ -66,25 +61,24 @@ async def get_state(
     allowed: Mapping[str, Sequence[date]],
 ) -> TodoState | None:
     query = (
-        select(Todo, Project.status)
-        .outerjoin(Project, Project.id == Todo.project_id)
+        select(Todo)
         .where(Todo.id == todo_id, Todo.user_id == user_id)
         .execution_options(populate_existing=True)
     )
-    found = (await tx.execute(query)).first()
+    found = (await tx.execute(query)).scalar_one_or_none()
     if found is None:
         return None
-    states = await _with_completions(tx, [(found[0], found[1])], allowed)
+    states = await _with_completions(tx, [found], allowed)
     return states[0]
 
 
 async def _with_completions(
     tx: AsyncSession,
-    pairs: Iterable[tuple[Todo, str | None]],
+    rows: Iterable[Todo],
     allowed: Mapping[str, Sequence[date]],
 ) -> list[TodoState]:
-    pairs = list(pairs)
-    recurring_ids = [row.id for row, _ in pairs if row.kind != "one_off"]
+    rows = list(rows)
+    recurring_ids = [row.id for row in rows if row.kind != "one_off"]
     ticked: dict[uuid.UUID, list[date]] = {}
     if recurring_ids:
         completions = await tx.execute(
@@ -95,24 +89,13 @@ async def _with_completions(
         for todo_id, period in completions.all():
             ticked.setdefault(todo_id, []).append(period)
     states: list[TodoState] = []
-    for row, status in pairs:
+    for row in rows:
         periods: tuple[date, ...] = ()
         if row.kind != "one_off":
             window = set(allowed[row.kind])
             periods = tuple(sorted(p for p in ticked.get(row.id, []) if p in window))
-        states.append(
-            TodoState(row=row, project_archived=status == "archived", completed_periods=periods)
-        )
+        states.append(TodoState(row=row, completed_periods=periods))
     return states
-
-
-async def project_status(tx: AsyncSession, user_id: uuid.UUID, project_id: uuid.UUID) -> str | None:
-    """The status of the user's own project, or None if unknown or foreign."""
-    return (
-        await tx.execute(
-            select(Project.status).where(Project.id == project_id, Project.user_id == user_id)
-        )
-    ).scalar_one_or_none()
 
 
 def _open() -> Any:
@@ -150,7 +133,6 @@ async def create(
     title: str,
     notes: str | None,
     due_date: date | None,
-    project_id: uuid.UUID | None,
     now: datetime,
 ) -> uuid.UUID:
     """Append to the end of the kind's manual order (max position + 1, or 0)."""
@@ -168,7 +150,6 @@ async def create(
             title=title,
             notes=notes,
             due_date=due_date,
-            project_id=project_id,
             position=0 if last is None else last + 1,
             completed_at=None,
             created_at=now,

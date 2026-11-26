@@ -556,8 +556,6 @@ paths:
               schema: {$ref: '#/components/schemas/Todo'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
-        '404': {$ref: '#/components/responses/NotFound'}
-        '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/InternalError'}
@@ -599,8 +597,7 @@ paths:
       summary: Partial update. `kind` is immutable.
       description: |
         `done` applies to one-offs only (sets or clears `completed_at`). Setting `done`, or a
-        non-null `due_date`, on a recurring todo is 409 `todo_recurring`. Setting `project_id`
-        follows the same project rules as createTodo.
+        non-null `due_date`, on a recurring todo is 409 `todo_recurring`.
       requestBody:
         required: true
         content:
@@ -1678,8 +1675,8 @@ components:
         `completed_periods` lists which of the current and previous period starts are ticked
         (always `[]` for one_off, and `completed_at` is null for recurring kinds). One-off
         `completed_at` is set while done. Tracking only in v1; calendar integration is later.
-      required: [id, kind, title, notes, due_date, project_id, project_archived, position,
-                 completed_at, completed_periods, created_at]
+      required: [id, kind, title, notes, due_date, position, completed_at, completed_periods,
+                 created_at]
       additionalProperties: false
       if: {properties: {kind: {const: one_off}}}
       then: {properties: {completed_periods: {maxItems: 0}}}
@@ -1690,8 +1687,6 @@ components:
         title: {type: string, minLength: 1, maxLength: 200}
         notes: {type: [string, 'null'], maxLength: 2000}
         due_date: {type: [string, 'null'], format: date, description: One-off only; local date.}
-        project_id: {type: [string, 'null'], format: uuid}
-        project_archived: {type: boolean, description: True when the linked project is archived. The link is kept.}
         position: {type: integer, minimum: 0}
         completed_at: {type: [string, 'null'], format: date-time}
         completed_periods:
@@ -1714,10 +1709,6 @@ components:
         title: {type: string, minLength: 1, maxLength: 200}
         notes: {type: [string, 'null'], maxLength: 2000}
         due_date: {type: [string, 'null'], format: date, description: One_off only. Omitted on a one_off means today (server default); null means no due date.}
-        project_id:
-          type: [string, 'null']
-          format: uuid
-          description: The caller's own project in status active, paused or done. Staged or archived returns 409 project_unavailable.
     TodoPatch:
       type: object
       description: Partial update. `kind` is not patchable (additionalProperties is false).
@@ -1727,7 +1718,6 @@ components:
         title: {type: string, minLength: 1, maxLength: 200}
         notes: {type: [string, 'null'], maxLength: 2000}
         due_date: {type: [string, 'null'], format: date}
-        project_id: {type: [string, 'null'], format: uuid}
         done: {type: boolean, description: One-off only. true sets completed_at. false clears it and moves the todo to the end of the open one-offs.}
     TodoOrder:
       type: object

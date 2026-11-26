@@ -51,14 +51,12 @@ class TodoDraft(_Body):
     title: Annotated[str, Field(min_length=1, max_length=200)]
     notes: Annotated[str, Field(max_length=2000)] | None = None
     due_date: date | None = None
-    project_id: uuid.UUID | None = None
 
 
 class TodoPatch(_Body):
     title: Annotated[str, Field(min_length=1, max_length=200)] | None = None
     notes: Annotated[str, Field(max_length=2000)] | None = None
     due_date: date | None = None
-    project_id: uuid.UUID | None = None
     done: bool | None = None
 
 
@@ -120,20 +118,6 @@ async def _state_or_404(
     return state
 
 
-async def _check_new_link(tx: AsyncSession, user_id: uuid.UUID, project_id: uuid.UUID) -> None:
-    """A new project link must name the user's own active, paused or done project."""
-    status = await repo.project_status(tx, user_id, project_id)
-    if status is None:
-        raise not_found("project", project_id)
-    if status in ("staged", "archived"):
-        raise AppError(
-            409,
-            "project_unavailable",
-            "Project is not available for linking.",
-            {"resource": "project", "id": str(project_id), "status": status},
-        )
-
-
 def _recurring_conflict(state: TodoState) -> AppError:
     return AppError(
         409,
@@ -171,8 +155,6 @@ async def create_todo(
             due = cal.today  # server default: today's local date
     elif draft.due_date is not None:
         raise validation_failed([{"path": "due_date", "message": "only valid for a one_off todo"}])
-    if draft.project_id is not None:
-        await _check_new_link(tx, user_id, draft.project_id)
 
     todo_id = await repo.create(
         tx,
@@ -181,7 +163,6 @@ async def create_todo(
         title=draft.title,
         notes=draft.notes,
         due_date=due,
-        project_id=draft.project_id,
         now=now,
     )
     state = await _state_or_404(tx, user_id, todo_id, cal)
@@ -237,10 +218,6 @@ async def update_todo(
         values["notes"] = patch.notes
     if "due_date" in fields and not recurring:
         values["due_date"] = patch.due_date
-    if "project_id" in fields and patch.project_id != row.project_id:
-        if patch.project_id is not None:
-            await _check_new_link(tx, user_id, patch.project_id)
-        values["project_id"] = patch.project_id
     if "done" in fields and not recurring:
         if patch.done and row.completed_at is None:
             values["completed_at"] = now

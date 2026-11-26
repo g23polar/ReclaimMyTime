@@ -7,13 +7,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime
-from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db.models import Project, Todo, TodoCompletion
+from app.db.models import Todo, TodoCompletion
 
 Maker = async_sessionmaker[AsyncSession]
 
@@ -23,36 +22,10 @@ STORY_TZ = "America/Los_Angeles"
 
 STRETCH = uuid.UUID("7e1c0a52-1d3b-4c1e-9a10-000000000001")  # daily, ticked today
 REVIEW = uuid.UUID("7e1c0a52-1d3b-4c1e-9a10-000000000002")  # weekly
-PASSPORT = uuid.UUID("7e1c0a52-1d3b-4c1e-9a10-000000000003")  # one_off, linked to PORTFOLIO
+PASSPORT = uuid.UUID("7e1c0a52-1d3b-4c1e-9a10-000000000003")  # one_off
 LIBRARY = uuid.UUID("7e1c0a52-1d3b-4c1e-9a10-000000000004")  # one_off, done 2026-11-22
-PORTFOLIO = uuid.UUID("5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01")  # active project
-STAGED = uuid.UUID("9d4e2b18-6c3a-4f70-8b21-0a7e5c1d3f09")  # staged: cannot be linked
 
 _CREATED = datetime(2026, 11, 15, 3, 10, tzinfo=UTC)
-
-
-async def add_project(
-    maker: Maker,
-    uid: uuid.UUID,
-    *,
-    status: str = "active",
-    project_id: uuid.UUID | None = None,
-) -> uuid.UUID:
-    pid = project_id or uuid.uuid4()
-    async with maker() as s, s.begin():
-        s.add(
-            Project(
-                id=pid,
-                user_id=uid,
-                name=f"Project {status}",
-                kind="perennial",
-                weekly_target_hours=Decimal("3.0"),
-                max_block_minutes=60,
-                min_block_minutes=25,
-                status=status,
-            )
-        )
-    return pid
 
 
 async def add_todo(maker: Maker, uid: uuid.UUID, **fields: Any) -> uuid.UUID:
@@ -62,7 +35,6 @@ async def add_todo(maker: Maker, uid: uuid.UUID, **fields: Any) -> uuid.UUID:
         "title": "Task",
         "notes": None,
         "due_date": None,
-        "project_id": None,
         "position": 0,
         "completed_at": None,
         "created_at": _CREATED,
@@ -81,9 +53,7 @@ async def tick(maker: Maker, todo_id: uuid.UUID, period: date) -> None:
 
 async def seed_story(maker: Maker, uid: uuid.UUID) -> None:
     """The get_todos / reorder fixture story: a daily (ticked today), a weekly, an open one-off
-    linked to an active project, a one-off done two days ago, and a staged project."""
-    await add_project(maker, uid, project_id=PORTFOLIO)
-    await add_project(maker, uid, status="staged", project_id=STAGED)
+    and a one-off done two days ago."""
     await add_todo(maker, uid, id=STRETCH, kind="daily", title="Stretch", position=0)
     await add_todo(
         maker,
@@ -100,7 +70,6 @@ async def seed_story(maker: Maker, uid: uuid.UUID) -> None:
         id=PASSPORT,
         title="Renew passport",
         due_date=date(2026, 12, 10),
-        project_id=PORTFOLIO,
         position=0,
     )
     await add_todo(

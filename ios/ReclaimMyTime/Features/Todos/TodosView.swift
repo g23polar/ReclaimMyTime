@@ -29,9 +29,27 @@ struct TodosView: View {
                 .sheet(item: $editing) { todo in
                     TodoEditorView(todos: todos, editing: todo)
                 }
-                .task { await todos.load() }
+                .task {
+                    await todos.load()
+                    #if DEBUG
+                    openDemoEditorIfRequested(todos)
+                    #endif
+                }
         }
     }
+
+    #if DEBUG
+    /// `-DemoScenario todo-new` / `todo-edit` (mock only, for screenshots): open the editor.
+    private func openDemoEditorIfRequested(_ todos: TodosModel) {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard model.config.usesMock, let flag = arguments.firstIndex(of: "-DemoScenario"), arguments.indices.contains(flag + 1) else { return }
+        switch arguments[flag + 1] {
+        case "todo-new": creating = true
+        case "todo-edit": editing = todos.openOneOffs.first
+        default: break
+        }
+    }
+    #endif
 
     @ViewBuilder
     private func content(_ todos: TodosModel) -> some View {
@@ -134,7 +152,6 @@ struct TodosView: View {
             todo: todo,
             isDone: todo.kind.isRecurring ? todos.isTicked(todo) : todo.completedAt != nil,
             isOverdue: todos.isOverdue(todo),
-            projectName: todos.projectName(for: todo),
             caption: todos.rowErrors[todo.id],
             onToggle: {
                 Task {
@@ -163,7 +180,6 @@ struct TodoRow: View {
     let todo: Todo
     let isDone: Bool
     let isOverdue: Bool
-    let projectName: String?
     let caption: String?
     let onToggle: () -> Void
     let onOpen: () -> Void
@@ -209,18 +225,6 @@ struct TodoRow: View {
             if !todo.kind.isRecurring, let due = todo.dueDate {
                 Text("Due \(Self.dateLabel(due))")
                     .foregroundStyle(isOverdue ? ColorToken.warning : ColorToken.textSecondary)
-            }
-            if let projectName {
-                Text(projectName)
-                    .foregroundStyle(ColorToken.textSecondary)
-                    .lineLimit(1)
-            }
-            if todo.projectArchived {
-                Text("Archived")
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(ColorToken.surfaceRaised, in: Capsule())
-                    .foregroundStyle(ColorToken.textSecondary)
             }
         }
         .font(.rmt.blockMeta)

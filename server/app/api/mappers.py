@@ -110,8 +110,6 @@ def todo_out(state: TodoState) -> dict[str, Any]:
         "title": row.title,
         "notes": row.notes,
         "due_date": _iso(row.due_date),
-        "project_id": None if row.project_id is None else str(row.project_id),
-        "project_archived": state.project_archived,
         "position": row.position,
         "completed_at": opt_ts(row.completed_at),
         "completed_periods": [] if one_off else [p.isoformat() for p in state.completed_periods],

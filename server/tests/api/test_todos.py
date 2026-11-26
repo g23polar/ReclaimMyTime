@@ -1,6 +1,7 @@
 """Todos v1 (issue #10): CRUD per kind, the one-off and recurring rules, period validation,
-project links, the 7-day done window, reorder, cascades, tenant isolation, and the guarantee that
-no todo route writes a `mutations` row. The contract fixtures are in test_contract.py."""
+no project link (issue #30), the 7-day done window, reorder, cascades, tenant isolation, and the
+guarantee that no todo route writes a `mutations` row. The contract fixtures are in
+test_contract.py."""
 
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import pytest
 from sqlalchemy import insert, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db.models import Mutation, Project, Todo, TodoCompletion, User, UserPreferences
+from app.db.models import Mutation, Todo, TodoCompletion, User, UserPreferences
 from tests.api.conftest import SettableClock
 from tests.api.contract import assert_conforms
 from tests.db.conftest import requires_db
@@ -22,7 +23,6 @@ from tests.todos.story import (
     REVIEW,
     STORY_NOW,
     STRETCH,
-    add_project,
     add_todo,
     count,
     seed_story,
@@ -38,11 +38,6 @@ TODAY = date(2026, 11, 24)  # the local date at STORY_NOW in America/Los_Angeles
 def at_story(clock: SettableClock) -> SettableClock:
     clock.current = STORY_NOW
     return clock
-
-
-async def _set_project_status(maker: Maker, project_id: uuid.UUID, status: str) -> None:
-    async with maker() as s, s.begin():
-        await s.execute(update(Project).where(Project.id == project_id).values(status=status))
 
 
 async def _other_user(maker: Maker) -> uuid.UUID:
@@ -441,24 +436,6 @@ async def test_a_foreign_todo_is_404_on_every_route(
     assert await count(maker, Todo, Todo.id == theirs, Todo.title == "Theirs") == 1
 
 
-async def test_a_foreign_project_cannot_be_linked(
-    client: httpx.AsyncClient, at_story: SettableClock, maker: Maker
-) -> None:
-    other = await _other_user(maker)
-    theirs = await add_project(maker, other)
-    await _error(
-        await client.post("/todos", json={"title": "x", "project_id": str(theirs)}),
-        404,
-        "not_found",
-    )
-    mine = await _create(client, {"title": "Mine"})
-    await _error(
-        await client.patch(f"/todos/{mine['id']}", json={"project_id": str(theirs)}),
-        404,
-        "not_found",
-    )
-
-
 async def test_reorder_cannot_touch_another_users_todos(
     client: httpx.AsyncClient, at_story: SettableClock, maker: Maker
 ) -> None:
@@ -469,90 +446,44 @@ async def test_reorder_cannot_touch_another_users_todos(
     await _error(resp, 422, "invalid_order")
 
 
-# ---------------------------------------------------------------- project links
+# ---------------------------------------------------------------- no project link (issue #30)
 
 
-@pytest.mark.parametrize("status", ["active", "paused", "done"])
-async def test_linkable_project_statuses(
+@pytest.mark.parametrize("project_id", [str(uuid.uuid4()), None])
+async def test_create_with_project_id_is_refused(
     client: httpx.AsyncClient,
     at_story: SettableClock,
     maker: Maker,
-    status: str,
     user_id: uuid.UUID,
+    project_id: str | None,
 ) -> None:
-    pid = await add_project(maker, user_id, status=status)
-    todo = await _create(client, {"title": "Linked", "project_id": str(pid)})
-    assert (todo["project_id"], todo["project_archived"]) == (str(pid), False)
+    resp = await client.post("/todos", json={"title": "x", "project_id": project_id})
+    await _error(resp, 422, "validation_failed")
+    assert (await client.get("/todos")).json()["todos"] == []
+    assert await count(maker, Todo, Todo.user_id == user_id) == 0
 
 
-@pytest.mark.parametrize("status", ["staged", "archived"])
-async def test_staged_or_archived_project_cannot_be_newly_linked(
-    client: httpx.AsyncClient,
-    at_story: SettableClock,
-    maker: Maker,
-    status: str,
-    user_id: uuid.UUID,
+@pytest.mark.parametrize("project_id", [str(uuid.uuid4()), None])
+async def test_patch_with_project_id_is_refused(
+    client: httpx.AsyncClient, at_story: SettableClock, project_id: str | None
 ) -> None:
-    pid = await add_project(maker, user_id, status=status)
-    err = await _error(
-        await client.post("/todos", json={"title": "x", "project_id": str(pid)}),
-        409,
-        "project_unavailable",
+    todo = await _create(client, {"title": "Mine"})
+    resp = await client.patch(
+        f"/todos/{todo['id']}", json={"title": "Changed", "project_id": project_id}
     )
-    assert err["details"]["status"] == status
-    mine = await _create(client, {"title": "Mine"})
-    await _error(
-        await client.patch(f"/todos/{mine['id']}", json={"project_id": str(pid)}),
-        409,
-        "project_unavailable",
-    )
+    await _error(resp, 422, "validation_failed")
+    listed = (await client.get("/todos")).json()["todos"]
+    assert listed == [todo]
 
 
-async def test_unknown_project_is_404(client: httpx.AsyncClient, at_story: SettableClock) -> None:
-    await _error(
-        await client.post("/todos", json={"title": "x", "project_id": str(uuid.uuid4())}),
-        404,
-        "not_found",
-    )
-
-
-async def test_archiving_a_linked_project_keeps_the_link(
-    client: httpx.AsyncClient, at_story: SettableClock, maker: Maker, user_id: uuid.UUID
+async def test_responses_carry_no_project_fields(
+    client: httpx.AsyncClient, at_story: SettableClock
 ) -> None:
-    pid = await add_project(maker, user_id)
-    todo = await _create(client, {"title": "Linked", "project_id": str(pid)})
-    await _set_project_status(maker, pid, "archived")
-    body = (await client.get("/todos")).json()
-    linked = next(t for t in body["todos"] if t["id"] == todo["id"])
-    assert (linked["project_id"], linked["project_archived"]) == (str(pid), True)
-
-
-async def test_resending_the_same_archived_link_is_not_a_new_link(
-    client: httpx.AsyncClient, at_story: SettableClock, maker: Maker, user_id: uuid.UUID
-) -> None:
-    pid = await add_project(maker, user_id)
-    todo = await _create(client, {"title": "Linked", "project_id": str(pid)})
-    await _set_project_status(maker, pid, "archived")
-    same = await client.patch(
-        f"/todos/{todo['id']}", json={"project_id": str(pid), "title": "Still"}
-    )
-    assert same.status_code == 200 and same.json()["project_archived"] is True
-
-    other = await add_project(maker, user_id, status="archived")
-    await _error(
-        await client.patch(f"/todos/{todo['id']}", json={"project_id": str(other)}),
-        409,
-        "project_unavailable",
-    )
-
-
-async def test_unlinking_a_project(
-    client: httpx.AsyncClient, at_story: SettableClock, maker: Maker, user_id: uuid.UUID
-) -> None:
-    pid = await add_project(maker, user_id)
-    todo = await _create(client, {"title": "Linked", "project_id": str(pid)})
-    resp = await client.patch(f"/todos/{todo['id']}", json={"project_id": None})
-    assert resp.status_code == 200 and resp.json()["project_id"] is None
+    created = await _create(client, {"title": "Mine"})
+    patched = (await client.patch(f"/todos/{created['id']}", json={"title": "Mine 2"})).json()
+    listed = (await client.get("/todos")).json()["todos"]
+    for todo in (created, patched, *listed):
+        assert not {"project_id", "project_archived"} & todo.keys()
 
 
 # ---------------------------------------------------------------- writes and headers

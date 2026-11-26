@@ -39,9 +39,6 @@ final class TodosModel {
     private(set) var todos: [Todo] = []
     /// The current period starts from the last list response. Nil before the first load.
     private(set) var periods: TodoPeriods?
-    /// Projects for the row labels and the picker, archived included (archived names are shown
-    /// on rows that link to them). Best effort: a failed fetch keeps the previous names.
-    private(set) var projects: [Project] = []
     /// A refresh failed while an earlier list stays visible.
     private(set) var refreshFailure: Failure?
     /// Inline captions for rolled-back ticks, keyed by todo id. Cleared on the next attempt.
@@ -106,11 +103,6 @@ final class TodosModel {
         return due < today
     }
 
-    func projectName(for todo: Todo) -> String? {
-        guard let id = todo.projectId else { return nil }
-        return projects.first { $0.id == id }?.name
-    }
-
     // MARK: load
 
     func load() async {
@@ -118,14 +110,10 @@ final class TodosModel {
         let current = ticket
         if phase != .loaded { phase = .loading }
         do {
-            async let listed = api.listTodos()
-            async let named = try? api.listProjects(includeArchived: true)
-            let list = try await listed
-            let names = await named
+            let list = try await api.listTodos()
             guard current == ticket else { return }
             todos = list.todos
             periods = list.periods
-            if let names { projects = names }
             refreshFailure = nil
             phase = .loaded
         } catch {
@@ -145,7 +133,6 @@ final class TodosModel {
         phase = .idle
         todos = []
         periods = nil
-        projects = []
         refreshFailure = nil
         rowErrors = [:]
         actionError = nil
@@ -246,8 +233,7 @@ final class TodosModel {
         for todo: Todo,
         title: String,
         notes: String?,
-        dueDate: LocalDate?,
-        projectId: UUID?
+        dueDate: LocalDate?
     ) -> TodoPatch? {
         var patch = TodoPatch()
         if title != todo.title {
@@ -259,10 +245,7 @@ final class TodosModel {
         if todo.kind == .oneOff, dueDate != todo.dueDate {
             patch.dueDate = dueDate.map { .value($0) } ?? .null
         }
-        if projectId != todo.projectId {
-            patch.projectId = projectId.map { .value($0) } ?? .null
-        }
-        let changed = patch.title != nil || patch.notes != nil || patch.dueDate != nil || patch.projectId != nil
+        let changed = patch.title != nil || patch.notes != nil || patch.dueDate != nil
         return changed ? patch : nil
     }
 
@@ -349,8 +332,6 @@ extension Todo {
         title = base.title
         notes = base.notes
         dueDate = base.dueDate
-        projectId = base.projectId
-        projectArchived = base.projectArchived
         self.position = position
         self.completedAt = completedAt
         self.completedPeriods = completedPeriods

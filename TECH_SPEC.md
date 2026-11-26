@@ -178,6 +178,7 @@ T0.1 contracts (api-designer) ──► M5 iOS vs mock (ios-developer, parallel 
 - [x] TD.A Todos contract (openapi + fixtures + Swift model decode) — #8, PR #11
 - [x] TD.B Todos server (migration 0005, `/todos` API, period validation) — #10, PR #13
 - [x] TD.C Todos iOS tab (5th tab, optimistic ticks, reorder) — #9, PR #12
+- [x] TD.D Remove the todo–project link (migration 0008 drops `todos.project_id`; contract, API and iOS tab follow) — #30
 
 **Tooling**
 - [x] Factory/Orca integration: shared pg/sim locks, `orca` claims, adopted-PR review — factory-orca-integration

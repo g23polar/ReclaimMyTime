@@ -40,7 +40,6 @@ from tests.todos.story import (
     LIBRARY,
     PASSPORT,
     REVIEW,
-    STAGED,
     STORY_NOW,
     STRETCH,
     seed_story,
@@ -555,7 +554,7 @@ async def _(ctx: Ctx) -> None:
     body = await ctx.call(
         "POST",
         "/todos",
-        {"title": "Renew passport", "due_date": "2026-12-10", "project_id": str(PORTFOLIO)},
+        {"title": "Renew passport", "due_date": "2026-12-10"},
     )
     assert (body["kind"], body["due_date"], body["position"]) == ("one_off", "2026-12-10", 2)
 
@@ -572,17 +571,6 @@ async def _(ctx: Ctx) -> None:
     await todo_story(ctx)
     body = await ctx.call("POST", "/todos", {"kind": "daily", "title": "Stretch before bed"})
     assert (body["due_date"], body["position"]) == (None, 1)
-
-
-@case("post_todos__project_unavailable.json")
-async def _(ctx: Ctx) -> None:
-    await todo_story(ctx)
-    body = await ctx.call(
-        "POST",
-        "/todos",
-        {"kind": "daily", "title": "Draft grant intro", "project_id": str(STAGED)},
-    )
-    assert body["error"]["details"]["status"] == "staged"
 
 
 @case("patch_todos_id__ok.json")

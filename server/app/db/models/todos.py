@@ -44,9 +44,6 @@ class Todo(Base):
     title: Mapped[str] = mapped_column(Text, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
     due_date: Mapped[date | None] = mapped_column(Date)  # one_off only; local date
-    project_id: Mapped[uuid.UUID | None] = mapped_column(
-        _UUID, ForeignKey("projects.id", ondelete="SET NULL")
-    )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # one_off only
     created_at: Mapped[datetime] = mapped_column(
