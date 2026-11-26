@@ -74,7 +74,6 @@ Every non-2xx/3xx JSON response uses this shape:
 | 409 | `project_archived` | PATCH/DELETE on an archived project |
 | 409 | `limit_reached` | a staged write would add a row past a per-user cap: `project_created` past 100 non-archived projects, `exception_added` past 200 exceptions that have not ended, or `pin_added` past 200 pins/forbids that have not ended. Refused at staging (`POST /projects`, `POST /exceptions`, `PATCH /blocks/{id}` edit/delete, agent staging) and again at confirm (`POST /changesets/{id}/confirm`; nothing applied, the changeset stays pending). The list is judged on its net result (removing a row and adding one at the cap passes); updates, archives and removals are never refused; Google Calendar edits are exempt. `details: {resource: "projects"\|"exceptions"\|"pins", limit}` (issue #24, 2026-11-25) |
 | 404 | `gcal_not_connected` | `DELETE /gcal` with no connection |
-| 409 | `project_unavailable` | Todos (2026-11-24, Todos v1): a todo's `project_id` names a project in status `staged` (or `archived`, on a new link). Only the user's own `active`, `paused` or `done` projects can be linked; an unknown or foreign project is 404 `not_found` (2026-11-24, Todos v1) |
 | 409 | `todo_recurring` | Todos v1: `done` or a non-null `due_date` sent on a daily or weekly todo (2026-11-24, Todos v1) |
 | 409 | `todo_not_recurring` | Todos v1: a `completions/{period_start}` route called on a one-off todo (2026-11-24, Todos v1) |
 | 422 | `validation_failed` | schema or semantic failure; `details.fields: [{path, message}]` |
@@ -92,6 +91,8 @@ Every non-2xx/3xx JSON response uses this shape:
 | 503 | `apple_unavailable` | Apple JWKS or token endpoint unreachable and no cached keys usable (T2.2, 2026-11-14). Also `POST /auth/apple` on a server without Sign in with Apple configured, before the request is looked at (T6.0, D26); and `DELETE /me` for a user with a stored Apple credential when Apple is not configured (it cannot be revoked; nothing is deleted) |
 | 503 | `apple_revocation_failed` | `DELETE /me` could not revoke the stored Apple credential; nothing is deleted. `details.reason`: `undecryptable_credential` (with `details.key_id`) \| `apple_error` (T2.2, 2026-11-14) |
 | 503 | `gcal_revocation_failed` | `DELETE /gcal` or `DELETE /me` could not revoke the Google grant. The connection row (and account) are kept; an earlier credential replaced by a concurrent reconnect may already have been revoked. `details.reason`: `undecryptable_credential` (with `details.key_id`) \| `google_error` (T4.1, 2026-11-15; wording 2026-11-15, T4.1 review) |
+
+Removed 2026-11-25 (issue #30): todos no longer link to projects. `Todo` lost `project_id` and `project_archived`, `TodoDraft` and `TodoPatch` lost `project_id` (sending it is now 422 `validation_failed`, like any unknown field), the 409 error code that refused a staged or archived project is gone along with its fixture, and `createTodo` no longer lists 404 or 409.
 
 Codes in the `GET /gcal/callback` redirect (`reclaimmytime://gcal/callback?result=error&code=…`, or `reclaimmytime://auth/google/callback?…` for a sign-in state (T6.0, D26); updated 2026-11-15, T4.1 review, D24):
 - `gcal_access_denied`: Google `error=access_denied`

@@ -3,7 +3,7 @@
   "method": "POST",
   "path": "/todos",
   "case": "ok",
-  "description": "One-off with a due date and project link, placed last in its kind.",
+  "description": "One-off with a due date, placed last in its kind.",
   "request": {
     "headers": {
       "Authorization": "Bearer k9X2vQ7mR4tL8wN1pB6sD3fH5jZ0cY7aE2gU4iO9qW1rT6yM8nV3bK5xJ0lP7hFs",
@@ -11,8 +11,7 @@
     },
     "body": {
       "title": "Renew passport",
-      "due_date": "2026-12-10",
-      "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01"
+      "due_date": "2026-12-10"
     }
   },
   "response": {
@@ -23,8 +22,6 @@
       "title": "Renew passport",
       "notes": null,
       "due_date": "2026-12-10",
-      "project_id": "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01",
-      "project_archived": false,
       "position": 0,
       "completed_at": null,
       "completed_periods": [],

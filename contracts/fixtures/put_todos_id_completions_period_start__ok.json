@@ -22,8 +22,6 @@
       "title": "Review budget",
       "notes": "Bank export first.",
       "due_date": null,
-      "project_id": null,
-      "project_archived": false,
       "position": 0,
       "completed_at": null,
       "completed_periods": [
