@@ -3,9 +3,8 @@ import XCTest
 @testable import ReclaimMyTime
 
 /// Plays back scripted replies. A request is answered by the first pending script entry with the
-/// same method and a path ending in the entry's path. Matching by route, not by queue position,
-/// keeps the concurrent `async let` loads in `TodosModel.load()` from racing each other. A request
-/// with no entry left fails with a URLError, so an unexpected call shows up as a failure.
+/// same method and a path ending in the entry's path. A request with no entry left fails with a
+/// URLError, so an unexpected call shows up as a failure.
 private actor ScriptedTodosTransport: HTTPTransport {
     struct Expect: Sendable {
         var method: String
@@ -61,13 +60,11 @@ private enum TodoJSON {
         position: Int = 0,
         completedAt: String? = nil,
         completedPeriods: [String] = [],
-        dueDate: String? = nil,
-        projectId: String? = nil,
-        projectArchived: Bool = false
+        dueDate: String? = nil
     ) -> [String: Any] {
         [
             "id": id, "kind": kind, "title": title, "notes": NSNull(),
-            "due_date": optional(dueDate), "project_id": optional(projectId), "project_archived": projectArchived,
+            "due_date": optional(dueDate),
             "position": position, "completed_at": optional(completedAt), "completed_periods": completedPeriods,
             "created_at": "2026-11-15T03:10:00Z",
         ]
@@ -129,14 +126,13 @@ final class TodosModelTests: XCTestCase {
         return (TodosModel(api: api, now: now, timeZone: timeZone), transport)
     }
 
-    /// A model loaded from the contract's list and project fixtures.
+    /// A model loaded from the contract's list fixture.
     private func loadedModel(
         now: @escaping @Sendable () -> Date = { Date() },
         timeZone: @escaping @Sendable () -> TimeZone = { .current }
     ) async throws -> (TodosModel, ScriptedTodosTransport) {
         let (model, transport) = makeModel(now: now, timeZone: timeZone)
         await transport.expect("GET", "/todos", body: try XCTUnwrap(TestFixtures.named("get_todos__ok.json").responseBody))
-        await transport.expect("GET", "/projects", body: try XCTUnwrap(TestFixtures.named("get_projects__ok.json").responseBody))
         await model.load()
         return (model, transport)
     }
@@ -161,12 +157,11 @@ final class TodosModelTests: XCTestCase {
         XCTAssertEqual(model.periods?.daily.description, "2026-11-24")
         XCTAssertTrue(model.isTicked(model.today[0]))
         XCTAssertFalse(model.isTicked(model.thisWeek[0]))
-        XCTAssertEqual(model.projectName(for: model.openOneOffs[0]), "Portfolio site")
-        // The two loads run concurrently, so compare as sets.
+        // The Todos tab fetches only its list: todos carry no project link (issue #30).
         let paths = await transport.paths
-        XCTAssertEqual(Set(paths), ["GET /todos", "GET /projects"])
+        XCTAssertEqual(paths, ["GET /todos"])
         let requests = await transport.requests
-        let todoRequest = try XCTUnwrap(requests.first { $0.url?.path() == "/todos" })
+        let todoRequest = try XCTUnwrap(requests.first)
         XCTAssertNil(URLComponents(url: todoRequest.url!, resolvingAgainstBaseURL: false)?.queryItems,
                      "the default listing: no include_done query")
     }
@@ -259,7 +254,7 @@ final class TodosModelTests: XCTestCase {
         async let second: Void = model.toggleRecurring(row)
         _ = await (first, second)
         let count = await transport.requests.count
-        XCTAssertEqual(count, 3, "GET /todos, GET /projects, and exactly one tick")
+        XCTAssertEqual(count, 2, "GET /todos and exactly one tick")
     }
 
     // MARK: one-offs
@@ -306,7 +301,6 @@ final class TodosModelTests: XCTestCase {
 
     private func loadOneOffs(_ model: TodosModel, _ transport: ScriptedTodosTransport, order: [(id: String, title: String, done: Bool)]) async throws {
         await transport.expect("GET", "/todos", body: oneOffList(order: order))
-        await transport.expect("GET", "/projects", body: try fixtureBody("get_projects__ok.json"))
         await model.load()
     }
 
@@ -345,7 +339,6 @@ final class TodosModelTests: XCTestCase {
             TodoJSON.todo(id: daily2, kind: "daily", title: "Y", position: 1),
             TodoJSON.todo(id: daily3, kind: "daily", title: "Z", position: 2),
         ]))
-        await transport.expect("GET", "/projects", body: try fixtureBody("get_projects__ok.json"))
         await model.load()
 
         await transport.expect("PUT", "/todos/order", body: TodoJSON.list([
@@ -413,7 +406,7 @@ final class TodosModelTests: XCTestCase {
 
     // MARK: create
 
-    func testCreateOneOffOmitsKindAndProjectWhenUnset() async throws {
+    func testCreateOneOffOmitsKindWhenUnset() async throws {
         let (model, transport) = try await loadedModel()
         let created = TodoJSON.todo(id: "7e1c0a52-1d3b-4c1e-9a10-0000000000ff", title: "Call dentist", position: 2)
         await transport.expect("POST", "/todos", respond: 201, body: TodoJSON.data(created))
@@ -426,15 +419,13 @@ final class TodosModelTests: XCTestCase {
         XCTAssertEqual(model.openOneOffs.last?.title, "Call dentist")
     }
 
-    func testCreateWithProjectSendsProjectId() async throws {
+    func testCreateSendsNoProjectId() async throws {
         let (model, transport) = try await loadedModel()
-        let project = "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b02"
-        let created = TodoJSON.todo(id: "7e1c0a52-1d3b-4c1e-9a10-0000000000fe", kind: "daily", title: "Log workout", projectId: project)
+        let created = TodoJSON.todo(id: "7e1c0a52-1d3b-4c1e-9a10-0000000000fe", kind: "daily", title: "Log workout")
         await transport.expect("POST", "/todos", respond: 201, body: TodoJSON.data(created))
-        try await model.create(TodoDraft(kind: .daily, title: "Log workout", projectId: UUID(uuidString: project)))
-        let body = await transport.sentBodies.map(TodosModelTests.object).last
-        XCTAssertEqual(body?["kind"] as? String, "daily")
-        XCTAssertEqual(body?["project_id"] as? String, project)
+        try await model.create(TodoDraft(kind: .daily, title: "Log workout", notes: "Legs"))
+        let body = try XCTUnwrap(await transport.sentBodies.map(TodosModelTests.object).last)
+        XCTAssertEqual(Set(body.keys), ["kind", "title", "notes"], "no project_id: todos carry no project link")
     }
 
     func testCreateValidationErrorSurfacesServerMessage() async throws {
@@ -456,30 +447,29 @@ final class TodosModelTests: XCTestCase {
     // MARK: edit payloads
 
     func testEditSendsOnlyChangedFields() throws {
-        let original = try TodoJSON.decode(TodoJSON.todo(id: renewPassport, title: "Renew passport", dueDate: "2026-12-10",
-                                                         projectId: "5a1f0c3e-7d2b-4b8a-9e61-0c4d2f8a1b01", projectArchived: true))
-        // Only the title changed. The due date and the (archived) project link are unchanged, so
-        // neither is re-sent: re-sending the archived link would be refused with 409 project_unavailable.
+        let original = try TodoJSON.decode(TodoJSON.todo(id: renewPassport, title: "Renew passport", dueDate: "2026-12-10"))
+        // Only the title changed, so the unchanged due date is not re-sent.
         let patch = try XCTUnwrap(TodosModel.patch(for: original, title: "Renew passport now", notes: nil,
-                                                   dueDate: LocalDate("2026-12-10"), projectId: original.projectId))
+                                                   dueDate: LocalDate("2026-12-10")))
         XCTAssertEqual(patch.title, "Renew passport now")
-        XCTAssertNil(patch.projectId)
         XCTAssertNil(patch.dueDate)
+        let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: JSONEncoder().encode(patch)) as? [String: Any])
+        XCTAssertEqual(Set(body.keys), ["title"], "no project_id: todos carry no project link")
     }
 
     func testEditClearingDueDateSendsNull() throws {
         let original = try TodoJSON.decode(TodoJSON.todo(id: renewPassport, title: "Renew", dueDate: "2026-12-10"))
-        let patch = try XCTUnwrap(TodosModel.patch(for: original, title: "Renew", notes: nil, dueDate: nil, projectId: nil))
+        let patch = try XCTUnwrap(TodosModel.patch(for: original, title: "Renew", notes: nil, dueDate: nil))
         XCTAssertEqual(patch.dueDate, .null)
     }
 
     func testRecurringEditNeverPatchesDueDate() throws {
         let original = try TodoJSON.decode(TodoJSON.todo(id: stretch, kind: "daily", title: "Stretch"))
-        XCTAssertNil(TodosModel.patch(for: original, title: "Stretch", notes: nil, dueDate: LocalDate("2026-12-01"), projectId: nil))
+        XCTAssertNil(TodosModel.patch(for: original, title: "Stretch", notes: nil, dueDate: LocalDate("2026-12-01")))
     }
 
     func testUnchangedEditSendsNothing() throws {
         let original = try TodoJSON.decode(TodoJSON.todo(id: renewPassport, title: "Renew"))
-        XCTAssertNil(TodosModel.patch(for: original, title: "Renew", notes: nil, dueDate: nil, projectId: nil))
+        XCTAssertNil(TodosModel.patch(for: original, title: "Renew", notes: nil, dueDate: nil))
     }
 }

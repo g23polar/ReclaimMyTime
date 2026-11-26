@@ -134,7 +134,6 @@ struct TodosView: View {
             todo: todo,
             isDone: todo.kind.isRecurring ? todos.isTicked(todo) : todo.completedAt != nil,
             isOverdue: todos.isOverdue(todo),
-            projectName: todos.projectName(for: todo),
             caption: todos.rowErrors[todo.id],
             onToggle: {
                 Task {
@@ -163,7 +162,6 @@ struct TodoRow: View {
     let todo: Todo
     let isDone: Bool
     let isOverdue: Bool
-    let projectName: String?
     let caption: String?
     let onToggle: () -> Void
     let onOpen: () -> Void
@@ -209,18 +207,6 @@ struct TodoRow: View {
             if !todo.kind.isRecurring, let due = todo.dueDate {
                 Text("Due \(Self.dateLabel(due))")
                     .foregroundStyle(isOverdue ? ColorToken.warning : ColorToken.textSecondary)
-            }
-            if let projectName {
-                Text(projectName)
-                    .foregroundStyle(ColorToken.textSecondary)
-                    .lineLimit(1)
-            }
-            if todo.projectArchived {
-                Text("Archived")
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(ColorToken.surfaceRaised, in: Capsule())
-                    .foregroundStyle(ColorToken.textSecondary)
             }
         }
         .font(.rmt.blockMeta)

@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// Create or edit a todo. Kind is chosen at create and read-only after. An edit sends only the
-/// fields that changed, so an unchanged link to a since-archived project is never re-sent (the
-/// server rejects linking an archived project with 409 `project_unavailable`).
+/// fields that changed.
 struct TodoEditorView: View {
     @Environment(\.dismiss) private var dismiss
     let todos: TodosModel
@@ -14,7 +13,6 @@ struct TodoEditorView: View {
     @State private var notes: String
     @State private var hasDueDate: Bool
     @State private var dueDate: Date
-    @State private var projectId: UUID?
     @State private var saving = false
     @State private var errorMessage: String?
 
@@ -30,7 +28,6 @@ struct TodoEditorView: View {
         _notes = State(initialValue: editing?.notes ?? "")
         _hasDueDate = State(initialValue: initialDue != nil)
         _dueDate = State(initialValue: initialDue?.middayInstant(timeZone: zone) ?? Date())
-        _projectId = State(initialValue: editing?.projectId)
     }
 
     var body: some View {
@@ -65,15 +62,6 @@ struct TodoEditorView: View {
                     } footer: {
                         if !hasDueDate {
                             Text(editing == nil ? "No date means today." : "No due date.")
-                        }
-                    }
-                }
-
-                Section {
-                    Picker("Project", selection: $projectId) {
-                        Text("None").tag(UUID?.none)
-                        ForEach(projectOptions) { project in
-                            Text(project.name).tag(Optional(project.id))
                         }
                     }
                 }
@@ -122,25 +110,12 @@ struct TodoEditorView: View {
             && (trimmedNotes?.unicodeScalars.count ?? 0) <= 2000
     }
 
-    /// Active, paused and done projects, plus the todo's current project even when archived, so the
-    /// row's own link still shows in the picker.
-    private var projectOptions: [Project] {
-        var options = todos.projects.filter { [ProjectStatus.active, .paused, .done].contains($0.status) }
-        if let current = editing?.projectId,
-           !options.contains(where: { $0.id == current }),
-           let project = todos.projects.first(where: { $0.id == current }) {
-            options.append(project)
-        }
-        return options
-    }
-
     private func makeDraft() -> TodoDraft {
         TodoDraft(
             kind: kind,
             title: trimmedTitle,
             notes: trimmedNotes,
-            dueDate: kind == .oneOff ? dueLocalDate : nil,
-            projectId: projectId
+            dueDate: kind == .oneOff ? dueLocalDate : nil
         )
     }
 
@@ -149,8 +124,7 @@ struct TodoEditorView: View {
             for: todo,
             title: trimmedTitle,
             notes: trimmedNotes,
-            dueDate: dueLocalDate,
-            projectId: projectId
+            dueDate: dueLocalDate
         )
     }
 

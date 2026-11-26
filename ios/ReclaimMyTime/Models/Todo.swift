@@ -17,8 +17,6 @@ struct Todo: Codable, Hashable, Sendable, Identifiable {
     let title: String
     let notes: String?
     let dueDate: LocalDate?
-    let projectId: UUID?
-    let projectArchived: Bool
     let position: Int
     let completedAt: Date?
     let completedPeriods: [LocalDate]
@@ -27,8 +25,6 @@ struct Todo: Codable, Hashable, Sendable, Identifiable {
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, kind, title, notes, position
         case dueDate = "due_date"
-        case projectId = "project_id"
-        case projectArchived = "project_archived"
         case completedAt = "completed_at"
         case completedPeriods = "completed_periods"
         case createdAt = "created_at"
@@ -42,8 +38,6 @@ struct Todo: Codable, Hashable, Sendable, Identifiable {
         title = try container.decode(String.self, forKey: .title)
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
         dueDate = try container.decodeIfPresent(LocalDate.self, forKey: .dueDate)
-        projectId = try container.decodeIfPresent(UUID.self, forKey: .projectId)
-        projectArchived = try container.decode(Bool.self, forKey: .projectArchived)
         position = try container.decode(Int.self, forKey: .position)
         completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
         completedPeriods = try container.decode([LocalDate].self, forKey: .completedPeriods)
@@ -76,20 +70,17 @@ struct TodoDraft: Codable, Hashable, Sendable {
     var title: String
     var notes: String?
     var dueDate: LocalDate?
-    var projectId: UUID?
 
-    init(kind: TodoKind = .oneOff, title: String, notes: String? = nil, dueDate: LocalDate? = nil, projectId: UUID? = nil) {
+    init(kind: TodoKind = .oneOff, title: String, notes: String? = nil, dueDate: LocalDate? = nil) {
         self.kind = kind
         self.title = title
         self.notes = notes
         self.dueDate = dueDate
-        self.projectId = projectId
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case kind, title, notes
         case dueDate = "due_date"
-        case projectId = "project_id"
     }
 
     init(from decoder: any Decoder) throws {
@@ -99,7 +90,6 @@ struct TodoDraft: Codable, Hashable, Sendable {
         title = try container.decode(String.self, forKey: .title)
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
         dueDate = try container.decodeIfPresent(LocalDate.self, forKey: .dueDate)
-        projectId = try container.decodeIfPresent(UUID.self, forKey: .projectId)
         try validateTitle(title, in: container, key: CodingKeys.title)
         try validateNotes(notes, in: container, key: CodingKeys.notes)
         if kind.isRecurring, dueDate != nil {
@@ -114,7 +104,6 @@ struct TodoDraft: Codable, Hashable, Sendable {
         try container.encode(title, forKey: .title)
         try container.encodeIfPresent(notes, forKey: .notes)
         try container.encodeIfPresent(dueDate, forKey: .dueDate)
-        try container.encodeIfPresent(projectId?.wireString, forKey: .projectId)
     }
 }
 
@@ -124,27 +113,23 @@ struct TodoPatch: Codable, Hashable, Sendable {
     var title: String?
     var notes: Nullable<String>?
     var dueDate: Nullable<LocalDate>?
-    var projectId: Nullable<UUID>?
     var done: Bool?
 
     init(
         title: String? = nil,
         notes: Nullable<String>? = nil,
         dueDate: Nullable<LocalDate>? = nil,
-        projectId: Nullable<UUID>? = nil,
         done: Bool? = nil
     ) {
         self.title = title
         self.notes = notes
         self.dueDate = dueDate
-        self.projectId = projectId
         self.done = done
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case title, notes, done
         case dueDate = "due_date"
-        case projectId = "project_id"
     }
 
     init(from decoder: any Decoder) throws {
@@ -153,11 +138,10 @@ struct TodoPatch: Codable, Hashable, Sendable {
         title = try container.decodeIfPresent(String.self, forKey: .title)
         notes = try Self.nullable(String.self, in: container, key: .notes)
         dueDate = try Self.nullable(LocalDate.self, in: container, key: .dueDate)
-        projectId = try Self.nullable(UUID.self, in: container, key: .projectId)
         done = try container.decodeIfPresent(Bool.self, forKey: .done)
         if let title { try validateTitle(title, in: container, key: CodingKeys.title) }
         if case .value(let notes)? = notes { try validateNotes(notes, in: container, key: CodingKeys.notes) }
-        if title == nil, notes == nil, dueDate == nil, projectId == nil, done == nil {
+        if title == nil, notes == nil, dueDate == nil, done == nil {
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "a todo patch needs at least one field"))
         }
     }
@@ -167,7 +151,6 @@ struct TodoPatch: Codable, Hashable, Sendable {
         try container.encodeIfPresent(title, forKey: .title)
         try Self.encodeNullable(notes, in: &container, key: .notes) { $0 }
         try Self.encodeNullable(dueDate, in: &container, key: .dueDate) { $0 }
-        try Self.encodeNullable(projectId, in: &container, key: .projectId) { $0.wireString }
         try container.encodeIfPresent(done, forKey: .done)
     }
 
