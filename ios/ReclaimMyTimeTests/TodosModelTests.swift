@@ -368,7 +368,7 @@ final class TodosModelTests: XCTestCase {
         try await loadOneOffs(model, transport, order: [(a, "A", false), (b, "B", false)])
         await model.move(kind: .oneOff, fromOffsets: IndexSet(integer: 0), toOffset: 0)
         let count = await transport.requests.count
-        XCTAssertEqual(count, 2, "only the two loads")
+        XCTAssertEqual(count, 1, "only the load")
         XCTAssertNil(model.actionError)
     }
 
