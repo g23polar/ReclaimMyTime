@@ -449,3 +449,55 @@ async def test_0007_write_rate_counters_round_trips(schema: str) -> None:
             assert n == 0
     finally:
         await engine.dispose()
+
+
+def _todo_columns(conn: Connection) -> dict[str, bool]:
+    return {c["name"]: c["nullable"] for c in inspect(conn).get_columns("todos")}
+
+
+def _todo_fks(conn: Connection) -> set[str | None]:
+    return {fk["name"] for fk in inspect(conn).get_foreign_keys("todos")}
+
+
+async def test_0008_todos_drop_project_round_trips(schema: str) -> None:
+    """Migration 0008 (issue #30): drops todos.project_id and its FK, keeping the todo row;
+    downgrade restores a nullable column (all null, links not restored) and the FK."""
+    uid = "00000000-0000-4000-8000-000000000008"
+    project = "00000000-0000-4000-8000-0000000000b1"
+    todo = "00000000-0000-4000-8000-0000000000b2"
+    engine = await make_engine(schema)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(run_alembic, "upgrade", "0007_write_rate_counters")
+            await conn.execute(text(f"INSERT INTO users (id) VALUES ('{uid}')"))
+            await conn.execute(
+                text(
+                    "INSERT INTO projects (id, user_id, name, kind, weekly_target_hours,"
+                    " max_block_minutes, min_block_minutes)"
+                    f" VALUES ('{project}', '{uid}', 'Portfolio', 'perennial', 1, 60, 25)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO todos (id, user_id, kind, title, position, project_id)"
+                    f" VALUES ('{todo}', '{uid}', 'one_off', 'Renew', 0, '{project}')"
+                )
+            )
+            assert "fk_todos_project_id_projects" in await conn.run_sync(_todo_fks)
+
+            await conn.run_sync(run_alembic, "upgrade", "head")
+            assert "project_id" not in await conn.run_sync(_todo_columns)
+            assert "fk_todos_project_id_projects" not in await conn.run_sync(_todo_fks)
+            ids = (await conn.execute(text("SELECT id::text FROM todos"))).scalars().all()
+            assert ids == [todo]
+
+            await conn.run_sync(run_alembic, "downgrade", "0007_write_rate_counters")
+            assert (await conn.run_sync(_todo_columns))["project_id"] is True
+            assert "fk_todos_project_id_projects" in await conn.run_sync(_todo_fks)
+            links = (await conn.execute(text("SELECT id::text, project_id FROM todos"))).all()
+            assert [tuple(r) for r in links] == [(todo, None)]
+
+            await conn.run_sync(run_alembic, "upgrade", "head")
+            assert "project_id" not in await conn.run_sync(_todo_columns)
+    finally:
+        await engine.dispose()
