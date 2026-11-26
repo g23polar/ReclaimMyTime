@@ -63,7 +63,7 @@ A standalone checklist item, separate from projects and the solver. Three kinds:
 - **Weekly:** a recurring checklist item that resets at the start of each week (`UserPreferences.weekStart`). Ticked per week.
 - **One-off:** a single item, completed once and optionally undone. May carry a due date and an optional project link.
 
-Recurring todos keep one completion per period, so "done today" and "done this week" are independent of earlier periods. A todo can link to one of the user's active, paused or done projects; the link survives the project being archived. Todos are direct writes: they don't stage a changeset, re-solve the week, or touch the agent. **Tracking only in v1; calendar integration is later.**
+Recurring todos keep one completion per period, so "done today" and "done this week" are independent of earlier periods. A todo can link to one of the user's active, paused or done projects; the link survives the project being archived. Todos are direct writes: they don't stage a changeset or re-solve the week. The chat agent reads the user's open todos as context (so "schedule my tax return todo" needs no retyping) and never writes them; todos are added, ticked and edited only in the Todos tab. **Tracking only in v1; calendar integration is later.**
 
 ## 4. User Journey 1 — Onboarding
 

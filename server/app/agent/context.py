@@ -12,11 +12,11 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.narration import project_names
-from app.agent.prompt import ExceptionInfo, LiveBlock, PinInfo, SnapshotData
+from app.agent.prompt import ExceptionInfo, LiveBlock, PinInfo, SnapshotData, TodoInfo
 from app.agent.staging import TurnInputs, TurnStaging
 from app.db.models import (
     AvailabilityException,
@@ -24,6 +24,7 @@ from app.db.models import (
     BlockPin,
     Changeset,
     Project,
+    Todo,
     UserTag,
     WeekPlan,
 )
@@ -34,6 +35,7 @@ from app.db.write_paths import sweep_past_blocks
 log = logging.getLogger(__name__)
 
 _LIVE_BLOCKS_SHOWN = 60  # more than a dense week; keeps the snapshot bounded
+_TODOS_SHOWN = 30  # a typical list; keeps the snapshot bounded
 
 
 @dataclass(frozen=True)
@@ -125,6 +127,7 @@ async def load_turn(
             )
         ).scalars()
     ]
+    todos, todos_omitted = await _open_todos(tx, user_id)
 
     def inputs(pending_staged: list) -> TurnInputs:
         return TurnInputs(
@@ -161,6 +164,8 @@ async def load_turn(
         pins={p.id: p for p in pins},
         completed_minutes=await completed_minutes(tx, user_id),
         live_blocks=live,
+        todos=todos,
+        todos_omitted=todos_omitted,
         # Deliberately empty (T4.2): busy time reaches the solver, not the model. Filling it
         # would put a freeBusy call before every turn, chit-chat included, and let plain
         # chat fail on a Google outage; extraction doesn't need it.
@@ -169,3 +174,33 @@ async def load_turn(
     return TurnContext(
         staging=staging, snapshot=snapshot, committed_names=names, pending_id=pending_id
     )
+
+
+async def _open_todos(tx: AsyncSession, user_id: uuid.UUID) -> tuple[list[TodoInfo], int]:
+    """Open todos, read-only context: dated one-offs by due date, then undated one-offs, then
+    daily, then weekly. At most `_TODOS_SHOWN`, plus how many more there are."""
+    is_open = or_(Todo.kind != "one_off", Todo.completed_at.is_(None))
+    group = case(
+        (Todo.kind == "daily", 2),
+        (Todo.kind == "weekly", 3),
+        (Todo.due_date.is_(None), 1),
+        else_=0,
+    )
+    shown = [
+        TodoInfo(kind=r.kind, title=r.title, due_date=r.due_date, notes=r.notes)
+        for r in await tx.execute(
+            select(Todo.kind, Todo.title, Todo.due_date, Todo.notes)
+            .where(Todo.user_id == user_id, is_open)
+            .order_by(group, Todo.due_date, Todo.position, Todo.created_at, Todo.id)
+            .limit(_TODOS_SHOWN)
+        )
+    ]
+    omitted = 0
+    if len(shown) == _TODOS_SHOWN:
+        total = (
+            await tx.execute(
+                select(func.count()).select_from(Todo).where(Todo.user_id == user_id, is_open)
+            )
+        ).scalar_one()
+        omitted = total - _TODOS_SHOWN
+    return shown, omitted
