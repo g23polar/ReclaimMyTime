@@ -29,9 +29,27 @@ struct TodosView: View {
                 .sheet(item: $editing) { todo in
                     TodoEditorView(todos: todos, editing: todo)
                 }
-                .task { await todos.load() }
+                .task {
+                    await todos.load()
+                    #if DEBUG
+                    openDemoEditorIfRequested(todos)
+                    #endif
+                }
         }
     }
+
+    #if DEBUG
+    /// `-DemoScenario todo-new` / `todo-edit` (mock only, for screenshots): open the editor.
+    private func openDemoEditorIfRequested(_ todos: TodosModel) {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard model.config.usesMock, let flag = arguments.firstIndex(of: "-DemoScenario"), arguments.indices.contains(flag + 1) else { return }
+        switch arguments[flag + 1] {
+        case "todo-new": creating = true
+        case "todo-edit": editing = todos.openOneOffs.first
+        default: break
+        }
+    }
+    #endif
 
     @ViewBuilder
     private func content(_ todos: TodosModel) -> some View {

@@ -404,6 +404,8 @@ final class AppModel {
     /// - `review`: a drag's staged pin (`patch_blocks_id__edit_pin`) with review open.
     /// - `tradeoff`: the infeasible Grant proposal (`post_projects__deadline_infeasible`) with the
     ///   trade-off sheet open.
+    /// - `todos`: the Todos tab from `get_todos__ok`; `todo-new` / `todo-edit` also open the editor
+    ///   (new, or the first open one-off), see `TodosView`.
     /// Signs in with the mock account and skips consent. No agent call is made.
     func runDemoScenarioIfRequested(arguments: [String] = ProcessInfo.processInfo.arguments) async {
         guard config.usesMock, let flag = arguments.firstIndex(of: "-DemoScenario"), arguments.indices.contains(flag + 1) else { return }
@@ -417,7 +419,7 @@ final class AppModel {
         switch scenario {
         case "week", "day", "review", "tradeoff":
             await runTimetableDemo(scenario)
-        case "todos":
+        case "todos", "todo-new", "todo-edit":
             navigation.selectedTab = .todos
             await todos.load()
         default:
